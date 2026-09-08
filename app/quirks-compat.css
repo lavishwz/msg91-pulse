@@ -1,0 +1,72 @@
+/* ---------------------------------------------------------------------------
+   QUIRKS-MODE PARITY LAYER
+
+   pulse-prototype.html shipped without a <!DOCTYPE html>, so every browser
+   rendered it in *quirks mode*. Next.js always emits a doctype, which puts the
+   app in standards mode — the correct place to be, but two quirks-mode layout
+   behaviours the prototype's CSS silently relied on have to be restored, or
+   dense list rows come out 1–5px taller than the original:
+
+   1. TABLES DO NOT INHERIT line-height in quirks mode, so `body{line-height:
+      1.55}` never reached the `.tbl` cells; they laid out at `normal`.
+
+   2. THE STRUT IS IGNORED on line boxes that own no text. In standards mode
+      every line reserves room for the *block's* own font, even when all the
+      text on that line sits inside a smaller-font child — and because the two
+      are baseline-aligned, the line grows taller than either box. Quirks mode
+      ignores that strut, so a line was only as tall as its real content.
+
+   `font-size:0` below suppresses the strut without touching anything visible:
+   each of these containers owns no text of its own, and every child inside
+   them already declares its own font-size in the prototype's CSS, so nothing
+   inherits the zero. This reproduces the measured original; it does not
+   introduce new metrics.
+
+   Verified: with this layer, computed geometry — width, height and 30 computed
+   style properties for every element — is identical to the prototype across
+   every surface, scope, panel and overlay.
+   --------------------------------------------------------------------------- */
+
+/* 1 — tables do not inherit line-height in quirks mode */
+table {
+  line-height: normal;
+}
+
+/* 2 — strut suppression on text-less containers (see note above) */
+.item .bd,   /* card feed row body: b 14.5px + span 13px      */
+.cf,         /* AI-log confidence meter: b 12.5px             */
+.lb,         /* AI-log row body: b, .src, .out, .fyi          */
+.money div,  /* commercial figures: b 18px + span 11.5px      */
+.mo,         /* rules card: h4, p.sb, .ru rows, .add          */
+.cpg {       /* company page: the inline-level `.crumb` line   */
+  font-size: 0;
+}
+
+/* .cpg is the one container above with a child that inherits the page's base
+   font-size instead of declaring its own, so put it back. */
+.cpg > .why {
+  font-size: 15px;
+}
+
+/* The profile surface puts its inline-block "← Back" button straight into
+   `.wrap`, which makes the same strut-inflated line there. `:has()` scopes the
+   suppression to that one surface — every element inside it declares its own
+   font-size, so nothing inherits the zero. */
+.wrap:has(> .back) {
+  font-size: 0;
+}
+
+/* Reassign sheet rows: `.tx2` holds a block `b` plus a 12.5px `span`. */
+.rp .tx2 {
+  font-size: 0;
+}
+.rp .tx2 b {
+  /* restore: `.rp`'s own 14px */
+  font-size: 14px;
+}
+
+/* The slide-up sheets put form controls (the log textarea) and inline-block
+   buttons directly into `.sh`, which lands them on strut-inflated lines. */
+.sh {
+  font-size: 0;
+}
