@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
+import { writer } from "@/lib/pulse/guard";
 import { listDrafts, releaseDraft, discardDraft } from "@/lib/pulse/autopilot/drafts";
 
 /**
  * GET  /api/pulse/autopilot/drafts?status=held — what is waiting on a person
- * POST /api/pulse/autopilot/drafts             — { id, action, body?, actor? }
+ * POST /api/pulse/autopilot/drafts             — { id, action, body? }
  *
  * `action` is "release" or "discard". Release re-checks the price rule against
  * whatever text is actually going out, including a rep's edits — see
@@ -21,17 +22,21 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  /* Any member may do this, but it is recorded against the person who did
+     it — the actor no longer comes from the request body. */
+  const who = await writer();
+  if (!who.ok) return NextResponse.json({ ok: false, error: who.error }, { status: who.status });
+
   try {
     const body = (await req.json()) as {
       id?: number;
       action?: "release" | "discard";
       body?: string;
-      actor?: string;
     };
     if (!body.id || !body.action) {
       return NextResponse.json({ ok: false, error: "id and action are required" }, { status: 400 });
     }
-    const actor = body.actor ?? "unknown";
+    const actor = who.writer.email;
     const res =
       body.action === "release"
         ? await releaseDraft(body.id, actor, body.body)

@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
+import { writer } from "@/lib/pulse/guard";
 import { manifest, addRule, editRule, retireRule, restoreRule, ruleHistory } from "@/lib/pulse/autopilot/manifest";
 
 /**
  * GET  /api/pulse/autopilot/manifest            — both columns, active rules
  * GET  /api/pulse/autopilot/manifest?key=…      — one rule's version history
- * POST /api/pulse/autopilot/manifest            — { action, side?, key?, text?, actor? }
+ * POST /api/pulse/autopilot/manifest            — { action, side?, key?, text? }
+ *   super admin only
  *
  * action: "add" | "edit" | "retire" | "restore".
  *
@@ -22,15 +24,20 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  /* The manifest is the list of what AI may and may not do — the most load
+     bearing statement in the product. Super admin only, same as the motion
+     rules it sits beside. */
+  const who = await writer("super_admin");
+  if (!who.ok) return NextResponse.json({ ok: false, error: who.error }, { status: who.status });
+
   try {
     const b = (await req.json()) as {
       action?: "add" | "edit" | "retire" | "restore";
       side?: "yes" | "no";
       key?: string;
       text?: string;
-      actor?: string;
     };
-    const actor = b.actor ?? "a person";
+    const actor = who.writer.email;
 
     if (b.action === "add") {
       if (!b.side || !b.text?.trim()) {

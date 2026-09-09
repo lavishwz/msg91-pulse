@@ -4,6 +4,7 @@ import { listAccounts, countAccounts } from "@/lib/pulse/accounts";
 import { growth, ASK_CATALOGUE } from "@/lib/pulse/ask";
 import { auditAnomaly } from "@/lib/pulse/audit";
 import { page } from "@/lib/pulse/paginate";
+import { gate } from "@/lib/pulse/guard";
 
 /**
  * GET /api/pulse/bootstrap
@@ -21,6 +22,13 @@ import { page } from "@/lib/pulse/paginate";
  */
 export async function GET() {
   try {
+    /* The caller's Pulse role, so the Rules tab can draw itself correctly from
+       the first paint. Advisory only — the routes that write rules check the
+       role themselves, and this is what stops a member being shown an edit
+       pencil that would only ever come back 403. */
+    const seat = await gate(false);
+    const role = seat.state === "ok" ? seat.role : null;
+
     const me = await resolveMe();
     const meId = me?.id ?? null;
 
@@ -36,6 +44,8 @@ export async function GET() {
     return NextResponse.json({
       ok: true,
       me,
+      role,
+      can: { editRules: role === "super_admin" },
       myAccounts: mine?.rows ?? [],
       myAccountsNext: mine?.nextCursor ?? null,
       wall: wall.rows,

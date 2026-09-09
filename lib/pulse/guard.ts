@@ -23,6 +23,7 @@ import {
   type Session,
 } from "@/lib/pulse/auth";
 import { memberAccess, type Role } from "@/lib/pulse/members";
+import { roleAtLeast } from "@/lib/pulse/member-roles";
 import { accessCached } from "@/lib/pulse/membership-cache";
 
 export type GateResult =
@@ -80,4 +81,49 @@ export async function gate(renew = true): Promise<GateResult> {
   }
 
   return { state: "ok", session, role };
+}
+
+/**
+ * The caller, for a route that writes.
+ *
+ * Two things happen here that did not happen before:
+ *
+ *   - the role is checked. Rule writes used to take no role at all, so any
+ *     invited member could rewrite what Autopilot may do;
+ *   - the actor is taken from the session rather than the request body. Every
+ *     autopilot write used to accept `actor` as free text from the client and
+ *     default it to "a person", which meant the log of who changed a rule was
+ *     whatever the caller felt like typing.
+ *
+ * `need` is the lowest role allowed. Undefined means any member will do —
+ * useful for the writes that are not rule changes but still must be attributed
+ * to a real person.
+ */
+export type Writer = { email: string; role: Role };
+export type WriterResult =
+  | { ok: true; writer: Writer }
+  | { ok: false; status: 401 | 403 | 503; error: string };
+
+
+
+export async function writer(need?: Role): Promise<WriterResult> {
+  const result = await gate();
+
+  if (result.state === "anonymous")
+    return { ok: false, status: 401, error: "You are not signed in to Pulse." };
+  if (result.state === "revoked")
+    return { ok: false, status: 401, error: "Your access to Pulse has been removed." };
+  if (result.state === "unavailable")
+    // Fails closed, for the same reason gate() does: an unreadable list is not
+    // an open one.
+    return { ok: false, status: 503, error: "The membership list could not be read: " + result.error };
+
+  if (!roleAtLeast(result.role, need))
+    return {
+      ok: false,
+      status: 403,
+      error: `This needs ${need === "super_admin" ? "a super admin" : "an admin"}. You are signed in as ${result.role.replace("_", " ")}.`,
+    };
+
+  return { ok: true, writer: { email: result.session.user.email, role: result.role } };
 }

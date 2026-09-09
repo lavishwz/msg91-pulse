@@ -1098,6 +1098,14 @@ function inLens(n){const b=BOOK.find(x=>x[1]===n)||LENS_BOOK.find(x=>x[1]===n);
 /* Climbed and slipped, counted over the accounts the lens leaves visible. The
    server's own totals cover every scored account and cannot answer this once a
    country is picked. */
+/* May the person signed in change a rule? Super admin only, and the server
+   checks it again on every write — this only decides what is drawn, so nobody
+   is shown a pencil that would come back 403. Defaults to true when the live
+   layer is absent, so the standalone prototype still demonstrates editing. */
+function canEditRules(){
+ const st=window.PulseLive&&PulseLive.state;
+ if(!st||!st.loaded)return true;
+ return Boolean(st.can&&st.can.editRules);}
 function boardMoves(){
  if(!BOARD)return {climbed:0,slipped:0};
  if(!S.C.size&&!S.M.size)return {climbed:BOARD.climbed,slipped:BOARD.slipped};
@@ -1606,8 +1614,8 @@ function vAuto(){
        <button class="go" data-rcancel="1" style="font-size:12px;padding:4px 10px">Cancel</button></span></li>`;
      return `<li>${it.text}
       ${it.key?`<span class="rmeta" style="opacity:0;transition:opacity .12s">
-       <span class="pen" data-redit="${it.key}" style="cursor:pointer">edit</span>
-       <span class="pen" data-rretire="${it.key}" style="cursor:pointer;margin-left:10px">retire</span>
+       ${canEditRules()?`<span class="pen" data-redit="${it.key}" style="cursor:pointer">edit</span>
+       <span class="pen" data-rretire="${it.key}" style="cursor:pointer;margin-left:10px">retire</span>`:""}
        <span style="color:var(--faint);font-size:11px;margin-left:10px">${it.version}${
         it.source==="human"?" · yours":""}${it.enforcedIn?" · enforced in code":""}</span></span>`:""}</li>`;
     }).join("")}</ul>
@@ -1618,6 +1626,7 @@ function vAuto(){
      <span class="row" style="margin-top:6px;gap:8px">
       <button class="go solid" data-radd="${side}" style="font-size:12px;padding:4px 10px">Add rule</button>
       <button class="go" data-rcancel="1" style="font-size:12px;padding:4px 10px">Cancel</button></span></div>`
+    :!canEditRules()?""
     :`<button class="add" data-raddopen="${side}" style="font-size:13px;color:var(--br);padding:9px 0 0;
       border-top:1px solid var(--line);width:100%;margin-top:10px;text-align:left">＋ Add a rule</button>`}
     </div>`;};
@@ -1645,11 +1654,11 @@ function vAuto(){
         <span${r.live?"":' style="color:var(--faint)"'}>${r.english}
          ${r.live?"":`<em style="font-style:normal;font-size:11px;color:var(--watch);margin-left:6px">not running yet</em>`}
          ${r.version!=="v1"?`<em style="font-style:normal;font-size:11px;color:var(--faint);margin-left:6px">${r.version}</em>`:""}</span>
-        <span class="pen">edit</span></div>`).join("")}
-      <button class="add" style="font-size:13px;color:var(--br);padding:9px 0 0;border-top:1px solid var(--line);width:100%"
-       data-newrule="${key}">＋ Add a rule to ${label}</button></div>`;}).join("")}</div>`;
+        ${canEditRules()?`<span class="pen">edit</span>`:""}</div>`).join("")}
+      ${canEditRules()?`<button class="add" style="font-size:13px;color:var(--br);padding:9px 0 0;border-top:1px solid var(--line);width:100%"
+       data-newrule="${key}">＋ Add a rule to ${label}</button>`:""}</div>`;}).join("")}</div>`;
    })(window.PulseLive&&PulseLive.state.motionRules)}
-   ${t.pr.filter(([h])=>!S.prDone.has(h)).map(([h,p,a,b])=>`<div class="prop"><h4>${h}</h4><p>${p}</p>
+   ${(canEditRules()?t.pr:[]).filter(([h])=>!S.prDone.has(h)).map(([h,p,a,b])=>`<div class="prop"><h4>${h}</h4><p>${p}</p>
     <div class="row" style="margin-top:0"><button class="go solid" data-prop="yes" data-propq="${esc(h)}">${a} →</button>
      <button class="go" data-prop="no" data-propq="${esc(h)}">${b}</button></div></div>`).join("")}`;
  } else if(S.tab==="activity"){
@@ -2155,7 +2164,7 @@ document.addEventListener("click",e=>{
  const wr=t.closest("[data-wrong]");if(wr){$$(".menu").forEach(x=>x.hidden=true);
   const w=$("#wr-"+wr.dataset.wrong);w.hidden=!w.hidden;return;}
  const ws=t.closest("[data-wsel]");if(ws){S.doneIds.add(+ws.dataset.wsel);render();return;}
- const nr=t.closest("[data-newrule]");if(nr){openNewRule(nr.dataset.newrule);return;}
+ const nr=t.closest("[data-newrule]");if(nr){if(canEditRules())openNewRule(nr.dataset.newrule);return;}
  const orl=t.closest("[data-openrule]");if(orl){openRule(orl.dataset.openrule);return;}
  const rl=t.closest("[data-rule]");if(rl){openRule(rl.dataset.rule);return;}
  /* Saving, testing and turning off a motion rule. All three go through the
@@ -2536,9 +2545,10 @@ function openRule(ruleKey){
    rule aloud, it is too complicated to trust.</p>
 
   <h4>The rule</h4>
-  <textarea id="rule-en" style="width:100%;min-height:66px;font:inherit;font-size:14px;padding:11px;
-   border:1px solid var(--line2);border-radius:8px;background:var(--raise);color:var(--ink);
+  <textarea id="rule-en"${canEditRules()?"":" readonly"} style="width:100%;min-height:66px;font:inherit;font-size:14px;padding:11px;
+   border:1px solid var(--line2);border-radius:8px;background:var(--${canEditRules()?"raise":"sink"});color:var(--ink);
    resize:vertical">${r.english.replace(/</g,"&lt;")}</textarea>
+  ${canEditRules()?"":`<p style="margin:8px 0 0;font-size:12.5px;color:var(--faint)">Only a super admin can change a rule. You can read it and see what it checks.</p>`}
 
   <h4>What Autopilot checks</h4>
   <div class="cl2" style="display:block;padding:12px 14px;background:var(--sink);border-radius:8px">
@@ -2555,11 +2565,11 @@ function openRule(ruleKey){
   </div>
 
   <div class="row" style="margin-top:20px">
-   <button class="go solid" id="rule-save" data-rule-save="${r.key}">Save as ${
+   ${canEditRules()?`<button class="go solid" id="rule-save" data-rule-save="${r.key}">Save as ${
     "v"+((+String(r.version).replace("v","")||1)+1)} →</button>
    <button class="go" id="rtest" data-rule-test="${r.key}">Test on the last 30 days</button>
-   <button class="go" style="color:var(--watch)" data-rule-retire="${r.key}">Turn it off</button>
-   <button class="go" id="ovx">Cancel</button></div>
+   <button class="go" style="color:var(--watch)" data-rule-retire="${r.key}">Turn it off</button>`:""}
+   <button class="go" id="ovx">${canEditRules()?"Cancel":"Close"}</button></div>
   <div class="test" id="tres" hidden></div>
   <div class="ver">${r.version} · ${r.source==="human"?"written by your team":"shipped with Pulse"}<br>
    EVERY SAVE IS A NEW VERSION. NOTHING IS OVERWRITTEN.</div></div>`;

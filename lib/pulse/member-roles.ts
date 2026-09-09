@@ -143,3 +143,19 @@ export function abilities(role: Role): {
     canSetRole: role === "super_admin",
   };
 }
+
+/**
+ * Does `role` clear the bar set by `need`?
+ *
+ * The ladder rule writes lean on. Kept here rather than beside the gate that
+ * uses it because this module is free of Next imports and can therefore be
+ * tested without a session or a database — see tests/rule-guard.test.mjs.
+ *
+ * An unset `need` means "any member will do", which is what the writes that
+ * must be attributed but not restricted pass.
+ */
+const RANK: Record<Role, number> = { member: 0, admin: 1, super_admin: 2 };
+
+export function roleAtLeast(role: Role, need?: Role): boolean {
+  return !need || RANK[role] >= RANK[need];
+}

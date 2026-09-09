@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { writer } from "@/lib/pulse/guard";
 import { decisions, suppressed, logSummary, unsuppress, humanActs, inFlight } from "@/lib/pulse/autopilot/log";
 
 /**
@@ -44,12 +45,17 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  /* Any member may do this, but it is recorded against the person who did
+     it — the actor no longer comes from the request body. */
+  const who = await writer();
+  if (!who.ok) return NextResponse.json({ ok: false, error: who.error }, { status: who.status });
+
   try {
-    const body = (await req.json()) as { signalKey?: string; actor?: string };
+    const body = (await req.json()) as { signalKey?: string };
     if (!body.signalKey) {
       return NextResponse.json({ ok: false, error: "signalKey is required" }, { status: 400 });
     }
-    const done = await unsuppress(body.signalKey, body.actor ?? null);
+    const done = await unsuppress(body.signalKey, who.writer.email);
     return NextResponse.json(
       done
         ? { ok: true, signalKey: body.signalKey, state: "open" }

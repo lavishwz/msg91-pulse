@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { writer } from "@/lib/pulse/guard";
 import { rulesByMotion, addRule, editRule, retireRule, testAgainstHistory, type Motion } from "@/lib/pulse/autopilot/rules";
 import { compileRule } from "@/lib/pulse/agents";
 
@@ -25,6 +26,12 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  /* Rules are what Autopilot is allowed to do on its own, so changing one is a
+     super admin's job. Checked here rather than in the browser: the Rules tab
+     hiding its edit pencils is a convenience, not the rule. */
+  const who = await writer("super_admin");
+  if (!who.ok) return NextResponse.json({ ok: false, error: who.error }, { status: who.status });
+
   try {
     const b = (await req.json()) as {
       action?: "add" | "edit" | "retire" | "test" | "compile";
@@ -33,9 +40,10 @@ export async function POST(req: Request) {
       english?: string;
       machine?: Record<string, unknown>;
       days?: number;
-      actor?: string;
     };
-    const actor = b.actor ?? "a person";
+    /* From the session, never the body — otherwise the record of who changed a
+       rule is whatever the caller chose to type. */
+    const actor = who.writer.email;
 
     if (b.action === "add") {
       if (!b.motion || !b.english?.trim()) {

@@ -91,6 +91,10 @@ window.PulseLive = (function () {
     const mock = [];
 
     state.me = data.me;
+    /* The caller's Pulse role and what it lets them do. Advisory: the server
+       checks the role again on every rule write. */
+    state.role = data.role || null;
+    state.can = data.can || {};
     if (data.me) {
       /* The header is NOT written here any more. It carries the person who
          signed in — server-rendered from the session in app/page.tsx — and
