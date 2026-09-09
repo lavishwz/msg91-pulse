@@ -11,6 +11,32 @@ npm run dev      # http://localhost:3000
 npm run build && npm start
 ```
 
+## Signing in
+
+Pulse is invite-only. Identity comes from MSG91's Proxy — the widget on
+`/login` — and the `pulse_member` table decides who is allowed through it.
+Every route is behind that: an unauthenticated page redirects to `/login`, an
+unauthenticated API call gets a 401.
+
+Two variables are needed in `.env.local`:
+
+```
+NEXT_PUBLIC_REFERENCEID=1258584i17889575326aa1535c30048
+JWT_SECRET=<openssl rand -base64 48>
+```
+
+`lavishgehlod@gmail.com` is seeded as the founding super admin, so the list is
+never empty and nobody uninvited can sign in — not even on a fresh database.
+Invite people from **Members** in the account menu and pick their type there:
+
+- **Member** — uses Pulse.
+- **Admin** — plus invites and removes members.
+- **Super admin** — plus invites admins and changes anybody's type.
+
+The founding super admin cannot be removed or demoted, and the last super admin
+cannot step down, so there is always somebody who can let people back in. See
+[docs/auth.md](docs/auth.md) for where each check runs and why.
+
 ## How parity is preserved
 
 The prototype is a single-file app: ~675 lines of CSS and ~1,490 lines of vanilla

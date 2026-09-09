@@ -1,6 +1,34 @@
 import Script from "next/script";
+import { redirect } from "next/navigation";
 
-export default function Page() {
+import { gate } from "@/lib/pulse/guard";
+import AccessRemoved from "./access-removed";
+
+/**
+ * Pulse, behind the invite list.
+ *
+ * middleware.ts has already established that the caller holds a valid session
+ * before this renders. What is checked here is the other half — that the person
+ * is *still* invited — because that answer lives in MySQL and middleware runs
+ * on the Edge runtime (see lib/pulse/guard.ts).
+ *
+ * `gate(false)`: a Server Component render may not write cookies, so the
+ * session is checked but not extended here. Extending is public/pulse-auth.js's
+ * first act on load, through POST /api/auth/refresh.
+ */
+export default async function Page() {
+  const result = await gate(false);
+  if (result.state === "anonymous") redirect("/login");
+  if (result.state === "revoked") return <AccessRemoved email={result.session.user.email} />;
+
+  /* The header used to carry the prototype's name. It carries the person who
+     actually signed in now — server-rendered, so it is right on the first
+     paint rather than after a fetch. */
+  const me =
+    result.state === "ok" || result.state === "unavailable"
+      ? result.session.user
+      : null;
+
   return (
     <>
       <header className="top">
@@ -18,10 +46,10 @@ export default function Page() {
         </div>
         <div className="who whow">
           <button id="abtn" style={{ display: "flex", alignItems: "center", gap: "9px" }}>
-            Rhea Menon <span className="avi">RM</span>
+            {me?.name ?? "Pulse"} <span className="avi">{me?.initials ?? "··"}</span>
           </button>
           <div className="amenu" id="amenu" hidden>
-            <div className="hd2">Rhea Menon · Sales</div>
+            <div className="hd2">{me ? `${me.name} · Sales` : "Signed in"}</div>
             <button data-nav="profile">Your profile and connections</button>
             <div className="sp"></div>
             <div className="hd2">Ask</div>
@@ -36,7 +64,13 @@ export default function Page() {
             <button id="startonb">Replay first-run setup</button>
             <button data-admin="">Admin · products, rates, team</button>
             <div className="sp"></div>
-            <button style={{ color: "var(--muted)" }}>Sign out</button>
+            <div className="hd2">Access</div>
+            {/* Pulse is invite-only, so the list of who is in is a surface, not
+                a setting buried in a config file. Everyone who is in can see it
+                and can invite. */}
+            <button data-members="">Members · who can sign in</button>
+            <div className="sp"></div>
+            <button data-signout="" style={{ color: "var(--muted)" }}>Sign out</button>
           </div>
         </div>
       </header>
@@ -124,6 +158,9 @@ export default function Page() {
       {/* The live-data layer must be defined before the renderer runs. */}
       <Script src="/pulse-live.js" strategy="afterInteractive" />
       <Script src="/pulse.js" strategy="afterInteractive" />
+      {/* Session upkeep, sign out, and the members sheet. Last, so the menu it
+          binds to and the sheet markup it fills are both already there. */}
+      <Script src="/pulse-auth.js" strategy="afterInteractive" />
     </>
   );
 }

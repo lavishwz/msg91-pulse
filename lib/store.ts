@@ -23,6 +23,7 @@ type StoreEnv = {
   user: string;
   password: string;
   database: string;
+  ssl: boolean;
   poolLimit: number;
 };
 
@@ -65,10 +66,18 @@ function readEnv(): StoreEnv {
     );
   }
 
+  /* Managed MySQL usually runs with require_secure_transport=ON, which rejects
+     a plaintext connection outright — "Connections using insecure transport are
+     prohibited". Nothing in the error names TLS as the fix, so it is worth
+     being explicit: set PULSE_STORE_SSL=true for a hosted store. Falls back to
+     MYSQL_SSL for the development case where both schemas sit on one server. */
+  const ssl = pick("PULSE_STORE_SSL", "MYSQL_SSL", "false").toLowerCase() === "true";
+
   return {
     host,
     user,
     database,
+    ssl,
     port: Number(pick("PULSE_STORE_PORT", "MYSQL_PORT", "3306")),
     password: pick("PULSE_STORE_PASSWORD", "MYSQL_PASSWORD"),
     poolLimit: Number(process.env.PULSE_STORE_POOL_LIMIT ?? 5),
@@ -89,6 +98,7 @@ export function storePool(): mysql.Pool {
       user: env.user,
       password: env.password,
       database: env.database,
+      ...(env.ssl ? { ssl: { rejectUnauthorized: true } } : {}),
       waitForConnections: true,
       connectionLimit: env.poolLimit,
       // Decisions carry JSON columns; letting the driver hand back parsed

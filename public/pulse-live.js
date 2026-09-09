@@ -92,31 +92,14 @@ window.PulseLive = (function () {
 
     state.me = data.me;
     if (data.me) {
-      // The header and the profile page both read a hard-coded name.
-      document.querySelectorAll("#abtn").forEach((el) => {
-        el.innerHTML =
-          escapeHtml(data.me.name) +
-          ' <span class="avi">' +
-          escapeHtml(data.me.initials) +
-          "</span>";
-      });
-      const hd = document.querySelector(".amenu .hd2");
-      if (hd) hd.textContent = data.me.name + " · Sales";
-      // The profile page reads its identity from ME.
+      /* The header is NOT written here any more. It carries the person who
+         signed in — server-rendered from the session in app/page.tsx — and
+         `data.me` is a different thing: the MSG91 rep whose book Pulse is
+         showing (PULSE_ME_USER_PID). The two are usually the same person and
+         will not always be, and the header has to say who you are signed in
+         as. The profile page still reads the rep from ME below. */
       if (bag.ME) {
         bag.ME.name = data.me.name;
-        /* The header is server-rendered with the prototype's name, so it is the
-           one place the real one has to be written in by hand. */
-        const nameBtn = document.querySelector("#abtn");
-        if (nameBtn) {
-          nameBtn.innerHTML =
-            escapeHtml(data.me.name) +
-            ' <span class="avi">' +
-            escapeHtml(data.me.initials || data.me.name.slice(0, 2).toUpperCase()) +
-            "</span>";
-        }
-        const menuHead = document.querySelector("#amenu .hd2");
-        if (menuHead) menuHead.textContent = data.me.name + " · Sales";
         bag.ME.email_addr = data.me.email || null;
         bag.ME.accounts = data.me.accounts;
       }
