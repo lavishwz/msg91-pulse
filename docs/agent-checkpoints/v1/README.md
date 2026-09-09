@@ -1511,3 +1511,45 @@ Endpoints, from the AI-middleware source:
 
 All of them take the org JWT as an `authorization` header; the middleware also
 accepts `pauthkey`. The writes need the admin role.
+
+---
+
+## v2 — the duplicate drafts
+
+Taken 2026-09-09 with `POST /api/versions/`, one per agent, each a copy of the
+version named above. They are drafts: `published_version_id` was re-read
+afterwards on all six and none of them moved. Nothing about what Pulse calls
+today changed.
+
+| Agent | v1 · published | v2 · draft |
+|---|---|---|
+| ask mode | `6a9ebec00869a6b2a232c541` | `6aa19b222b978d2b2fab046d` |
+| pulse-signup-triage | `6aa03694b54ce2b5442e110d` | `6aa19b17a0a115b5322c9e2b` |
+| pulse-outreach-drafter | `6aa037fa0869a6b2a235587e` | `6aa19b22a0a115b5322c9e36` |
+| pulse-account-review | `6aa037ff125b5dfba6805697` | `6aa19b23a0a115b5322c9e3a` |
+| pulse-portfolio-digest | `6aa03802b54ce2b5442e1348` | `6aa19b25a0a115b5322c9e3e` |
+| pulse-rule-compiler | `6aa0eba5b54ce2b5442f3603` | `6aa19b258b7ea686a3eb8efe` |
+
+To throw one away: `DELETE /api/versions/:id`.
+
+## One agent's published version does not match what runs
+
+A bridge document and its published version document should hold the same
+prompt. Five of the six do, byte for byte. `pulse-signup-triage` does not:
+
+- the **version** document has the heading `## HOW TO REPLY.`
+- the **bridge** document has `## HOW TO REPLY`
+
+One character, and the version is flagged `is_drafted: true` with a timestamp
+of 2026-09-09T17:32Z — an edit written onto the published version and never
+published, so it sits on top of the live config without being it.
+
+The runtime reads the bridge document (`AI-middleware`,
+`src/services/utils/aiCall.utils.js:67` fetches `/api/agent/:bridge_id`), so
+**the live text is the one without the period** and that is what the prompt
+recorded above is. The edit is not running.
+
+Leaving it as it is. Publishing a one-character change to a heading buys
+nothing and would make the published version differ from this checkpoint; if
+the period was deliberate it can go out with the next real change to that
+prompt.
