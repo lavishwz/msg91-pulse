@@ -929,3 +929,7 @@ h1 .sl{color:var(--faint)}
 .memhint{margin-top:9px;font-size:12.5px;color:var(--faint)}
 .memmsg{margin-top:12px;font-size:13px;color:var(--muted)}
 .memmsg[data-bad="1"]{color:var(--bad)}
+
+/* A tag that would not save. Under the tag list, in the same place the tags
+   are, because that is where the person is looking when it happens. */
+.tagerr{margin-top:11px;font-size:13px;color:var(--bad)}

@@ -978,7 +978,8 @@ S.prDone=new Set();
    accounted for rather than left to be guessed at. */
 function lensLab(){const c=lensCountry(),m=[...S.M][0]||null;
  if(!c&&!m)return "All";
- const cl=c?flagOf(c)+" "+c+" · "+lensCur():null;
+ const cur=c?lensCur():null;
+ const cl=c?(lensFlag(c)+" "+c+(cur?" · "+cur:"")):null;
  return [cl,m].filter(Boolean).join(" · ");}
 /**
  * The live board, or null while it is still loading / when the prototype runs
@@ -1005,48 +1006,51 @@ const GEO={
 const CUR2GEO={};Object.keys(GEO).forEach(k=>{CUR2GEO[GEO[k].cur]=k;});
 
 /* Which countries the lens offers.
-   Derived from the accounts actually on the board rather than hardcoded: the
-   prototype's four included Singapore, which no live account uses, and left
-   out GBP, which plenty do — so picking a country could only ever narrow to
-   nothing or to everything. The prototype's list stands in until the board
-   has answered. */
-const GEO_ALL=["India","UAE","US","Singapore"];
+   Every country the board actually returned, commonest first, however many
+   that is — the account's own billing_country, not a guess from its currency.
+   Accounts whose country the database does not record are grouped under
+   Unknown rather than being filed under India, which is what the old
+   currency-only reading did to two thirds of the book. */
+const GEO_UNKNOWN="Unknown";
 function lensCountries(){
- if(!BOARD||!BOARD.bands)return GEO_ALL;
- const seen=new Set();
+ if(!BOARD||!BOARD.bands)return [...GEO_ALL];
+ const n=new Map();
  BOARD.bands.forEach(b=>b.accounts.forEach(a=>{
-  const g=CUR2GEO[String(a.currency||"").toUpperCase()];if(g)seen.add(g);}));
- /* Whatever is already picked stays offered, so a lens cannot become
-    unclearable when the board reloads without it. */
- S.C.forEach(c=>seen.add(c));
- return seen.size?Object.keys(GEO).filter(k=>seen.has(k)):GEO_ALL;}
-/* The country the lens is on, or null for All. */
-/* Where an opportunity leads. Only the ones with an unambiguous saved question
-   get an "Open in Ask" button — the rest open their own evidence and stop
-   there, which is better than sending someone to an answer about something
-   else. */
-function oppAsk(title,cta){const t=(title+" "+cta).toLowerCase();
- if(/claim|nobody|unowned/.test(t))return "unowned";
- if(/slip|wake|churn|risk/.test(t))return "churn";
- if(/second product|flat/.test(t))return "flat";
- if(/prospect|signed up|new compan/.test(t))return "signups";
- if(/partner/.test(t))return "partner";
- return null;}
-/* Where an answer's own action leads, or null if it names something Pulse
-   cannot yet do (create a mission, send a digest, export). A null hides the
-   button: an action that has nowhere to go should not be on screen at all,
-   which is the whole reason this audit started. */
-function answerActDest(act){const t=String(act||"").toLowerCase();
- if(/unassigned|unowned|claim|nobody/.test(t))return {reassign:1};
- if(/partner/.test(t))return {ask:"partner"};
- if(/churn|recovery|risk/.test(t))return {ask:"churn"};
- if(/flat/.test(t))return {ask:"flat"};
- if(/signup|signed up/.test(t))return {ask:"signups"};
- if(/draft|escalat|autopilot/.test(t))return {auto:1};
- return null;}
+  const k=a.country||GEO_UNKNOWN;n.set(k,(n.get(k)||0)+1);}));
+ S.C.forEach(c=>{if(!n.has(c))n.set(c,0);});
+ return [...n.keys()].sort((x,y)=>
+  x===GEO_UNKNOWN?1:y===GEO_UNKNOWN?-1:(n.get(y)-n.get(x))||x.localeCompare(y));}
+
+/* How many accounts on the board are in that country. */
+function lensCount(c){
+ if(!BOARD||!BOARD.bands)return null;
+ let n=0;BOARD.bands.forEach(b=>b.accounts.forEach(a=>{
+  if((a.country||GEO_UNKNOWN)===c)n++;}));
+ return n;}
+
+/* Its flag, from whichever account carries one. */
+function lensFlag(c){
+ if(c===GEO_UNKNOWN)return "🏳";
+ if(BOARD&&BOARD.bands)for(const b of BOARD.bands)for(const a of b.accounts)
+  if(a.country===c&&a.countryFlag)return a.countryFlag;
+ return (GEO[c]&&GEO[c].flag)||"";}
+
+const GEO_ALL=["India","UAE","US","Singapore","UK","Europe"];
 function lensCountry(){const c=[...S.C];return c.length?c[0]:null;}
 /* Its currency code, and the symbol every amount is written in while it is on. */
-function lensCur(){const c=lensCountry();return c&&GEO[c]?GEO[c].cur:null;}
+/* The currency to write amounts in while a country is picked: the one most of
+   that country's accounts are actually billed in, read off the board rather
+   than assumed from the country's name. Null when they disagree or the board
+   has not answered — then each row keeps its own. */
+function lensCur(){
+ const c=lensCountry();if(!c)return null;
+ if(BOARD&&BOARD.bands){
+  const n=new Map();
+  BOARD.bands.forEach(b=>b.accounts.forEach(a=>{
+   if((a.country||GEO_UNKNOWN)!==c||!a.currency)return;
+   const k=String(a.currency).toUpperCase();n.set(k,(n.get(k)||0)+1);}));
+  if(n.size){const best=[...n].sort((x,y)=>y[1]-x[1]);return best[0][0];}}
+ return GEO[c]?GEO[c].cur:null;}
 function lensSym(){const k=lensCur();return k?CUR[k]:null;}
 function flagOf(c){return c&&GEO[c]?GEO[c].flag:"";}
 /* The currency, in order: what the row itself carries, then the country the
@@ -1058,19 +1062,21 @@ function purse(n,c){c=c||lensCur()||"INR";const sym=CUR[c]||(c?c+" ":"");
  return sym+Math.round(n).toLocaleString("en-US");}
 /* Name → currency for the accounts the live board returned. Rebuilt whenever
    BOARD is replaced, which is the only time it can change. */
-let BCUR=null,BCURSRC=false;
-function boardCurOf(name){
- if(BCURSRC!==BOARD){BCUR=new Map();BCURSRC=BOARD;
+let BCUR=null,BCTRY=null,BCURSRC=false;
+function boardIndex(){
+ if(BCURSRC!==BOARD){BCUR=new Map();BCTRY=new Map();BCURSRC=BOARD;
   if(BOARD&&BOARD.bands)BOARD.bands.forEach(b=>b.accounts.forEach(a=>{
-   if(a.currency)BCUR.set(a.name,String(a.currency).toUpperCase());}));}
- return BCUR.get(name)||null;}
+   if(a.currency)BCUR.set(a.name,String(a.currency).toUpperCase());
+   BCTRY.set(a.name,a.country||GEO_UNKNOWN);}));}}
+function boardCurOf(name){boardIndex();return BCUR.get(name)||null;}
+function boardCountryOf(name){boardIndex();return BCTRY.get(name)||null;}
 
 /* The lens applied to a list of {currency, amount, accounts} rows.
    These come from the server as an aggregate over every scored account, so
    without this the money beside the board went on describing the whole book
    while the headline count above it described one country. */
-function lensRows(rows){const want=lensCur();
- return want&&rows?rows.filter(r=>String(r.currency||"INR").toUpperCase()===want):(rows||[]);}
+function lensRows(rows){const want=lensCountry();
+ return want&&rows?rows.filter(r=>(r.country||GEO_UNKNOWN)===want):(rows||[]);}
 const purses=rows=>{const u=lensRows(rows);
  return u.length?u.map(r=>purse(r.amount,r.currency)).join(" · "):"—";};
 
@@ -1090,9 +1096,9 @@ function inLens(n){const b=BOOK.find(x=>x[1]===n)||LENS_BOOK.find(x=>x[1]===n);
     the lens is checked against. Motion has no equivalent in the database, so a
     motion on its own cannot filter live accounts — they stay visible rather
     than vanishing, which is the same rule as before. */
- const want=lensCur();if(!want)return true;
- const cur=boardCurOf(n);
- return cur?cur===want:true;}
+ const want=lensCountry();if(!want)return true;
+ const c=boardCountryOf(n);
+ return c?c===want:true;}
 /* Names in one band. Live scores when the database has answered, the
    prototype's sample map until then. */
 /* Climbed and slipped, counted over the accounts the lens leaves visible. The
@@ -1191,7 +1197,9 @@ function vNow(){
      <span>${lensLab()}</span><span class="car">▼</span></button>
     <div class="lens" id="lensm" hidden>
      <h4>Country</h4>${lensCountries().map(c=>
-      `<label><span>${flagOf(c)} ${c} <em style="font-style:normal;color:var(--faint)">${CUR[GEO[c].cur].trim()}</em></span><input type="checkbox" data-c="${c}" ${S.C.has(c)?"checked":""}><span class="bx"></span></label>`).join("")}
+      `<label${lensCount(c)===0?' style="opacity:.45"':""}><span>${lensFlag(c)} ${esc(c)} <em style="font-style:normal;color:var(--faint)">${
+       lensCount(c)!=null?lensCount(c):""}</em></span><input type="checkbox" data-c="${esc(c)}" ${
+       S.C.has(c)?"checked":""}><span class="bx"></span></label>`).join("")}
      <h4>Motion</h4>${["Inbound","Outbound","Startup","Partner"].map(m=>
       `<label><span>${m}</span><input type="checkbox" data-m="${m}" ${S.M.has(m)?"checked":""}><span class="bx"></span></label>`).join("")}
      <button class="clr" id="lensc">Clear all</button></div></span></div>`;
@@ -1800,6 +1808,7 @@ function vCust(){
    <div class="tags">${tg.map(([t,ai])=>`<span class="tag2" data-ai="${ai}">${t}
      <button class="x2" data-untag="${t}">✕</button></span>`).join("")}
     <button class="addtag" data-addtag>＋ Add a tag</button></div>
+   ${((e)=>e?`<p class="tagerr" role="alert">That did not save: ${esc(e)}</p>`:"")(window.PulseLive&&PulseLive.state.tagError)}
    <p style="font-size:12.5px;color:var(--faint);margin-top:11px">Dashed tags were added by Pulse from evidence, solid ones are yours, and both are filterable in Ask. Motion is not a tag — it is the single field above that decides which rules run, and an account has exactly one.</p></div>
 
   <div class="sec"><h5>People</h5>${d.pe.map(([a,r,rl])=>
@@ -2814,11 +2823,15 @@ function openSheet(kind,arg){
     <button class="go" id="ovx">Close</button></div>`;
  }
  if(kind==="tag"){
+  /* The suggestions are still a fixed list — they are the tags this team
+     reaches for — but everything picked here is written to Pulse's store
+     against this company, so the next person to open it sees them. */
   B.innerHTML=`<h3>Add a tag</h3><p class="sub">Tags are free text and filterable in Ask. Pulse adds its own from evidence — those show dashed.</p>
    <div class="tags" style="margin-bottom:14px">${["Enterprise","Renewal Q4","Needs a case study","Reference-able","Price sensitive","Multi-department","Warm intro available"].map(t=>`<button class="tag2" data-tagpick="${esc(t)}" aria-pressed="${S.tagPick.has(t)}"${
      S.tagPick.has(t)?' style="border-color:var(--br);color:var(--br)"':""}>${t}</button>`).join("")}</div>
-   <input class="logbox" style="min-height:0;padding:11px 13px" placeholder="Or write a new one">
-   <div class="row" style="margin-top:16px"><button class="go solid" id="ovdo">Add →</button>
+   <input class="logbox" id="tagnew" style="min-height:0;padding:11px 13px" placeholder="Or write a new one">
+   <p style="font-size:12.5px;color:var(--faint);margin-top:11px">Saved against ${esc(S.cust||"this company")} for everybody — not just this browser.</p>
+   <div class="row" style="margin-top:16px"><button class="go solid" id="tagadd">Add →</button>
     <button class="go" id="ovx">Cancel</button></div>`;
  }
  $("#ov").hidden=false;
@@ -2827,8 +2840,18 @@ document.addEventListener("click",e=>{
  const t=e.target;
  const sh=t.closest("[data-sheet]");if(sh){openSheet(sh.dataset.sheet);return;}
  if(t.closest("[data-addtag]")){openSheet("tag");return;}
- const ut=t.closest("[data-untag]");if(ut){const n=S.cust;
-  TAGS[n]=(TAGS[n]||[]).filter(x=>x[0]!==ut.dataset.untag);render();return;}
+ if(t.closest("#tagadd")){
+  /* Everything picked, plus whatever was typed. One request, then the sheet
+     closes — the list on the page redraws from what the server says it is. */
+  const box=$("#tagnew"), typed=box?box.value.trim():"";
+  const picked=[...S.tagPick].concat(typed?typed.split(",").map(x=>x.trim()).filter(Boolean):[]);
+  S.tagPick.clear();
+  $("#ov").hidden=true;
+  if(picked.length&&window.PulseLive)PulseLive.addTags(S.cust,picked,PULSE_BAG,render);
+  return;}
+ const ut=t.closest("[data-untag]");if(ut){
+  if(window.PulseLive)PulseLive.removeTag(S.cust,ut.dataset.untag,PULSE_BAG,render);
+  return;}
  const r2=t.closest("[data-reassign2]");if(r2){openReassign(r2.dataset.reassign2,1);return;}
  const rv=t.closest("[data-revert]");if(rv){rv.textContent="Reverted";rv.style.color="var(--watch)";return;}
  const pr=t.closest("[data-partner]");if(pr){openPanel("partner",pr.dataset.partner);return;}
@@ -2874,6 +2897,10 @@ const PULSE_BAG = {
   get CARDS() { return CARDS; },
   get GROWTH() { return GROWTH; },
   get CUST() { return CUST; },
+  /* Tags are read from Pulse's store when a company page opens, and written
+     back when somebody adds or removes one — so the live layer needs to see
+     this object. Property mutation only; TAGS itself is never replaced. */
+  get TAGS() { return TAGS; },
   get ASK() { return ASK; },
   get AUTO() { return AUTO; },
   get STANDINGS() { return STANDINGS; },

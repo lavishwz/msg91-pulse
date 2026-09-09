@@ -1,5 +1,6 @@
 import { query, queryOne } from "@/lib/db";
 import { limitClause, page, toPaged, type Page, type Paged } from "./paginate";
+import { countryOf } from "./country";
 import {
   accountName,
   ago,
@@ -62,6 +63,10 @@ export type Account = {
   status: string;
   entity: Entity;
   currency: string;
+  /** Dialling code from billing_country, and the country it names. */
+  countryCode: string | null;
+  country: string | null;
+  countryFlag: string | null;
   motion: Motion;
   motionEvidence: EvidenceLevel;
   industry: string | null;
@@ -110,6 +115,10 @@ const SELECT_ACCOUNT = `
 export function mapAccount(r: AccountRow): Account {
   const name = accountName(r);
   const currency = (r.currency ?? "").trim().toUpperCase();
+  /* billing_country is a dialling code, and it is the only per-account country
+     the database carries. Falls back to the currency, then to nothing — an
+     account whose country is unknown is not quietly filed under India. */
+  const place = countryOf(r.billing_country, currency);
   const { motion, evidenceLevel } = inferMotion({
     resellerParent: r.reseller_parent != null,
     startupProgramme: r.startup_programme != null,
@@ -132,6 +141,9 @@ export function mapAccount(r: AccountRow): Account {
     status: statusLabel(r.user_status),
     entity: entityFromCurrency(currency),
     currency,
+    countryCode: (r.billing_country ?? "").trim() || null,
+    country: place ? place.name : null,
+    countryFlag: place ? place.flag : null,
     motion,
     motionEvidence: evidenceLevel,
     industry: r.client_industry ?? null,

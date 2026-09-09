@@ -31,7 +31,13 @@ export async function GET(req: Request) {
 
     const health = await healthFor(rows.map((a) => ({ id: a.id, hasOwner: Boolean(a.owner), ageDays: a.ageDays })));
     const board = toBoard(
-      rows.map((a) => ({ id: a.id, name: a.name, currency: a.currency })),
+      rows.map((a) => ({
+        id: a.id,
+        name: a.name,
+        currency: a.currency,
+        country: a.country,
+        countryFlag: a.countryFlag,
+      })),
       health,
     );
 

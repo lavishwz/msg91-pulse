@@ -9,6 +9,7 @@ import {
   accountPeople,
 } from "@/lib/pulse/accounts";
 import { page } from "@/lib/pulse/paginate";
+import { listTags } from "@/lib/pulse/tags";
 import { healthFor } from "@/lib/pulse/health";
 
 /**
@@ -37,7 +38,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     const commentPage = page({ limit: 10, offset: params.get("commentsFrom") });
     const activityPage = page({ limit: 10, offset: params.get("activityFrom") });
 
-    const [routes, comments, activity, people, autopilot, commercial, health] = await Promise.all([
+    const [routes, comments, activity, people, autopilot, commercial, health, tags] = await Promise.all([
       accountRoutes(accountId),
       accountComments(accountId, commentPage),
       accountActivity(accountId, activityPage),
@@ -50,6 +51,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       /* The same score the board uses, with its four components — so "which
          part moved" is answerable on the page the board sends you to. */
       healthFor([{ id: accountId, hasOwner: Boolean(account.owner), ageDays: account.ageDays }]),
+      /* The company's tags, from Pulse's own store. Sent with the page rather
+         than fetched after it, so they are there on the first paint — and
+         degraded to an empty list on failure, like autopilot above, because a
+         store blip should not cost you the account. */
+      listTags(accountId).catch(() => []),
     ]);
 
     return NextResponse.json({
@@ -64,6 +70,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       activityNext: activity.nextCursor,
       commercial,
       health: health.get(accountId) ?? null,
+      tags,
     });
   } catch (err) {
     return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 503 });

@@ -139,6 +139,7 @@ Changing `JWT_SECRET` invalidates every session; changing
 | `app/api/auth/logout` | Invalidate on Proxy's side, clear the cookies. |
 | `app/api/auth/session` | Who the browser is signed in as. |
 | `app/api/pulse/members` | The invite list: read, invite, remove. |
+| `app/api/pulse/accounts/[id]/tags` | Company tags — any member may add or remove. |
 | `lib/pulse/auth.ts` | Signing and verifying the session JWT. |
 | `lib/pulse/proxy.ts` | The two ways to ask Proxy who somebody is. |
 | `lib/pulse/members.ts` | The list itself, and the login gate. |

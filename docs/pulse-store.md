@@ -33,6 +33,22 @@ purpose** — see §3.
 
 Full DDL with the reasoning inline: `scripts/pulse-store/schema.sql`.
 
+Three more tables live in the same schema without being part of the decision
+loop — they are the things the app itself owns:
+
+| Table | Holds | Migration |
+|---|---|---|
+| `pulse_member` | who may sign in, and as what type | `003_members.sql`, `004_member_roles.sql` |
+| `pulse_account_tag` | tags on a company | `005_account_tags.sql` |
+
+`pulse_account_tag` is keyed on `account_id` — an `ms_user.user_pid` — with no
+foreign key, because that table is on another server Pulse only reads. One row
+per tag per company, unique on a lowercased `tag_key` so "Enterprise" and
+"enterprise" are one note rather than two. `source` separates the tags somebody
+typed (`human`, drawn solid) from the ones Pulse inferred from evidence
+(`pulse`, drawn dashed); a person re-adding an inferred tag promotes it to
+theirs, and never the reverse. See `lib/pulse/tags.ts`.
+
 ---
 
 ## 2. The three ideas that matter

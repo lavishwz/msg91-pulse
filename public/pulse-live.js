@@ -12,13 +12,25 @@
  * real and which are still the prototype's sample data.
  */
 window.PulseLive = (function () {
-  const state = { loaded: false, error: null, real: [], mock: [], me: null, ids: {}, cardsLoaded: false, boardLoaded: false, autopilot: null, drafts: [], policy: null, manifest: null, motionRules: null, asked: [], digest: null, verdicts: {}, alerts: [] };
+  const state = { loaded: false, error: null, real: [], mock: [], me: null, ids: {}, cardsLoaded: false, boardLoaded: false, autopilot: null, drafts: [], policy: null, manifest: null, motionRules: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null };
 
   /** How many rows of an answer are on screen at once. Matches lib/pulse/ask.ts. */
   const PAGE_ROWS = 50;
 
   const get = async (path) => {
     const res = await fetch(path, { headers: { accept: "application/json" } });
+    const body = await res.json().catch(() => ({ ok: false, error: "bad JSON" }));
+    if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
+    return body;
+  };
+
+  /** Same contract as `get`, for the writes: throws with the API's own words. */
+  const post = async (path, payload) => {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", accept: "application/json" },
+      body: JSON.stringify(payload),
+    });
     const body = await res.json().catch(() => ({ ok: false, error: "bad JSON" }));
     if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
     return body;
@@ -842,6 +854,11 @@ window.PulseLive = (function () {
     if (id && bag.CUST[name]) {
       bag.CUST[name].pid = id;
       loadVerdict(id, render);
+      /* Tags come back with the detail payload too, but they are also asked for
+         on every open: they are the one thing on this page another person
+         changes while you are looking at it, and the detail request is skipped
+         entirely once the account is loaded. */
+      loadTags(name, bag, render);
     }
     if (!id || !bag.CUST[name] || !bag.CUST[name].__stub) return;
     try {
@@ -868,10 +885,102 @@ window.PulseLive = (function () {
       c.pe = (d.comments || []).map((m) => [m.by, m.text.slice(0, 90), "noted " + m.when]);
       c.__evNext = d.activityNext ?? null;
       c.__peNext = d.commentsNext ?? null;
+      /* Tags arrive with the page, so they are on screen at the first paint
+         rather than one request later. */
+      if (Array.isArray(d.tags)) applyTags(name, d.tags, bag);
       render();
     } catch (err) {
       console.warn("[pulse] account " + id + " failed:", err.message);
     }
+  }
+
+  /* ── tags ─────────────────────────────────────────────────────────────────
+     The prototype kept TAGS in the browser, so a tag was lost on reload and
+     private to one tab. They are notes one person leaves for the next, so they
+     live in Pulse's store now (pulse_account_tag) and this is the binding.
+
+     The renderer's shape is [label, ai] where ai=1 draws the dashed border, so
+     `source` maps onto that second element and vCust needs no changes. */
+
+  function applyTags(name, tags, bag) {
+    bag.TAGS[name] = tags.map((t) => [t.tag, t.source === "pulse" ? 1 : 0]);
+  }
+
+  /** Read one company's tags. Quiet on failure — the page is still worth it. */
+  async function loadTags(name, bag, render) {
+    const id = state.ids[name];
+    if (!id) return;
+    try {
+      const d = await get("/api/pulse/accounts/" + id + "/tags");
+      applyTags(name, d.tags || [], bag);
+      render();
+    } catch (err) {
+      console.warn("[pulse] tags for " + name + " failed:", err.message);
+    }
+  }
+
+  /**
+   * Add one or more tags, then redraw from what the server says.
+   *
+   * The whole list comes back on the response rather than just the additions,
+   * so two people tagging the same company converge on the same list instead
+   * of each holding their own half of it.
+   */
+  async function addTags(name, tags, bag, render) {
+    if (!tags.length) return;
+    const id = state.ids[name];
+    /* The prototype's sample companies have no id in MSG91's database, so there
+       is nothing to tag against. Say that rather than accepting the tag and
+       dropping it — a tag that vanishes on reload is the exact problem this
+       replaced. */
+    if (!id) {
+      state.tagError = name + " is one of the prototype's sample companies, so there is no account to tag.";
+      render();
+      return;
+    }
+    try {
+      const d = await post("/api/pulse/accounts/" + id + "/tags", { tags: tags });
+      applyTags(name, d.tags || [], bag);
+      state.tagError = null;
+    } catch (err) {
+      // Said out loud on the page rather than only in the console: the person
+      // just typed this and needs to know it did not stick.
+      state.tagError = err.message;
+      console.warn("[pulse] adding tags to " + name + " failed:", err.message);
+    }
+    render();
+  }
+
+  /** Remove a tag. Optimistic, then corrected by the server's own list. */
+  async function removeTag(name, tag, bag, render) {
+    const id = state.ids[name];
+    if (!id) {
+      // Sample company: the tag only ever existed in this tab, so forgetting
+      // it here is the whole operation.
+      bag.TAGS[name] = (bag.TAGS[name] || []).filter((t) => t[0] !== tag);
+      render();
+      return;
+    }
+    const before = bag.TAGS[name] || [];
+    bag.TAGS[name] = before.filter((t) => t[0].toLowerCase() !== tag.toLowerCase());
+    render();
+    try {
+      const res = await fetch(
+        "/api/pulse/accounts/" + id + "/tags?tag=" + encodeURIComponent(tag),
+        { method: "DELETE", headers: { accept: "application/json" } },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.ok === false) throw new Error(body.error || "HTTP " + res.status);
+      applyTags(name, body.tags || [], bag);
+      state.tagError = null;
+    } catch (err) {
+      // Put it back. A tag that reappears is honest; one that silently stays
+      // gone while the database still has it is not.
+      bag.TAGS[name] = before;
+      state.tagError = err.message;
+      console.warn("[pulse] removing tag from " + name + " failed:", err.message);
+    }
+    render();
   }
 
   /**

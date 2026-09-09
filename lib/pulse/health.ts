@@ -278,12 +278,23 @@ export type BoardBand = {
     score: number;
     delta: number;
     currency: string;
+    /** Where the account is, from billing_country. Null when unknown — the
+        lens shows those as Unknown rather than assuming a country. */
+    country: string | null;
+    countryFlag: string | null;
     moved: AccountHealth["moved"];
   }[];
 };
 
 /** Money is never summed across currencies (handover §7.2). */
-export type Protected = { currency: string; amount: number; accounts: number };
+export type Protected = {
+  currency: string;
+  /** Grouped by country as well as currency, so the lens can narrow to one
+      country without assuming a country has only one currency. */
+  country: string | null;
+  amount: number;
+  accounts: number;
+};
 
 export type Board = {
   /** Accounts scored, i.e. the denominator of "N of M are healthy". */
@@ -302,7 +313,13 @@ export type Board = {
   formula: string;
 };
 
-type Scorable = { id: number; name: string; currency?: string | null };
+type Scorable = {
+  id: number;
+  name: string;
+  currency?: string | null;
+  country?: string | null;
+  countryFlag?: string | null;
+};
 
 export function toBoard(
   accounts: Scorable[],
@@ -317,10 +334,12 @@ export function toBoard(
     const by = new Map<string, Protected>();
     rows.forEach((a) => {
       const currency = (a.currency ?? "").trim().toUpperCase() || "INR";
-      const at = by.get(currency) ?? { currency, amount: 0, accounts: 0 };
+      const country = a.country ?? null;
+      const key = currency + "|" + (country ?? "");
+      const at = by.get(key) ?? { currency, country, amount: 0, accounts: 0 };
       at.amount += a.h.spend30;
       at.accounts += 1;
-      by.set(currency, at);
+      by.set(key, at);
     });
     return [...by.values()].sort((x, y) => y.amount - x.amount);
   };
@@ -335,6 +354,8 @@ export function toBoard(
         score: a.h.score,
         delta: a.h.delta,
         currency: (a.currency ?? "").trim().toUpperCase() || "INR",
+        country: a.country ?? null,
+        countryFlag: a.countryFlag ?? null,
         moved: a.h.moved,
       }));
     return { band, count: inBand.length, accounts: inBand };
