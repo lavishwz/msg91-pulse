@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { lookup, remember } from "./qcache";
 import { chat, extractJson, GtwyError, isConfigured as gtwyConfigured } from "./gtwy";
 import { CORE_TABLES, detail, index, renderDetail, renderIndex } from "./schema";
 import { ALLOWED_TABLES } from "./schema-notes";
@@ -127,11 +128,38 @@ export type PlanResult = Plan & {
  * given, it gets them and one more attempt. Beyond that the question is not
  * answerable from this schema.
  */
-export async function plan(question: string): Promise<PlanResult> {
+/**
+ * A fingerprint for the schema Ask is allowed to read.
+ *
+ * Cached SQL is only valid against the schema it was written for. If the
+ * allowlist changes, yesterday's query may name a table Ask may no longer
+ * touch, so the cache is keyed on this and a change quietly invalidates
+ * everything rather than serving something stale.
+ */
+export function schemaVersion(): string {
+  return `t${Object.keys(ALLOWED_TABLES).length}`;
+}
+
+export async function plan(question: string, who: string | null = null): Promise<PlanResult> {
+  // Have we translated this question before? The SQL is remembered, never the
+  // answer — the query is re-run every time, so the numbers are always current.
+  // Only the translation is skipped.
+  try {
+    const hit = await lookup(question, schemaVersion(), who);
+    if (hit) {
+      return { ...hit, rounds: 0, model: hit.model, usage: {} };
+    }
+  } catch {
+    // A cache that is unreachable must never stop an answer. Fall through and
+    // ask the agent, exactly as if nothing had been remembered.
+  }
+
   const first = await askOnce(question, []);
   if (!first.plan.needs_schema_for.length || first.plan.sql) {
+    void remember(question, schemaVersion(), first.plan, first.model, who).catch(() => {});
     return { ...first.plan, rounds: 1, model: first.model, usage: first.usage };
   }
   const second = await askOnce(question, first.plan.needs_schema_for.slice(0, 8));
+  void remember(question, schemaVersion(), second.plan, second.model, who).catch(() => {});
   return { ...second.plan, rounds: 2, model: second.model, usage: second.usage };
 }

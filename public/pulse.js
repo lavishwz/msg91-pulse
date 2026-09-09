@@ -283,19 +283,23 @@ const TIP={
  blocked:["Blocked","Policy stopped a person from doing this. The attempt is kept."],
  junk:["Suppressed","AI decided this signup was not worth a person. Nothing is deleted — say so if it got one wrong."],
  merged:["Merged","A duplicate signup was attached to an existing company instead of becoming a new lead."],
+ suppressed:["Suppressed","AI decided this signup does not need a person. Nothing was deleted — put it back and it returns to the deck."],
  ACT:["ACT","AI does this on its own. No card, no person, logged."],
  CARD:["CARD","AI stops here and puts a card in front of a person."]};
 const TABTIP={
  connections:["Connections","What Pulse can reach. Everything AI can do depends on this list — an amber dot means something is switched off."],
- live:["Live","What AI is doing right now, as it happens. Nothing here needs you."],
+ activity:["Activity","Everything AI did, newest first. Every row opens to show the evidence, the confidence and the policy behind it."],
  rules:["Rules","The policies AI follows, one set per motion. This is where you change its behaviour."],
- ailog:["AI log","Every decision AI made, with the evidence and the policy behind it. Searchable."],
  audit:["Audit log","Every action a person took — viewed, revealed, changed, exported. Separate from the AI log."],
- filtered:["Filtered","Signups AI suppressed, and why. Reviewable, never deleted."]};
+ };
 
 let AUTO={
-live:{sys:["Needs attention","The UAE after-hours routing rule fired 41 times in an hour.",
- "Normal is four. Paused at 09:02, nothing was sent. The office-hours window was changed at 08:58."],
+/* No sample banner here any more. The prototype's "UAE routing rule fired 41
+   times" was the story a circuit breaker is built to catch — and Pulse now has
+   a real one, so a permanent invented version of it sitting above the real feed
+   would be the worst of both. The banner below is drawn from the same alerts
+   the Now surface reads. */
+activity:{
  f:[["09:14","Drafted a recovery mail for Marigold Travel","Silence 22d, effort 3d. Held — the last two drafts to this account were edited.","draft","act"],
  ["09:11","Merged two missions on Zippy Logistics","Protect revenue and solve issue, same evidence.","merge",""],
  ["09:04","Chased the DLT desk for Nova Foods","Ninth follow-up. Escalated to the operator SPOC.","acted","ok"],
@@ -322,7 +326,7 @@ rules:{mo:[
   ["CARD","Partner-sourced volume down 20% → tell the partner manager."]]]],
  pr:[["Stop asking about cancellation clauses under ₹50k","Approved four times in a row with no edits.","Let AI handle it","Keep asking me"],
   ["Promote recovery mails from draft to send","22 drafts released unedited. Accounts under ₹1L a month only.","Promote to send","Not yet"]]},
-ailog:{f:[
+ailogSample:{f:[
  ["09:14","Marigold Travel · risk detected · confidence 0.81","SMS −35%/14d (reports) · no inbound reply 22d (gmail) · 3 outbound attempts. Policy: Partner, protect revenue. Drafted recovery mail, held for human. FYI: Rhea.","draft","act"],
  ["09:11","Zippy Logistics · missions merged","Open protect-revenue mission already covered the WhatsApp pause. Duplicate suppressed.","merge",""],
  ["08:59","Aster Labs · rate question · confidence 0.94","Matched India rate card v7. No margin exception. Sent from sana@msg91.com. FYI: Sana.","sent","ok"],
@@ -337,7 +341,7 @@ audit:{sys:["Anomaly","Arjun revealed payment history on 40 accounts between 01:
  ["08:31","Rhea Menon approved a quote for Bluebird Fintech","$0.0089 per conversation, margin 11.2%. Sent.","approve",""],
  ["02:14","Arjun Nair attempted an export of 40 accounts","Requires a named reason and a second approver.","blocked","act"]]},
 connections:{f:[]},
-filtered:{f:[
+filteredSample:{f:[
  ["09:07","rahul.test@gmail.com","Free domain, no company, bounced verification, scraper user agent. Quality 4.","junk",""],
  ["08:52","Duplicate of Trellis Retail","Third signup from trellisretail.in, different department.","merged","ok"],
  ["08:41","Amrita University · student project","Named it a college assignment in the signup note. Quality 11. Sent free-tier docs.","junk",""],
@@ -458,6 +462,59 @@ const ONB=[
   "Six things need you this morning. I have already handled forty-seven others, and you can see every one of them in Autopilot whenever you want to check my work.",
   "done"]];
 const ONBSTATE={dropped:new Set(),traits:VOICE.slice()};
+
+/* Room to grow, from Agent 5's digest when there is one. The prototype's six
+   ranked opportunities below stay as the fallback: an empty month should still
+   show a person what to do, and a blank surface teaches nobody anything. */
+/**
+ * Room to grow.
+ *
+ * Three sources, in order of how much they know:
+ *
+ *   1. Agent 5's month-end digest, when the month has been run. It has read the
+ *      whole board and can say what a play is worth.
+ *   2. What is already on screen — the board and the counts. No new queries:
+ *      ms_trans has no useful index, so anything clever here would cost seconds
+ *      on every page load.
+ *   3. The prototype's rows, only when neither of the above has anything. An
+ *      empty growth section teaches nobody anything.
+ */
+function roomRows(){
+ const dg=window.PulseLive&&PulseLive.state.digest;
+ if(dg&&dg.plays&&dg.plays.length)
+  return dg.plays.map(p=>[p.what.split(/[.:]/)[0].slice(0,42),p.what,p.why,
+   (p.worth||"").toUpperCase()+" · WRITTEN BY AUTOPILOT AT MONTH END",p.cta||"Do it"]);
+
+ const live=[];
+ const counts=(window.PulseLive&&PulseLive.state.counts)||null;
+ if(counts&&counts.unowned)
+  live.push(["Claim an account",
+   `${counts.unowned.toLocaleString("en-IN")} accounts have nobody on them`,
+   "Nobody is watching these. Whoever claims one owns whatever it becomes — and an unowned account that starts paying is the cheapest revenue on the board.",
+   "FROM ms_user AND user_handled_by · COUNTED JUST NOW","Claim three"]);
+
+ /* The board is already scored for this scope, so naming the accounts that are
+    slipping costs nothing extra. */
+ if(BOARD&&BOARD.bands){
+  const risky=BOARD.bands.filter(b=>b.band==="wobbling"||b.band==="risk").flatMap(b=>b.accounts);
+  if(risky.length)
+   live.push(["Wake something up",
+    `${risky.length} account${risky.length===1?"":"s"} in your book are slipping`,
+    `${risky.slice(0,3).map(a=>a.name).join(", ")}${risky.length>3?` and ${risky.length-3} more`:""}. Their score is built from payment recency, spend trend, how many products they use and whether anyone owns them — open one to see which part moved.`,
+    "FROM THE SAME SCORE THE BOARD USES","See the board"]);
+ }
+
+ /* Held drafts are work already done that nobody has released. The cheapest
+    thing on this list, and the one most likely to be forgotten. */
+ const held=((window.PulseLive&&PulseLive.state.drafts)||[]).length;
+ if(held)
+  live.push(["Release what is written",
+   `${held} message${held===1?"":"s"} are written and waiting on you`,
+   "Autopilot drafted these and stopped. Reading one takes ten seconds, and a first touch is worth less every day it waits.",
+   "FROM pulse_draft · HELD, NOT SENT","Read them"]);
+
+ return live.length?live:ROOM;
+}
 
 const ROOM=[
  ["Claim an account","Dune Logistics has no owner and is growing on WhatsApp.",
@@ -802,35 +859,171 @@ const PEOPLE=["Rhea Menon","Sana Qureshi","Arjun Nair","Priya Sundaram","Neha Ku
 function MARK(n,sz){if(CUST[n]||BOOK.some(b=>b[1]===n))return LOGO(n,sz);
  if(PEOPLE.includes(n))return AVI(n,sz);return "";}
 
-const S={v:"now",scope:"me",tab:"live",ask:"mine",from:null,cust:null,doneOpen:0,flightOpen:1,roomOpen:0,newRep:0,askTab:"ask",ostep:0,sel:new Set(),doneIds:new Set(),C:new Set(),M:new Set()};
+/* ══════════════════════════════════════════════════════════════════
+   The score band, the board and the season · ported from pulse-v2-game
+   ══════════════════════════════════════════════════════════════════ */
+const GAME={
+ me:{label:"Your game",kept:"₹96.2L",keptSub:"running revenue still with you, across 18 accounts",
+  atRisk:"2 accounts worth ₹8.1L are slipping",
+  mate:["Pulse played 47 moves for you today","14 signups scored, 4 junk suppressed, 9 chases, 1 rate question answered, 1 subject line promoted"]},
+ team:{label:"The team",kept:"₹4.81Cr",keptSub:"running revenue across 486 accounts",
+  atRisk:"11 accounts worth ₹62L are slipping",
+  mate:["Pulse played 612 moves for the team today","Across 25 people. 63 of 1,842 signals this month needed a person at all."]},
+ company:{label:"MSG91",kept:"₹6.2Cr",keptSub:"running revenue across four entities",
+  atRisk:"nine customers were hit by yesterday's UAE outage",
+  mate:["Pulse played 4,180 moves this week","96.6% of everything that happened was resolved without a person touching it."]}};
+
+const POINTS=[
+ ["₹22L","46 accounts have nobody on them","Eleven are in your countries and three are sending well. Whoever claims them owns the revenue. This is the single biggest pile of points on the board.","Claim three"],
+ ["₹5.8L","Trellis has never touched WhatsApp","400k SMS a month, and Kavita asked about WhatsApp in July. Eight accounts with this profile grew messaging spend 38% within two quarters.","See the pitch"],
+ ["₹4.1L","Vega left in March, and their new CTO used us before","Rohan Desai joined from Aster Labs in July, where he ran our OTP integration himself. Arjun still owns it and has not touched it in 94 days.","Read the story"],
+ ["protects ₹19L","Five accounts where you only know one person","If Imran leaves Zippy you lose the account. Single-thread accounts churn at roughly twice the rate.","Who to meet"],
+ ["₹3.2L","Fourteen companies look like your best customers","Closest is Zenith Mart — 200 stores, competitor SMS, an app with phone login and no OTP provider I can find.","Look at them"],
+ ["—","You lose most often on rate","Two of your last four. Both times you countered once and stopped. Sana holds ₹0.121 by leading with term length.","Ten minutes on this"]];
+
+/* [score, change this month, band] */
+const HEALTH={
+"Trellis Retail":[78,6,"thriving"],"Aster Labs":[84,2,"thriving"],"Dune Logistics":[81,9,"thriving"],
+"Kite Insurance":[76,1,"thriving"],"Rapid Kirana":[74,12,"thriving"],"Falcon Pay":[73,-4,"thriving"],
+"Bluebird Fintech":[68,5,"steady"],"Kanchan Pharma":[66,0,"steady"],"Saffron Bank":[61,-2,"steady"],
+"Meridian Health":[64,7,"steady"],"Peartree Grocers":[58,3,"steady"],"Cobalt Energy":[57,1,"steady"],
+"Lantern Legal":[55,-1,"steady"],"Orbit Learning":[52,52,"steady"],
+"Zippy Logistics":[43,-11,"wobbling"],"Nova Foods":[41,-3,"wobbling"],"Vega Mobility":[38,-6,"wobbling"],
+"Marigold Travel":[29,-15,"risk"]};
+const BANDS=[
+ ["thriving","Thriving","#4C7A52",2,"multi-product, more than one contact"],
+ ["steady","Steady","#1E75B9",0,"healthy but single-threaded"],
+ ["wobbling","Wobbling","#B79A46",-1,"something changed, nobody fixed it"],
+ ["risk","At risk","#A8462A",0,"Marigold — 22 days silent"]];
+/* Playing a card moves the account. Keyed by card subject. */
+const CARDMOVE={
+ "Orbit Learning":["up","52 → 66","first call inside ten minutes"],
+ "Kanchan Pharma":["up","66 → 79","a rate answered closes the loop and unblocks 11L a month"],
+ "Falcon Pay":["hold","73 → 58 if you stay quiet","an unacknowledged outage is how trust goes"],
+ "Bluebird Fintech":["up","68 → 77","a second product is the strongest health signal there is"],
+ "Zippy Logistics":["up","43 → 58","knowing why turns a mystery into a fixable problem"],
+ "Trellis Retail":["up","78 → 88","a second department means the account survives one person leaving"],
+ "Marigold Travel":["hold","29 → 18 if nothing changes","every silent day costs about a point"],
+ "Nova Foods":["up","41 → 63","the day they send their first message"]};
+const HMOVERS=[
+ ["Sana Qureshi","+21","up",0],["Priya Sundaram","+16","up",0],["Rhea Menon","+14","up",1],
+ ["Neha Kulkarni","+9","up",0],["Vikas Menon","+4","up",0],["Arjun Nair","−7","down",0]];
+const HKEPT=[
+ ["Priya Sundaram","3","up",0],["Rhea Menon","3","up",1],
+ ["Sana Qureshi","1","up",0],["Arjun Nair","−2","down",0]];
+
+/* The lens reads country and motion off the sample book. Live data replaces
+   BOOK with the real accounts, and the board is still keyed to HEALTH's
+   eighteen — so keep a snapshot to look them up in. */
+const LENS_BOOK=BOOK.map(b=>b.slice());
+
+/* ⌘K's resting state: the saved views, by state. */
+const STATEOF={"Trellis Retail":"growing","Kanchan Pharma":"needs","Falcon Pay":"needs",
+"Bluebird Fintech":"flight","Zippy Logistics":"needs","Marigold Travel":"needs","Nova Foods":"flight",
+"Orbit Learning":"needs","Aster Labs":"quiet","Vega Mobility":"needs","Saffron Bank":"flight",
+"Meridian Health":"setup","Kite Insurance":"quiet","Cobalt Energy":"flight","Dune Logistics":"growing",
+"Peartree Grocers":"setup","Lantern Legal":"quiet","Rapid Kirana":"setup"};
+const LASTTOUCH={"Trellis Retail":"2d","Kanchan Pharma":"today","Falcon Pay":"1d","Bluebird Fintech":"today",
+"Zippy Logistics":"3w","Marigold Travel":"22d","Nova Foods":"9d","Orbit Learning":"today","Aster Labs":"11d",
+"Vega Mobility":"94d","Saffron Bank":"71d","Meridian Health":"6d","Kite Insurance":"68d","Cobalt Energy":"76d",
+"Dune Logistics":"61d","Peartree Grocers":"4d","Lantern Legal":"81d","Rapid Kirana":"1d"};
+const VIEWS=[
+ ["all","Your accounts","AC",18,null],
+ ["needs","Needs you now","!",6,"needs"],
+ ["flight","In flight","→",4,"flight"],
+ ["setup","Setting up","○",3,"setup"],
+ ["growing","Growing","↗",2,"growing"],
+ ["quiet","Quiet and healthy","·",3,"quiet"],
+ ["unowned","Nobody on them","?",46,"__unowned"],
+ ["everything","Every account at MSG91","∀",486,"__all"]];
+VIEWS.forEach(function(v){
+ const key=v[0],label=v[1],st=v[4];
+ let rows;
+ if(st==="__unowned"){
+  rows=[["Dune Logistics","UAE","Partner","growing on WhatsApp","61d"],
+   ["Cobalt Energy","US","Outbound","first invoice paid","76d"],
+   ["Kite Insurance","India","Inbound","campaign heavy","68d"],
+   ["Vega Mobility","India","Outbound","volume dropped","94d"],
+   ["Harbour Freight","UAE","Inbound","new from the event list","2d"]];
+ } else if(st==="__all"){
+  rows=LENS_BOOK.slice(0,10).map(b=>[b[1],b[2],b[3],b[4],LASTTOUCH[b[1]]||"—"]);
+ } else {
+  rows=LENS_BOOK.filter(b=>!st||STATEOF[b[1]]===st).map(b=>[b[1],b[2],b[3],b[4],LASTTOUCH[b[1]]||"—"]);
+ }
+ ASK["v_"+key]={q:label,big:String(v[3]),
+  h:key==="all"?"Everything you own, sorted by what needs you.":
+    key==="unowned"?"Unassigned since Vikram left, fourteen days ago.":
+    key==="everything"?"Across 25 people and four entities.":label+".",
+  p:key==="unowned"?"Three of them asked a question in that time and nobody answered. Anyone can claim one.":
+    key==="everything"?"Showing the first ten. Narrow it by asking a question instead of scrolling.":
+    "Sorted by what needs you first.",
+  cols:["Account","Country","Motion","State","Last touch"],rows:rows,
+  act:key==="unowned"?"Claim the three that are sending":"Create missions for the selected",
+  st:["Rhea Menon","today 09:40",key==="everything"?"all teams":"your accounts","recomputed on open"]};
+});
+
+const S={v:"now",scope:"me",tab:"activity",ask:"mine",teamTab:"won",from:null,cust:null,doneOpen:0,flightOpen:1,roomOpen:0,newRep:0,askTab:"ask",ostep:0,editRule:null,addingTo:null,act:"all",openRow:null,sel:new Set(),doneIds:new Set(),C:new Set(),M:new Set()};
 const main=$("#main");
 
 function lensLab(){const c=[...S.C],m=[...S.M];if(!c.length&&!m.length)return "All";
  const p=a=>a.length<=2?a.join(" + "):a[0]+" +"+(a.length-1);
  return [c.length?p(c):null,m.length?p(m):null].filter(Boolean).join(" · ");}
-function vis(){const inS=CARDS.filter(x=>x.s===S.scope);
- if(S.scope==="me")return inS;
- return inS.filter(x=>{const[co,mo]=x.geo.split(" · ");
+/**
+ * The live board, or null while it is still loading / when the prototype runs
+ * standalone. Shape: /api/pulse/board's `board`.
+ */
+let BOARD=null;
+
+/* Money, native currency, never summed across currencies. */
+const CUR={INR:"₹",AED:"AED ",USD:"$",SGD:"S$",GBP:"£",EUR:"€"};
+function purse(n,c){const sym=CUR[c]||(c?c+" ":"");
+ if(c==="INR"||!c)return n>=1e7?sym+(n/1e7).toFixed(2)+"Cr":n>=1e5?sym+(n/1e5).toFixed(1)+"L":sym+Math.round(n).toLocaleString("en-IN");
+ return sym+Math.round(n).toLocaleString("en-US");}
+const purses=rows=>(rows&&rows.length?rows.map(r=>purse(r.amount,r.currency)).join(" · "):"—");
+
+/* The lens filters every scope, not only team and company. It used to return
+   your own cards unfiltered, so picking "UAE" while on Your game changed the
+   label and nothing else. */
+function vis(){return CARDS.filter(x=>x.s===S.scope).filter(x=>{
+  const[co,mo]=x.geo.split(" · ");
   return (!S.C.size||S.C.has(co))&&(!S.M.size||S.M.has(mo));});}
 
-const ctlHTML=()=>`<div class="ctl">
- <div class="scope" role="tablist">
-  ${["me","team","company"].map(k=>`<button role="tab" data-sc="${k}" aria-selected="${S.scope===k}">${
-   {me:"Me",team:"Team",company:"Company"}[k]}</button>`).join("")}</div>
- <span class="gr"></span>
- <span class="lensw"><button class="lensb" id="lensb" data-on="${lensLab()!=="All"}">
-   <span>${lensLab()}</span><span class="car">▼</span></button>
-  <div class="lens" id="lensm" hidden>
-   <h4>Country</h4>${["India","UAE","US","Singapore"].map(c=>
-    `<label><span>${c}</span><input type="checkbox" data-c="${c}" ${S.C.has(c)?"checked":""}><span class="bx"></span></label>`).join("")}
-   <h4>Motion</h4>${["Inbound","Outbound","Startup","Partner"].map(m=>
-    `<label><span>${m}</span><input type="checkbox" data-m="${m}" ${S.M.has(m)?"checked":""}><span class="bx"></span></label>`).join("")}
-   <button class="clr" id="lensc">Clear all</button></div></span></div>`;
+/* Board membership. Country and motion come from the sample book snapshot —
+   an account the lens knows nothing about stays visible rather than vanishing. */
+function inLens(n){const b=BOOK.find(x=>x[1]===n)||LENS_BOOK.find(x=>x[1]===n);if(!b)return true;
+ return (!S.C.size||S.C.has(b[2]))&&(!S.M.size||S.M.has(b[3]));}
+/* Names in one band. Live scores when the database has answered, the
+   prototype's sample map until then. */
+function bandOf(k){
+ if(BOARD){const b=BOARD.bands.find(x=>x.band===k);
+  return b?b.accounts.filter(a=>inLens(a.name)).map(a=>a.name):[];}
+ return Object.keys(HEALTH).filter(n=>HEALTH[n][2]===k&&inLens(n));}
+function scoreOf(n){
+ if(BOARD){for(const b of BOARD.bands){const a=b.accounts.find(x=>x.name===n);if(a)return a.score;}return null;}
+ return HEALTH[n]?HEALTH[n][0]:null;}
+
+/**
+ * The first paint, before the database has answered.
+ *
+ * The prototype's sample data used to render immediately and then be replaced a
+ * second later, which read as the page changing its mind. Showing the shape of
+ * what is coming is honest: nothing is claimed, and nothing has to be unsaid.
+ */
+function skeleton(){
+ const bar=(w,h,mt)=>`<div class="sk" style="width:${w};height:${h||"14px"};margin-top:${mt||"10px"}"></div>`;
+ const block=()=>`<div class="skcard">${bar("30%","11px","0")}${bar("70%","22px","14px")}${bar("90%")}${bar("55%")}</div>`;
+ main.innerHTML=`<div class="skwrap" aria-busy="true" aria-label="Loading">
+   ${bar("34%","13px","30px")}${bar("58%","40px","16px")}
+   <div style="margin-top:30px">${block()}${block()}${block()}</div></div>`;
+}
 
 function render(){
  main.className="wrap"+(S.v==="auto"||S.v==="ask"?" wide":"");
  $("#amenu").hidden=true;
- $$('.nav button').forEach(b=>b.setAttribute("aria-selected",String(b.dataset.nav===S.v)));
+ /* Until the data layer has answered once, show the shape rather than the
+    prototype's sample rows. A screen that contradicts itself two seconds later
+    costs more trust than a screen that admits it is still loading. */
+ if(window.PulseLive&&!PulseLive.state.loaded&&!PulseLive.state.error){skeleton();return;}
  ({now:vNow,ask:vAsk,auto:vAuto,cust:vCust,profile:vProfile})[S.v]();
  window.scrollTo({top:0});
 }
@@ -850,32 +1043,212 @@ function cardHTML(c,i){
     <button data-reassign="${i}">Reassign</button>
     <button data-wrong="${i}">Wrong</button></span></div>
   <div class="rev" id="rev-${i}" hidden><dl>${c.rev.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
-   <div class="lg">Opened by Rhea Menon · 09:24 · logged</div></div>
+   <div class="lg">Opened by ${ME.name||"you"} · logged</div></div>
   <div class="wrong" id="wr-${i}" hidden><p>What did I get wrong? This is the most useful thing you can tell me.</p>
    <div class="opts">${WRONG.map(w=>`<button data-wsel="${i}">${w}</button>`).join("")}</div></div>
   </article>`;
 }
 
 function vNow(){
- const cards=S.newRep?[]:vis().filter(c=>!S.doneIds.has(CARDS.indexOf(c))), n=cards.filter(c=>!c.w).length;
+ /* Cards are the slowest query in the app and arrive after the first paint, so
+    they get their own loading state. Showing the prototype's sample cards in
+    the meantime is what made the page appear to change its mind. */
+ const cardsPending=Boolean(window.PulseLive&&!PulseLive.state.cardsLoaded&&!PulseLive.state.error);
+ const cards=S.newRep||cardsPending?[]:vis().filter(c=>!S.doneIds.has(CARDS.indexOf(c))), n=cards.filter(c=>!c.w).length;
  const who=S.scope==="me"?"you":S.scope==="team"?"the team":"the company";
- const sl=(S.scope!=="me"&&lensLab()!=="All")?` <span class="sl">· ${lensLab()}</span>`:"";
+ const sl=lensLab()!=="All"?` <span class="sl">· ${lensLab()}</span>`:"";
  const g=GROWTH[S.scope];
+ const G=GAME[S.scope]||GAME.me, isCo=S.scope==="company";
+ const healthy=bandOf("thriving").length+bandOf("steady").length;
+ const total=BOARD
+  ?BANDS.reduce((n,b)=>n+bandOf(b[0]).length,0)
+  :Object.keys(HEALTH).filter(inLens).length;
+
+ /* 1 · the season, the scope and the lens — one row, above everything */
+ const head=`<div class="gtop2">
+   <span class="season">September · <span class="days">12 days left</span></span>
+   <span class="gswitch">${["me","team","company"].map(k=>
+     `<button data-sc="${k}" aria-selected="${S.scope===k}">${GAME[k].label}</button>`).join("")}</span>
+   <span class="lensw"><button class="lensb" id="lensb" data-on="${lensLab()!=="All"}">
+     <span>${lensLab()}</span><span class="car">▼</span></button>
+    <div class="lens" id="lensm" hidden>
+     <h4>Country</h4>${["India","UAE","US","Singapore"].map(c=>
+      `<label><span>${c}</span><input type="checkbox" data-c="${c}" ${S.C.has(c)?"checked":""}><span class="bx"></span></label>`).join("")}
+     <h4>Motion</h4>${["Inbound","Outbound","Startup","Partner"].map(m=>
+      `<label><span>${m}</span><input type="checkbox" data-m="${m}" ${S.M.has(m)?"checked":""}><span class="bx"></span></label>`).join("")}
+     <button class="clr" id="lensc">Clear all</button></div></span></div>`;
+
+ /* 1.5 · system exceptions.
+    These are not account work, so they sit above the score rather than among
+    the cards: a gateway that stopped answering is not a customer problem and
+    must not queue behind one. Team and Company only — a rep is not on call for
+    the infrastructure, and putting it in their morning list gets both ignored. */
+ const allAlerts=(window.PulseLive&&PulseLive.state.alerts)||[];
+ /* Work belongs to a person, so it shows on every scope including Me. The
+    machinery — a gateway that stopped answering, a runaway rule — belongs to
+    whoever runs the system, so it appears at Team and Company only. */
+ const alerts=allAlerts.filter(a=>a.audience==="work"||S.scope!=="me");
+ const sysband=alerts.length?`<div style="margin:26px 0 0">${alerts.map(a=>
+   `<div class="sys">
+     <div class="eb"><span class="dot"></span>${a.eyebrow}</div>
+     <h4>${a.headline}</h4><p>${a.detail}</p>
+     ${a.key==="paused"?`<div class="row"><button class="go solid" data-resume="1">Resume sending →</button></div>`
+      :a.audience==="work"?`<div class="row"><button class="go solid" data-nav="auto" data-tab2="activity">Review →</button></div>`
+      :`<div class="row"><button class="go" data-nav="auto" data-tab2="activity">See what happened →</button></div>`}
+    </div>`).join("")}</div>`:"";
+
+ /* 2 · where you stand, and what it protects */
+ /* The board is scored per scope and arrives after the first paint. Until it
+    does, the headline and the band counts show the prototype's numbers — which
+    is the section that made the page look like it changed its mind. */
+ const boardPending=Boolean(window.PulseLive&&!PulseLive.state.boardLoaded&&!PulseLive.state.error);
+ const sband=boardPending?`<div class="scoreband"><div class="stand2">
+   <div class="sk" style="width:64%;height:40px"></div>
+   <div class="sk" style="width:38%;height:14px;margin-top:16px"></div>
+   <div class="sk" style="width:100%;height:10px;margin-top:18px;border-radius:5px"></div>
+   <div class="sk" style="width:72%;height:13px;margin-top:16px"></div></div>
+  <div class="protects"><div class="lb3">What that protects</div>
+   <div class="sk" style="width:44%;height:26px"></div>
+   <div class="sk" style="width:86%;margin-top:12px"></div>
+   <div class="sk" style="width:64%;margin-top:8px"></div></div></div>`
+  :`<div class="scoreband"><div class="stand2">
+   <h1>${healthy} of ${total} account${total===1?"":"s"} ${total===1?"is":"are"} healthy.</h1>
+   ${lensLab()!=="All"?`<p class="sub2" style="color:var(--act)">Showing ${lensLab()} only.
+     <button id="lensc2" style="color:var(--br);border-bottom:1px solid var(--br-s)">Clear</button></p>`:""}
+   <p class="sub2">${BOARD
+     ?`<b>▲ ${BOARD.climbed} climbed a band this month.</b> ${
+        BOARD.slipped===0?"None slipped.":BOARD.slipped===1?"One slipped.":BOARD.slipped+" slipped."}`
+     :`<b>▲ 2 climbed a band this month.</b> One slipped.`}</p>
+   <div class="hbar">${BANDS.map((b,i)=>`<i class="b${i+1}" style="flex:${bandOf(b[0]).length||0.2}"></i>`).join("")}</div>
+   <div class="bandline">${BANDS.map(([k,l,c,d])=>{
+     /* Live movement is per account, so a band shows the net of what entered
+        and left it; the sample data carries its own fixed delta. */
+     const mv=BOARD?null:d;
+     return `<span class="bi"><i style="background:${c}"></i><b>${bandOf(k).length}</b>${l}
+     ${mv?`<em data-d="${mv<0?"down":"up"}">${mv>0?"▲"+mv:"▼"+Math.abs(mv)}</em>`:""}</span>`;}).join("")}</div>
+   <div class="flash2" id="dflash" hidden></div></div>
+  <div class="protects"><div class="lb3">What that protects</div>
+   ${BOARD?`<p><b>${purses(BOARD.protects)}</b>spent over the last thirty days by the ${
+      BOARD.protects.reduce((n,r)=>n+r.accounts,0)} accounts holding up</p>
+    <p class="rk2">${(()=>{const n=BOARD.atRisk.reduce((x,r)=>x+r.accounts,0);
+      if(!n)return "Nothing here is wobbling or at risk.";
+      return `${n} account${n===1?" is":"s are"} wobbling or at risk${
+       BOARD.atRisk.some(r=>r.amount>0)?`, worth ${purses(BOARD.atRisk)} last month`
+        :`, and ${n===1?"it":"they"} spent nothing last month`}.`;})()}</p>`
+    :`<p><b>${G.kept}</b>${G.keptSub}</p>
+    <p class="rk2">${G.atRisk}.</p>`}</div></div>`;
+
+ /* 3 · what to do now */
  let body;
  if(S.newRep){
   body=`<h1>Welcome, Nikhil.</h1>
    <p class="why" style="margin-top:18px;max-width:52ch">Nothing needs you yet — you have no accounts. Four things are worth doing today, and the first one gives you something real to work on.</p>`;
  } else if(!cards.length){
   const el=CARDS.filter(c=>c.s===S.scope&&!c.w).length;
-  const filtered=lensLab()!=="All"&&S.scope!=="me";
-  body=`<h1>${filtered?`Nothing needs ${who}${sl}.`:"You are clear."}</h1>
+  const filtered=lensLab()!=="All";
+  body=`<div class="secn"><div class="lab">${filtered?"Nothing here":"Nothing needs you"}</div>
    <div class="zero">${filtered?"":`<div class="tk2">✓</div>`}
-   <p>${filtered?el+" things need "+who+" elsewhere.":"Forty-seven things happened today and none of the rest need you. When you have time, here is where I would look."}</p>
-   ${filtered?`<button class="go" id="clrf" style="margin-top:16px">Clear the filter →</button>`:""}</div>`;
+   <h2 style="font-weight:600;font-size:26px;letter-spacing:-.024em;margin:0 0 10px">${
+     filtered?`Nothing needs ${who}${sl}.`:"Board cleared."}</h2>
+   <p>${filtered?el+" things need "+who+" elsewhere."
+     :((a=>a&&a.total?`${a.total.toLocaleString("en-IN")} decision${a.total===1?"":"s"} have been made and none of the rest need you. When you have time, here is where I would look.`
+       :"Forty-seven things happened today and none of the rest need you. When you have time, here is where I would look.")(window.PulseLive&&PulseLive.state.autopilot))}</p>
+   ${filtered?`<button class="go" id="clrf" style="margin-top:16px">Clear the filter →</button>`:""}</div></div>`;
  } else {
-  body=`<h1>${n} thing${n===1?"":"s"} need${n===1?"s":""} ${who}${sl}.</h1>
-   <div class="stack">${cards.map(c=>cardHTML(c,CARDS.indexOf(c))).join("")}</div>`;
+  body=`<div class="secn"><div class="lab">${n} move${n===1?"":"s"}</div>
+   <div class="stack" style="margin-top:6px;border-top:none">${
+    cards.map(c=>cardHTML(c,CARDS.indexOf(c))).join("")}</div></div>`;
  }
+
+ /* The cards have not arrived. Two card-shaped placeholders say "something is
+    coming here" without saying what — which is the whole point. */
+ if(cardsPending&&!S.newRep){
+  body=`<div class="secn"><div class="lab sk" style="width:80px;height:11px"></div>
+   <div class="stack" style="margin-top:6px;border-top:none">
+    ${[0,1].map(()=>`<div class="skcard">
+      <div class="sk" style="width:28%;height:11px"></div>
+      <div class="sk" style="width:76%;height:24px;margin-top:14px"></div>
+      <div class="sk" style="width:92%;margin-top:12px"></div>
+      <div class="sk" style="width:58%;margin-top:8px"></div></div>`).join("")}</div></div>`;
+ }
+
+ /* 4 · the board */
+ const board=`<section class="secn hard"><div class="lab">The board</div>
+  <div class="cols4">${BANDS.map(([k,l,c])=>`<div class="col4" data-c="${
+   k==="thriving"?"landed":k==="risk"?"slipping":""}">
+   <div class="ch">${l}</div><p class="cn">${bandOf(k).length}</p>
+   <div class="cv" style="margin-bottom:11px"></div>
+   ${bandOf(k).map(a=>`<button class="bcard" data-cust="${a}">${LOGO(a,17)}
+    <span class="bn">${a}</span>${scoreOf(a)!=null?`<span class="bv">${scoreOf(a)}</span>`:""}</button>`).join("")}</div>`).join("")}</div>
+  <p class="boardnote">${BOARD
+   ?`${BOARD.formula}${BOARD.tooNew?` ${BOARD.tooNew} more on this page signed up inside thirty days and have not paid yet — too new to score.`:""}`
+   :"Pulse moves these from evidence. Open any account to see which part moved."}</p></section>`;
+
+ /* 5 · where to grow.
+    roomRows() prefers Agent 5's month-end plays, then what is already on
+    screen — the unowned count, the board's slipping accounts, drafts nobody has
+    released. The prototype's rows are the last resort, not the default. */
+ const grow=roomRows().slice(0,3);
+ const growLive=grow!==ROOM&&grow[0]&&grow[0].length===5&&/FROM |WRITTEN BY/.test(grow[0][3]||"");
+ const points=`<section class="secn"><div class="lab">Where to grow</div>
+  ${growLive
+   ?grow.map(([t2,h2,p2,ev,cta])=>`<div class="prow3">
+     <span class="pb2"><b>${h2}</b><span>${p2}</span>
+      <span style="display:block;margin-top:6px;font-size:11px;letter-spacing:.08em;color:var(--faint)">${ev}</span></span>
+     <button class="go">${cta} →</button></div>`).join("")
+   :POINTS.slice(0,3).map(([v,h2,p2,cta])=>`<div class="prow3">
+     <span class="pb2"><b>${h2}</b><span>${p2}</span></span>
+     <button class="go">${cta} →</button></div>`).join("")}
+  <p class="boardnote">${growLive?"Each one is counted from the database as this page loaded."
+   :"Three more below."}</p></section>`;
+
+ /* 6 · the team.
+    The prototype ranked people by movement — health points lifted this month.
+    That needs a month of history Pulse has only just started recording, and
+    inventing it would mean fake numbers on the one board every rep checks
+    against their own memory. So this shows what is measurable today: the size
+    of each book, from ms_user and user_handled_by, and says plainly that
+    movement is coming. */
+ const liveReps=STANDINGS.length?STANDINGS.slice(0,4):null;
+ const tt=S.teamTab||"won", mrows=(tt==="won"?HMOVERS:HKEPT).slice(0,4);
+ const team=liveReps
+  ?`<section class="secn"><div class="lab">The team</div>
+   <div style="margin-top:10px">${liveReps.map(([nm,ini,sc,dl,d,me])=>`<div class="mvrow" data-me="${me}">
+    <span class="mv2" data-d="up">${Number(sc).toLocaleString("en-IN")}</span>
+    <span class="nm3">${AVI(nm,26)}${nm}${me?"<em>you</em>":""}</span></div>`).join("")}</div>
+   <p class="boardnote">Accounts owned. Movement — who lifted a band this month — needs a month of
+    history, and Pulse started recording it this week.</p></section>`
+  :`<section class="secn"><div class="lab" style="display:flex;align-items:center">
+   <span>The team</span>
+   <span class="tswitch"><button data-tt="won" aria-selected="${tt==="won"}">Moved</button>
+    <button data-tt="kept" aria-selected="${tt==="kept"}">Pulled back</button></span></div>
+  <div style="margin-top:10px">${mrows.map(([nm,mv,d,me])=>`<div class="mvrow" data-me="${me}">
+   <span class="mv2" data-d="${d}">${mv}</span>
+   <span class="nm3">${AVI(nm,26)}${nm}${me?"<em>you</em>":""}</span></div>`).join("")}</div>
+  <p class="boardnote">Ordered by movement. Points, not rupees — nobody's revenue is on this board.</p></section>`;
+
+ /* 7 · what Pulse did.
+    Real once Autopilot has decided anything: the counts come straight from
+    pulse_decision, which is the same table the Activity tab reads. The
+    prototype's line stays only while nothing has been decided — a claim about
+    how much work AI saved is the last thing that should be invented. */
+ const asum=window.PulseLive&&PulseLive.state.autopilot;
+ const mateTop=asum&&asum.total
+  ?`Pulse made ${asum.thisMonth.toLocaleString("en-IN")} decision${asum.thisMonth===1?"":"s"} this month`
+  :G.mate[0];
+ const mateSub=asum&&asum.total
+  ?`${asum.raised} needed a person. ${asum.nurtured} went to a sequence, ${asum.suppressed} were filtered out${
+     asum.held?`, ${asum.held} are held`:""}.`
+  :G.mate[1];
+ /* The headline number is the promise of the whole product: what fraction was
+    resolved without a person. Rounded, and only shown once there is enough to
+    round honestly. */
+ const noHuman=asum&&asum.thisMonth>=10
+  ? Math.round(((asum.thisMonth-asum.raised)/asum.thisMonth)*100)+"%"
+  : null;
+ const mate=`<button class="mate" data-nav="auto" data-tab2="activity"><span class="av3">P</span>
+  <span class="mb"><b>${mateTop}</b><span>${mateSub}</span></span>
+  <span class="mv3">${noHuman?`${noHuman}<em>without a person</em>`:`+18 pts<em>held or lifted by me</em>`}</span></button>`;
  const nThem=FLIGHT.filter(f=>f[2]==="them").length,nUs=FLIGHT.filter(f=>f[2]==="us").length,
   nAI=FLIGHT.filter(f=>f[2]==="pulse").length,nOld=FLIGHT.filter(f=>f[4]).length;
  const flightSec=S.scope==="me"?`<section class="flight">
@@ -899,7 +1272,7 @@ function vNow(){
    ${sp?`<span class="spark2">${(()=>{const mx=Math.max(...sp),mn=Math.min(...sp);return sp.map(h=>`<i style="height:${Math.round(28+72*(h-mn)/(mx-mn||1))}%"></i>`).join("");})()}</span>`:""}
    <div class="v2">${v}<em class="${note.indexOf("▼")===0?"up":""}">${note}</em></div></div>`).join("")}
   <p class="pinnote">Every one of these is an answer someone pinned from Ask. Open one to see the question, the rows behind it and who pinned it.</p></section>`:"";
- const list=S.newRep?ROOM_NEW:ROOM;
+ const list=S.newRep?ROOM_NEW:roomRows();
  const auto=S.newRep||!cards.length;
  const roomSec=S.scope==="me"?`<section class="room${auto?" open":""}">
   <div class="lab">${auto?"Where I would look":`<button id="rtog" style="font-family:inherit;letter-spacing:inherit;color:var(--faint)">Room to grow · ${list.length} ${S.roomOpen?"▾":"▸"}</button>`}</div>
@@ -927,20 +1300,28 @@ function vNow(){
   <div class="logos">${BOOK.map(([mo,nm,co,mt,st,hot])=>
    `<span data-cust="${nm}" data-tip="${nm}||${co} · ${mt} — ${st}">${LOGO(nm,40)}</span>`).join("")}</div>
   ${wallMore?`<div class="row" style="margin-top:14px"><button class="go" id="morewall">Load 40 more →</button></div>`:""}</section>`:"";
- const stand=S.scope==="team"?`<div class="stand"><div class="lab">Standings · all 25 · everyone sees this</div>
+ /* The bar is drawn against the largest row, not against 100.
+    The prototype's score was 0-100 so a percentage width worked; the live
+    numbers are account counts, and 1,320 rendered as width:1320% — clipped to
+    full, which made everyone above a hundred accounts look identical. */
+ const topScore=Math.max(1,...STANDINGS.map(r=>Number(r[2])||0));
+ const stand=S.scope==="team"?`<div class="stand"><div class="lab">Standings · all ${
+   STANDINGS.length} · everyone sees this</div>
   ${STANDINGS.map(([nm,ini,sc,dl,d,me],i)=>`<div class="srow" data-me="${me}">
    <span class="rk">${i+1}</span><span class="nm mkrow">${AVI(nm,24)}${nm}${me?"<em>you</em>":""}</span>
-   <span class="bar"><i style="width:${sc}%"></i></span>
-   <span class="sc2">${sc}</span><span class="dl" data-d="${d}">${dl}</span></div>`).join("")}
+   <span class="bar" data-tip="Accounts owned||${Number(sc).toLocaleString("en-IN")} of ${
+     topScore.toLocaleString("en-IN")}, the largest book on the team. Ordered by accounts owned, not by revenue."><i style="width:${
+     Math.max(2,Math.round((Number(sc)||0)/topScore*100))}%"></i></span>
+   <span class="sc2">${Number(sc).toLocaleString("en-IN")}</span><span class="dl" data-d="${d}">${dl}</span></div>`).join("")}
   <div class="srow" style="border:none;color:var(--faint)"><span class="rk"></span>
-   <span class="nm" style="font-weight:400;font-size:13px">17 more · median 74</span></div></div>`:"";
+   <span class="nm" style="font-weight:400;font-size:13px">Ordered by accounts owned. Movement needs a month of history — it is being recorded now.</span></div></div>`:"";
  const ban=(!ME.gmail&&S.scope==="me")?`<div class="banner"><span class="sd" style="width:8px;height:8px;border-radius:50%;background:var(--watch);margin-top:7px;flex:none"></span>
   <div class="bt"><b>I cannot see your conversations.</b>
   <span>Your mailbox is not connected, so for all 18 of your companies I am guessing at silence and I cannot draft anything in your voice. Six days like this and it becomes a card in your manager's view.</span></div>
   <button class="go solid" data-nav="profile">Connect it →</button></div>`:"";
- main.innerHTML=ctlHTML()+ban+
-  `<p class="greet">${S.scope==="me"?"Friday, 6 September":S.scope==="team"?"Sales · 25 people":"MSG91 · all teams"}</p>`+
-  body+(S.newRep?"":flightSec+doneSec)+roomSec+pinSec+
+ main.innerHTML=head+sysband+ban+(S.newRep?"":sband)+
+  body+(S.newRep?"":flightSec+doneSec+board+points)+roomSec+pinSec+
+  (S.newRep?"":team+mate)+
   (S.newRep?"":`<section class="growth"><div class="lab">${g.lab}</div>
    <div class="gtop"><h2>${g.h}</h2>
     ${/* No score when nothing can evidence one. It is weighted to promises kept
@@ -964,11 +1345,23 @@ function vAsk(){
  const a=ASK[S.ask], sel=S.sel;
  const tabs=`<div class="tabs" style="margin-top:34px">
    <button data-atab="ask" aria-selected="${S.askTab==="ask"}">Ask</button>
-   <button data-atab="asked" aria-selected="${S.askTab==="asked"}">Asked · ${HISTORY.length}</button></div>`;
+   <button data-atab="asked" aria-selected="${S.askTab==="asked"}">Asked · ${
+    HISTORY.length+((window.PulseLive&&PulseLive.state.asked)||[]).length}</button></div>`;
  if(S.askTab==="asked"){
   const sorted=HISTORY.slice().sort((x,y)=>(y[0]-x[0]));
+  /* Questions people actually typed, from pulse_question. These carry a real
+     count because the store increments it on every ask — which is also what
+     lets the list fade on its own after thirty days of nobody asking. */
+  const typed=(window.PulseLive&&PulseLive.state.asked)||[];
   main.innerHTML=tabs+`<p class="lede" style="margin:24px 0 18px;font-size:14px;color:var(--muted);max-width:60ch">
     Pinned questions stay. Everything else fades after thirty days of nobody asking it, so this list stays short on its own.</p>
+   ${typed.length?`<div class="lab" style="margin:0 0 8px">Asked by people here</div>
+    ${typed.map(t=>`<div class="lrow" data-asked="${encodeURIComponent(t.question)}" style="cursor:pointer">
+     <span class="pin" style="width:14px;flex:none;color:var(--br);font-size:11px">?</span>
+     <span class="ds"><b style="font-weight:500">${t.question.replace(/</g,"&lt;")}</b>
+      <em>asked ${t.askedCount} time${t.askedCount===1?"":"s"}${t.headline?" · "+t.headline.replace(/</g,"&lt;"):""}</em></span>
+     <span class="rt3">${t.askedCount>1?"SAVED SQL":"ASKED"}</span></div>`).join("")}
+    <div class="lab" style="margin:26px 0 8px">The questions Pulse ships with</div>`:""}
    ${sorted.map(([pin,q,meta,k])=>`<div class="lrow" data-q="${k}" style="cursor:pointer">
     <span class="pin" style="width:14px;flex:none;color:var(--br);font-size:11px">${pin?"★":""}</span>
     <span class="ds"><b style="font-weight:500">${q}</b><em>${meta}</em></span>
@@ -1011,7 +1404,10 @@ function vAsk(){
   <div class="row">${a.cols||!a.act?"":`<button class="go solid">${a.act} →</button>`}
    <button class="go" id="pinq">${isPinned?"★ Pinned · unpin":"Pin this answer…"}</button>
    <button class="go">Share</button></div>
-  <div class="stamp">${a.st.map(x=>`<span>${x}</span>`).join("")}</div></div>`;
+  ${(st=>`<div class="stamp">${st.map(x=>`<span>${x}</span>`).join("")}</div>`)(
+    /* The stamp says who was allowed to see this answer, so it has to be the
+       person actually logged in — not the prototype's name. */
+    a.st.map(x=>x==="Rhea Menon"&&ME.name?ME.name:x))}</div>`;
  $("#aq").addEventListener("keydown",e=>{if(e.key!=="Enter")return;
   const typed=e.target.value.trim();
   /* A typed question goes to Claude, which writes the SQL. Without the live
@@ -1030,11 +1426,44 @@ function vAuto(){
      directly instead of relying on the prototype's sample decision map. */
   const rowAttr=hasd?` data-log="${tm}"`
    :(S.tab==="audit"||S.tab==="filtered")?` data-row-detail="${encodeURIComponent(JSON.stringify([tm,a,b,tag]))}" style="cursor:pointer"`:"";
+  /* A suppressed signup carries its key so a person can put it back. Nothing is
+     ever deleted, so this is the only way a wrong suppression gets corrected. */
+  const unsup=typeof k==="string"&&k.indexOf("unsup:")===0?k.slice(6):"";
   return `<div class="item"${rowAttr}><time>${tm}</time>
   <div class="bd"><b>${a}</b><span>${b}</span></div>
-  <span class="tg" data-t="${k}" data-tip="${TIP[tag][0]}||${TIP[tag][1]}">${tag}</span>
+  ${unsup?`<button class="go" data-unsuppress="${unsup}" style="font-size:12px;padding:5px 10px;margin-right:8px">Put back</button>`:""}
+  ${(t2=>`<span class="tg" data-t="${unsup?"":k}" data-tip="${t2[0]}||${t2[1]}">${tag}</span>`)(TIP[tag]||[tag,""])}
   ${hasd?`<span class="chev">→</span>`:""}</div>`;}).join("")}</div>`;
  let body="";
+
+ /* ── Activity ──────────────────────────────────────────────────────────────
+    Handover §7.4: one feed of everything AI did, chips to filter by what kind
+    of action it was, and every row expands to its evidence. Live and the AI log
+    were the same events at two verbosities — that is a detail level, not a
+    surface, so it became an expandable row instead of a second tab. Suppression
+    is just another action type, so it became a chip: keeping it in the main
+    stream is better for trust than hiding it in a tab nobody opens. */
+ const CHIPS=[["all","Everything"],["acted","Acted"],["drafted","Drafted for a person"],
+  ["suppressed","Suppressed"],["learned","Learned something"]];
+
+ const rows=(window.PulseLive&&PulseLive.state.activity)||null;
+ const drafts=(window.PulseLive&&PulseLive.state.drafts)||[];
+
+ /* Which rows a chip shows. A draft is not a separate kind of event — it is a
+    decision whose action was "write to a person and wait", so it filters on the
+    same field as everything else. */
+ /* The chips are exclusive on purpose: a row belongs to exactly one of them, so
+    the counts add up to Everything. Overlapping filters make a reader think
+    something is being double-counted, and on a trust surface that is fatal.
+    "Learned something" is a policy change — there are none until the critic
+    agent exists, and showing an honest zero is better than borrowing rows from
+    another chip to make it look busy. */
+ const matches=r=>S.act==="all"||
+  (S.act==="acted"&&!r.held&&!r.draftId&&r.verdict!=="suppress")||
+  (S.act==="drafted"&&(r.held||!!r.draftId))||
+  (S.act==="suppressed"&&r.verdict==="suppress")||
+  (S.act==="learned"&&r.agent==="policy-critic");
+
  if(S.tab==="connections"){
   body=`<p style="margin:26px 0 0;color:var(--ink2);max-width:62ch">Everything AI can do depends on this list.
    Where a dot is amber, something is switched off and I have said what it costs you.</p>
@@ -1044,35 +1473,120 @@ function vAuto(){
      ${breaks?`<span class="br">${breaks}</span>`:""}</div>
     ${act?`<button class="act2">${act}</button>`:`<span class="rt2">${st==="on"?"LIVE":"PARTIAL"}</span>`}</div>`).join("")}</div>`;
  } else if(S.tab==="rules"){
+  /* The manifest is the most important statement in the product, so it is not a
+     constant any more — it is rows in pulse_policy that a person can change.
+     MANIFEST stays as the fallback for when the store has not answered. */
+  const mf=(window.PulseLive&&PulseLive.state.manifest)||null;
+  const col=(side,title)=>{
+   const items=mf?mf[side]:MANIFEST[side].map(t=>({key:null,text:t,version:"v1",source:"seed"}));
+   return `<div class="mcol" data-k="${side}"><h4>${title} · ${items.length}</h4>
+    <ul>${items.map(it=>{
+     if(S.editRule&&it.key===S.editRule) return `<li>
+      <textarea data-rt="${it.key}" style="width:100%;min-height:56px;font:inherit;font-size:13px;
+       padding:8px;border:1px solid var(--line2);border-radius:6px;background:var(--raise);color:var(--ink);
+       resize:vertical">${it.text.replace(/</g,"&lt;")}</textarea>
+      <span class="row" style="margin-top:6px;gap:8px">
+       <button class="go solid" data-rsave="${it.key}" style="font-size:12px;padding:4px 10px">Save as ${
+        "v"+((+String(it.version).replace("v","")||1)+1)}</button>
+       <button class="go" data-rcancel="1" style="font-size:12px;padding:4px 10px">Cancel</button></span></li>`;
+     return `<li>${it.text}
+      ${it.key?`<span class="rmeta" style="opacity:0;transition:opacity .12s">
+       <span class="pen" data-redit="${it.key}" style="cursor:pointer">edit</span>
+       <span class="pen" data-rretire="${it.key}" style="cursor:pointer;margin-left:10px">retire</span>
+       <span style="color:var(--faint);font-size:11px;margin-left:10px">${it.version}${
+        it.source==="human"?" · yours":""}${it.enforcedIn?" · enforced in code":""}</span></span>`:""}</li>`;
+    }).join("")}</ul>
+    ${S.addingTo===side?`<div style="margin-top:10px">
+     <textarea data-rnew="${side}" placeholder="Write the rule as a sentence" style="width:100%;min-height:56px;
+      font:inherit;font-size:13px;padding:8px;border:1px solid var(--line2);border-radius:6px;
+      background:var(--raise);color:var(--ink);resize:vertical"></textarea>
+     <span class="row" style="margin-top:6px;gap:8px">
+      <button class="go solid" data-radd="${side}" style="font-size:12px;padding:4px 10px">Add rule</button>
+      <button class="go" data-rcancel="1" style="font-size:12px;padding:4px 10px">Cancel</button></span></div>`
+    :`<button class="add" data-raddopen="${side}" style="font-size:13px;color:var(--br);padding:9px 0 0;
+      border-top:1px solid var(--line);width:100%;margin-top:10px;text-align:left">＋ Add a rule</button>`}
+    </div>`;};
   body=`<div class="manifest">
-   <div class="mcol" data-k="yes"><h4>What I am allowed to do without asking · ${MANIFEST.yes.length}</h4>
-    <ul>${MANIFEST.yes.map(x=>`<li>${x}</li>`).join("")}</ul></div>
-   <div class="mcol" data-k="no"><h4>What always needs a person · ${MANIFEST.no.length}</h4>
-    <ul>${MANIFEST.no.map(x=>`<li>${x}</li>`).join("")}</ul></div></div>
+   ${col("yes","What I am allowed to do without asking")}
+   ${col("no","What always needs a person")}</div>
+   <p style="margin:10px 0 0;color:var(--muted);font-size:12.5px">Editing a rule saves a new version.
+    Nothing is overwritten, and a decision always cites the version that was in force when it was made.</p>
    <div class="lab" style="margin:34px 0 0">The rules behind that, by motion</div>
-   <div class="mo4">${t.mo.map(([n,s,rs])=>`<div class="mo"><h4>${n}</h4><p class="sb">${s}</p>
-   ${rs.map(([k,r])=>`<div class="ru" data-rule="${r.replace(/"/g,"&quot;")}">
-     <em data-k="${k}" data-tip="${TIP[k][0]}||${TIP[k][1]}">${k}</em><span>${r}</span>
-     <span class="pen">edit</span></div>`).join("")}
-    <button class="add" style="font-size:13px;color:var(--br);padding:9px 0 0;border-top:1px solid var(--line);width:100%" data-newrule="${n}">＋ Add a rule to ${n}</button></div>`).join("")}</div>
+   ${(mr=>{
+    /* The rules are rows now, so the card shows what Autopilot actually runs.
+       A rule that is written down but not yet wired into the runner says so —
+       a rule that looks live and is not is worse than no rule at all. */
+    const MO=[["inbound","Inbound"],["outbound","Outbound"],["startup","Startup"],["partner","Partner"]];
+    if(!mr) return `<div class="mo4">${t.mo.map(([n,s,rs])=>`<div class="mo"><h4>${n}</h4><p class="sb">${s}</p>
+     ${rs.map(([k,r])=>`<div class="ru"><em data-k="${k}" data-tip="${TIP[k][0]}||${TIP[k][1]}">${k}</em><span>${r}</span></div>`).join("")}
+     </div>`).join("")}</div>`;
+    return `<div class="mo4">${MO.map(([key,label])=>{
+     const list=mr[key]||[];
+     const liveN=list.filter(r=>r.live).length;
+     return `<div class="mo"><h4>${label}</h4>
+      <p class="sb">${liveN} of ${list.length} running today</p>
+      ${list.map(r=>`<div class="ru" data-openrule="${r.key}" style="cursor:pointer">
+        <em data-k="${r.then.act==="card"?"CARD":"ACT"}" data-tip="${TIP[r.then.act==="card"?"CARD":"ACT"][0]}||${TIP[r.then.act==="card"?"CARD":"ACT"][1]}">${r.then.act==="card"?"CARD":"ACT"}</em>
+        <span${r.live?"":' style="color:var(--faint)"'}>${r.english}
+         ${r.live?"":`<em style="font-style:normal;font-size:11px;color:var(--watch);margin-left:6px">not running yet</em>`}
+         ${r.version!=="v1"?`<em style="font-style:normal;font-size:11px;color:var(--faint);margin-left:6px">${r.version}</em>`:""}</span>
+        <span class="pen">edit</span></div>`).join("")}
+      <button class="add" style="font-size:13px;color:var(--br);padding:9px 0 0;border-top:1px solid var(--line);width:100%"
+       data-newrule="${key}">＋ Add a rule to ${label}</button></div>`;}).join("")}</div>`;
+   })(window.PulseLive&&PulseLive.state.motionRules)}
    ${t.pr.map(([h,p,a,b])=>`<div class="prop"><h4>${h}</h4><p>${p}</p>
     <div class="row" style="margin-top:0"><button class="go solid">${a} →</button><button class="go">${b}</button></div></div>`).join("")}`;
+ } else if(S.tab==="activity"){
+  if(!rows){
+   /* The store has not answered, so the prototype's sample feed stands in. A
+      surface that has never decided anything should look like a prototype, not
+      like a broken page. */
+   body=feed(t.f);
+  } else {
+   const shown=rows.filter(matches);
+   const count=k=>k==="all"?rows.length:rows.filter(r=>{const o=S.act;S.act=k;const m=matches(r);S.act=o;return m;}).length;
+   body=`<div class="row" style="margin:22px 0 0;gap:8px;flex-wrap:wrap">${CHIPS.map(([k,lab])=>
+     `<button class="go${S.act===k?" solid":""}" data-act="${k}" style="font-size:12.5px;padding:6px 12px">${lab} · ${count(k)}</button>`).join("")}</div>
+    ${shown.length?`<div class="feed" style="margin-top:14px">${shown.map(r=>
+     `<div class="item" data-decision="${r.signalKey}::${r.agent}" style="cursor:pointer">
+      <time>${r.when}</time>
+      <div class="bd"><b>${r.title}</b><span>${r.detail}</span></div>
+      ${(t2=>`<span class="tg" data-t="${r.kind}" data-tip="${t2[0]}||${t2[1]}">${r.tag}</span>`)(TIP[r.tag]||[r.tag,""])}
+      <span class="chev">→</span></div>`).join("")}</div>`
+     :`<p style="margin:22px 0 0;color:var(--ink2)">Nothing under this filter.</p>`}`;
+  }
  } else {
-  /* Both log tabs page the same way. Anything with more behind it gets a
-     button; anything that fits does not. */
-  const moreId=S.tab==="audit"&&window.PulseLive&&PulseLive.state.auditNext!=null?"moreaudit"
-   :S.tab==="filtered"&&window.PulseLive&&PulseLive.state.filteredNext!=null?"morefiltered":"";
-  body=feed(t.f)+(moreId?`<div class="row" style="margin-top:16px"><button class="go" id="${moreId}">Load ${
-   moreId==="moreaudit"?25:20} more →</button></div>`:"");
+  /* The audit log. Anything with more behind it gets a button; anything that
+     fits does not. A tab with no data object cannot crash the surface — it
+     renders empty and says so, because a blank Autopilot is a trust problem. */
+  const moreId=S.tab==="audit"&&window.PulseLive&&PulseLive.state.auditNext!=null?"moreaudit":"";
+  if(!t){console.warn("[pulse] no data for tab",S.tab);}
+  body=feed((t&&t.f)||[])+(moreId?`<div class="row" style="margin-top:16px"><button class="go" id="${moreId}">Load 25 more →</button></div>`:"");
  }
+ /* The count is the store's own once it has answered. The prototype's 1,842
+    stays only while nothing real has been decided yet. */
+ const asum=window.PulseLive&&PulseLive.state.autopilot;
+ const ahead=asum?`${asum.thisMonth.toLocaleString("en-IN")} signal${asum.thisMonth===1?"":"s"} handled this month.`
+  :"1,842 signals handled this month.";
  main.innerHTML=`<p class="greet" style="margin-top:34px">Autopilot</p>
-  <h1>1,842 signals handled this month.</h1>
-  <div class="tabs">${Object.keys(AUTO).map(k=>`<button data-tab="${k}" aria-selected="${k===S.tab}"
+  <h1>${ahead}</h1>
+  <div class="tabs">${["activity","rules","connections","audit"].map(k=>`<button data-tab="${k}" aria-selected="${k===S.tab}"
    data-tip="${TABTIP[k][0]}||${TABTIP[k][1]}">${
-   {live:"Live",rules:"Rules",connections:"Connections",ailog:"AI log",audit:"Audit log",filtered:"Filtered"}[k]}</button>`).join("")}</div>
-  ${t.sys?`<div class="sys"><div class="eb"><span class="dot"></span>${t.sys[0]}</div>
-   <h4>${t.sys[1]}</h4><p>${t.sys[2]}</p>
-   <div class="row"><button class="go solid">Review →</button><button class="go">Mark expected</button></div></div>`:""}
+   {activity:"Activity",rules:"Rules",connections:"Connections",audit:"Audit log"}[k]}</button>`).join("")}</div>
+  ${((sys)=>{
+   /* The machinery talking about itself: a breaker that tripped, decisions the
+      gateway could not answer, the kill switch left on. Same rows as Now shows
+      at Team scope — this is the surface somebody opens *because* something
+      looks wrong, so it belongs in both places. */
+   if(S.tab!=="activity"||!sys.length) return t&&t.sys?`<div class="sys"><div class="eb"><span class="dot"></span>${t.sys[0]}</div>
+     <h4>${t.sys[1]}</h4><p>${t.sys[2]}</p></div>`:"";
+   return sys.map(a=>`<div class="sys"><div class="eb"><span class="dot"></span>${a.eyebrow}</div>
+     <h4>${a.headline}</h4><p>${a.detail}</p>
+     ${a.key&&a.key.indexOf("breaker:")===0
+      ?`<div class="row"><button class="go solid" data-breaker="${a.key.slice(8)}">Let it run again →</button></div>`
+      :a.key==="paused"?`<div class="row"><button class="go solid" data-resume="1">Resume sending →</button></div>`:""}
+    </div>`).join("");
+  })(((window.PulseLive&&PulseLive.state.alerts)||[]).filter(a=>a.audience==="system"))}
   ${body}`;
 }
 
@@ -1123,7 +1637,31 @@ function vCust(){
    <div><h1>${n}</h1><span class="m">${b[2]} <span class="motionchip" style="margin:0 6px">${b[3].toUpperCase()}</span>
     ${d.owner?`<span class="ownerchip">${AVI(d.owner,20)} ${d.owner}</span>`
      :`<span class="ownerchip" style="color:var(--watch)">No owner</span>`}</span></div></div>
-  <p class="verdict">${d.v}</p><p class="why">${d.s}</p>
+  ${(av=>av?`<p class="verdict">${av.headline}</p><p class="why">${av.why}</p>
+   <div class="hblock" style="margin-top:14px"><div class="hh" style="align-items:flex-start">
+    <div style="flex:1"><span class="lab">What to do</span>
+     <p style="margin:5px 0 0;color:var(--ink);font-size:14px">${av.recommended_move}</p>
+     <p style="margin:6px 0 0;color:var(--muted);font-size:12.5px">${av.expected_effect}</p></div></div>
+    ${av.evidence&&av.evidence.length?`<div style="margin-top:12px">${av.evidence.map(e=>
+     `<div style="display:flex;gap:10px;font-size:12.5px;padding:5px 0;border-top:1px solid var(--line)">
+      <span class="lab" style="min-width:130px">${e[0]}</span><span style="color:var(--ink2)">${e[1]}</span></div>`).join("")}</div>`:""}
+    <p style="margin:10px 0 0;color:var(--faint);font-size:11.5px">Written by Autopilot at month end · confidence ${
+     (av.confidence!=null?av.confidence.toFixed(2):"—")}</p></div>`
+   :`<p class="verdict">${d.v}</p><p class="why">${d.s}</p>`)(
+   window.PulseLive&&PulseLive.state.verdicts&&PulseLive.state.verdicts[d.pid])}
+  ${d.health?`<div class="hblock">
+   <div class="hh"><b>${d.health.score}</b><span>health · ${
+     {thriving:"thriving",steady:"steady",wobbling:"wobbling",risk:"at risk"}[d.health.band]}</span>
+    ${d.health.delta?`<em data-d="${d.health.delta<0?"down":"up"}">${
+      d.health.delta>0?"+"+d.health.delta:d.health.delta} this month${
+      d.health.moved?" · "+(d.health.moved==="up"?"climbed a band":"slipped a band"):""}</em>`:""}</div>
+   ${d.health.components.map(c=>`<div class="hcomp"><span class="cl2">${c.label}</span>
+    <span class="cbar"><i style="width:${c.value}%" data-low="${c.value<40?1:0}"></i></span>
+    <span class="cv2">${c.value}</span></div>
+    <p class="hwhy" style="border:none;margin:0 0 4px;padding:0;font-size:12px">${c.evidence} · ${
+      Math.round(c.weight*100)}% of the score</p>`).join("")}
+   <p class="hwhy">Derived on read from ms_trans and ms_text_bal — MSG91's schema stores no health score.
+    Ownership and product breadth have no history here, so the monthly movement holds them at today's value.</p></div>`:""}
   <div class="row"><button class="go solid" data-sheet="log">Log what happened →</button>
    <button class="go">Open the thread</button>
    <button class="go" data-reassign2="${n}">Reassign</button></div>
@@ -1143,6 +1681,31 @@ function vCust(){
    `<div class="pr" data-person="${a}" style="cursor:pointer"><b class="mkrow">${AVI(a,24)}${a}</b><span class="rl">${rl}</span><i>${r}</i></div>`).join("")}
    ${d.__peNext!=null?`<div class="row" style="margin-top:12px"><button class="go" id="morepeople">Load 10 more →</button></div>`:""}
    <button class="addtag" style="margin-top:12px;border-color:var(--line2);color:var(--br)" data-sheet="log">＋ Add a person</button></div>
+  ${(ap=>!ap||(!ap.decisions.length&&!ap.drafts.length&&!ap.next.length)?"":`
+  <div class="sec"><h5>What Autopilot did here</h5>
+   ${ap.next.length?`<p style="font-size:13px;color:var(--ink);margin:0 0 12px">
+     Next: <b>${ap.next[0].what}</b> in ${ap.next[0].inDays} day${ap.next[0].inDays===1?"":"s"},
+     unless something changes before then.</p>`:""}
+   ${ap.decisions.map(x=>`<div class="ev" style="align-items:flex-start">
+     <time>${x.when}</time>
+     <span><b style="color:var(--ink)">${x.title}</b><br>
+      <span style="color:var(--ink2)">${x.detail}</span>
+      ${x.confidence!=null?`<span style="color:var(--faint);font-size:12px"> · confidence ${x.confidence.toFixed(2)}</span>`:""}
+     </span></div>`).join("")}
+   ${ap.drafts.filter(x=>x.status==="held").map(x=>`
+    <div class="skcard" style="margin-top:12px;background:var(--sink)">
+     <div class="lab">Held for you · ${x.channel}</div>
+     <b style="display:block;margin:6px 0 8px;font-size:14px">${x.subject||"(no subject)"}</b>
+     <textarea data-body="${x.id}" style="width:100%;min-height:96px;font:inherit;font-size:13.5px;
+      line-height:1.6;padding:11px;border:1px solid var(--line);border-radius:8px;background:var(--raise);
+      color:var(--ink);resize:vertical">${x.body.replace(/</g,"&lt;")}</textarea>
+     ${x.holdReason?`<p style="font-size:12.5px;color:var(--muted);margin:8px 0 0">Held: ${x.holdReason}</p>`:""}
+     <div class="row" style="margin-top:10px"><button class="go solid" data-release="${x.id}">Release →</button>
+      <button class="go" data-discard="${x.id}">Discard</button>
+      <span class="dmsg" data-dmsg="${x.id}" style="font-size:12.5px;color:var(--muted);align-self:center"></span></div>
+    </div>`).join("")}
+  </div>`)(d.autopilot)}
+
   <div class="sec"><h5>Products</h5>${d.la.map(([pp,st,x])=>
    `<div class="ln"><span class="cp">${pp}</span><span class="st" data-s="${st}">${st}</span><i>${x}</i></div>`).join("")}</div>
   <div class="sec"><h5>Recently</h5>${d.ev.map(([t,e])=>`<div class="ev"><time>${t}</time><span>${e}</span></div>`).join("")}
@@ -1194,11 +1757,12 @@ let PAL=[
  {g:"Ask Pulse",ic:"?",t:"What is in flight?",s:"7 — 3 with them, 2 blocked here, 2 with Pulse",rt:"↵",run:()=>{S.ask="flight";S.sel=new Set();S.v="ask";render();}},
  {g:"Ask Pulse",ic:"?",t:"Whose accounts are flat?",s:"2 — Arjun 61 days, Priya 34 days",rt:"↵",run:()=>{S.ask="flat";S.v="ask";render();}},
  {g:"Ask Pulse",ic:"?",t:"Which startups are stuck before first message?",s:"3, all on the same DLT queue",rt:"↵",run:()=>{S.ask="stuck";S.v="ask";render();}},
- {g:"Go to",ic:"◆",t:"Autopilot · Live",s:"What AI is doing right now",rt:"",run:()=>{S.tab="live";S.v="auto";render();}},
+ {g:"Go to",ic:"◆",t:"Autopilot · Activity",s:"Everything AI did, with the evidence",rt:"",run:()=>{S.tab="activity";S.act="all";S.v="auto";render();}},
  {g:"Go to",ic:"◆",t:"Autopilot · Rules",s:"Four motions, four sets of rules",rt:"",run:()=>{S.tab="rules";S.v="auto";render();}},
  {g:"Go to",ic:"◆",t:"Connections",s:"What Pulse can reach · 2 not connected",rt:"",run:()=>{S.tab="connections";S.v="auto";render();}},
  {g:"Go to",ic:"◆",t:"Audit log",s:"What people viewed, revealed and changed",rt:"",run:()=>{S.tab="audit";S.v="auto";render();}},
- {g:"Go to",ic:"◆",t:"Filtered signups",s:"What AI suppressed, and why",rt:"",run:()=>{S.tab="filtered";S.v="auto";render();}},
+ {g:"Go to",ic:"◆",t:"Suppressed signups",s:"What AI filtered out, and why",rt:"",run:()=>{S.tab="activity";S.act="suppressed";S.v="auto";render();}},
+ {g:"Go to",ic:"◆",t:"Drafts waiting on you",s:"Messages AI wrote, held until you release them",rt:"",run:()=>{S.tab="activity";S.act="drafted";S.v="auto";render();}},
  {g:"Go to",ic:"◆",t:"Your profile and connections",s:"Your mailbox, your calendar, how you write",rt:"",run:()=>{S.v="profile";render();}},
  {g:"Go to",ic:"◆",t:"Preview: a new teammate on day one",s:"What Nikhil sees with no accounts yet",rt:"",run:()=>{S.newRep=1;S.v="now";render();}},
  {g:"Go to",ic:"◆",t:"Back to the normal view",s:"Leave the new-teammate preview",rt:"",run:()=>{S.newRep=0;S.v="now";render();}},
@@ -1210,7 +1774,13 @@ let PAL=[
  {g:"Ask Pulse",ic:"?",t:"Every account my team is handling",s:"Pinned · 486 accounts, 46 unassigned",rt:"saved",run:()=>{S.ask="teamall";S.sel=new Set();S.askTab="ask";S.v="ask";render();}},
  {g:"Ask Pulse",ic:"?",t:"Revenue by partner this month",s:"Pinned · five partners, native currency",rt:"saved",run:()=>{S.ask="partners";S.sel=new Set();S.askTab="ask";S.v="ask";render();}},
  {g:"Do",ic:"→",t:"Reassign accounts",s:"46 accounts unowned since Vikram left",rt:""},
- {g:"Do",ic:"■",t:"Pause all automatic sending",s:"Global stop. Nothing goes out until you resume.",rt:""}];
+ /* The kill switch. It used to be a label with nothing behind it; it now writes
+    the pulse_policy row the runner reads before every pass, and the release path
+    checks before letting anything out. */
+ {g:"Do",ic:"■",t:"Pause all automatic sending",s:"Global stop. Nothing goes out until you resume.",rt:"",
+  run:()=>{const paused=!(window.PulseLive&&PulseLive.state.policy&&PulseLive.state.policy.sendingPaused);
+   if(window.PulseLive&&PulseLive.setSendingPaused)
+    PulseLive.setSendingPaused(paused).then(()=>{S.v="auto";S.tab="activity";S.act="drafted";render();});}}];
 let pS=0,pR=[];
 /* Open a company page from anywhere, the same way a [data-cust] click does. */
 function openCompany(name){
@@ -1250,16 +1820,52 @@ function rebuildPal(counts){
  PAL=[...companies,...asks,...nav,...doRows];
 }
 
+/**
+ * What ⌘K shows before anyone types.
+ *
+ * A flat slice of the palette told you nothing. This is the v2 resting state:
+ * the saved views over your accounts with their counts, the questions people
+ * pinned, the four asked most recently, and the things you can do — each one a
+ * real row, so arrow keys and ↵ reach all of it.
+ */
+function defaultRows(){
+ const views=VIEWS.map(([k,label,ic,cnt])=>({g:"Your accounts",ic,t:label,
+  vc:`${cnt}${k==="everything"?'<em>all teams</em>':""}`,
+  run:()=>{S.ask="v_"+k;S.sel=new Set();S.askTab="ask";S.v="ask";render();}}));
+ const askRun=k=>()=>{
+  if(TYPEDQ[k]&&window.PulseLive&&window.PulseLive.askCustom){
+   window.PulseLive.askCustom(TYPEDQ[k],PULSE_BAG,render);return;}
+  S.ask=k;S.sel=new Set();S.askTab="ask";S.v="ask";render();};
+ const pin=HISTORY.filter(h=>h[0]).map(([,q,,k])=>({g:"Pinned questions",ic:"★",t:q,
+  vc:'<em>PINNED</em>',run:askRun(k)}));
+ const rec=HISTORY.filter(h=>!h[0]).slice(0,4).map(([,q,meta,k])=>({g:"Asked recently",ic:"?",t:q,
+  vc:`<em>${String(meta||"").split(" · ")[0].toUpperCase()}</em>`,run:askRun(k)}));
+ const all=[{g:"Asked recently",ic:"≡",t:"All questions ever asked",vc:String(HISTORY.length),
+  run:()=>{S.askTab="asked";S.v="ask";render();}}];
+ const doRows=PAL.filter(r=>r.g==="Do").map(r=>({...r,vc:""}));
+ return [...views,...pin,...rec,...all,...doRows];
+}
+
 let pQ="",pLimit=12;
 function pF(q){const raw=q.trim();if(raw!==pQ)pLimit=12;pQ=raw;q=raw.toLowerCase();
- pR=q?PAL.filter(r=>(r.t+" "+r.s+" "+r.g).toLowerCase().includes(q)):PAL.slice(0,9);
+ pR=q?PAL.filter(r=>(r.t+" "+r.s+" "+r.g).toLowerCase().includes(q)):defaultRows();
  if(q)pR=pR.concat(askRow(raw));
  pS=0;pD();
  /* Real accounts come from the database, not the sample list, so the palette
     can find any of the ten thousand companies rather than the eighteen the
     prototype shipped with. Two characters is the server's own minimum. */
+ /* Two searches, one bar. Companies come from the database — any of the ten
+    thousand, not the eighteen the prototype shipped with — and questions come
+    from the ones people have already asked, whose SQL is already written and
+    therefore cost a query rather than a call to an agent.
+
+    Rules and the manifest are searched too: "price" should find the rule that
+    forbids sending one, not only the companies with price in their name. */
  if(q.length>=2&&window.PulseLive&&window.PulseLive.searchCompanies){
-  window.PulseLive.searchCompanies(raw,PULSE_BAG,pLimit).then(rows=>{
+  Promise.all([
+   window.PulseLive.searchCompanies(raw,PULSE_BAG,pLimit),
+   window.PulseLive.searchQuestions?window.PulseLive.searchQuestions(raw):Promise.resolve([]),
+  ]).then(([rows,questions])=>{
    if(!rows||pQ!==raw)return;
    const live=rows.map(a=>({g:"Companies",ic:LOGO(a.name,26),t:a.name,
     s:[a.entity,a.motion,a.line].filter(Boolean).join(" · "),
@@ -1267,10 +1873,40 @@ function pF(q){const raw=q.trim();if(raw!==pQ)pLimit=12;pQ=raw;q=raw.toLowerCase
    const more=window.PulseLive.state.searchMore
     ?[{g:"Companies",ic:"⋯",t:`Show more matches for "${raw}"`,s:`Showing ${live.length}`,rt:"",
        run:()=>{pLimit+=25;pF(pQ);}}]:[];
-   pR=live.concat(more,PAL.filter(r=>(r.t+" "+r.s+" "+r.g).toLowerCase().includes(q)),askRow(raw));
+   const asked=(questions||[]).map(a=>({g:"Questions people asked",ic:"?",t:a.question,
+    s:`asked ${a.askedCount} time${a.askedCount===1?"":"s"}${a.headline?" · "+a.headline:""}`,
+    rt:"↵",run:()=>{if(window.PulseLive&&window.PulseLive.askCustom)
+      window.PulseLive.askCustom(a.question,PULSE_BAG,render);}}));
+   pR=asked.concat(live,more,rulesMatching(q),PAL.filter(r=>(r.t+" "+r.s+" "+r.g).toLowerCase().includes(q)),askRow(raw));
    pD();});}}
+
+/**
+ * Rules and manifest lines matching what is typed.
+ *
+ * Searched locally because they are already in memory and there are twenty of
+ * them — a round trip to find twenty rows would be slower than the typing.
+ */
+function rulesMatching(q){
+ const st=window.PulseLive&&PulseLive.state; if(!st) return [];
+ const out=[];
+ const mr=st.motionRules;
+ if(mr) Object.keys(mr).forEach(m=>mr[m].forEach(r=>{
+  if(r.english.toLowerCase().includes(q)) out.push({g:"Rules",ic:r.then.act==="card"?"◆":"●",
+   t:r.english,s:`${m} · ${r.live?"running today":"written down, not running yet"} · ${r.version}`,
+   rt:"",run:()=>{S.v="auto";S.tab="rules";render();openRule(r.key);}});}));
+ const mf=st.manifest;
+ if(mf) ["yes","no"].forEach(side=>(mf[side]||[]).forEach(it=>{
+  if(it.text.toLowerCase().includes(q)) out.push({g:"Rules",ic:side==="yes"?"✓":"✕",
+   t:it.text,s:side==="yes"?"Allowed without asking":"Always needs a person",
+   rt:"",run:()=>{S.v="auto";S.tab="rules";render();}});}));
+ return out.slice(0,6);
+}
 function pD(){let o="",l="";pR.forEach((r,i)=>{if(r.g!==l){o+=`<div class="pg">${r.g}</div>`;l=r.g;}
- o+=`<button class="prw" data-p="${i}" aria-selected="${i===pS}">${(""+r.ic).startsWith("<")?r.ic:`<span class="ic">${r.ic}</span>`}
+ /* Resting rows carry a count instead of a subtitle, and read as one line. */
+ o+=r.vc!=null
+  ?`<button class="vrow" data-p="${i}" aria-selected="${i===pS}"><span class="vi">${r.ic}</span>
+   <span class="vt2">${r.t}</span><span class="vc">${r.vc}</span></button>`
+  :`<button class="prw" data-p="${i}" aria-selected="${i===pS}">${(""+r.ic).startsWith("<")?r.ic:`<span class="ic">${r.ic}</span>`}
   <span class="tx"><b>${r.t}</b><span>${r.s}</span></span><span class="rt">${r.rt||""}</span></button>`;});
  $("#pres").innerHTML=o||`<div class="pg">No match</div>`;}
 function pO(){$("#pal").hidden=false;$("#pq").value="";pF("");$("#pq").focus();}
@@ -1301,7 +1937,16 @@ document.addEventListener("click",e=>{
  if(t.closest("[data-crumb]")){const f=S.from;if(f){S.v=f.v;S.scope=f.scope;S.ask=f.ask;S.tab=f.tab;}
   else S.v="now";render();return;}
  const nv=t.closest("[data-nav]");if(nv){S.v=nv.dataset.nav;render();return;}
- const sc=t.closest("[data-sc]");if(sc){S.scope=sc.dataset.sc;render();return;}
+ const sc=t.closest("[data-sc]");if(sc){S.scope=sc.dataset.sc;
+  /* Each scope scores a different set of accounts, so the board is per scope.
+     It is cached in the data layer; this is a no-op the second time. */
+  BOARD=null;render();
+  /* Team and Company see the system alerts that Me does not, so they are
+     re-read on a scope change rather than only at boot. */
+  if(window.PulseLive&&PulseLive.loadAlerts)PulseLive.loadAlerts(render);
+  if(window.PulseLive&&window.PulseLive.loadBoard)
+   window.PulseLive.loadBoard(S.scope,PULSE_BAG,render);
+  return;}
  const cu=t.closest("[data-cust]");
  if(cu&&CUST[cu.dataset.cust]){$("#pk").hidden=true;
   S.from={v:S.v,scope:S.scope,ask:S.ask,tab:S.tab,label:
@@ -1309,13 +1954,83 @@ document.addEventListener("click",e=>{
    S.scope==="me"?"Now · your work":S.scope==="team"?"Now · the team":"Now · the company"};
   S.cust=cu.dataset.cust;S.v="cust";render();return;}
  if(t.closest("#lensb")){const m=$("#lensm");m.hidden=!m.hidden;return;}
- if(t.closest("#lensc")||t.closest("#clrf")){S.C.clear();S.M.clear();render();return;}
+ if(t.closest("#lensc")||t.closest("#lensc2")||t.closest("#clrf")){S.C.clear();S.M.clear();render();return;}
  const mn=t.closest("[data-menu]");
  if(mn){const id=mn.dataset.menu,m=$("#menu-"+id);const was=m.hidden;
   $$(".menu").forEach(x=>x.hidden=true);m.hidden=!was;return;}
  const rv=t.closest("[data-rev]");if(rv){const b=$("#rev-"+rv.dataset.rev);b.hidden=!b.hidden;
   $$(".menu").forEach(x=>x.hidden=true);return;}
- const dd=t.closest("[data-do]");if(dd){S.doneIds.add(+dd.dataset.do);S.doneOpen=1;render();return;}
+ const dd=t.closest("[data-do]");if(dd){const c=CARDS[+dd.dataset.do];
+  S.doneIds.add(+dd.dataset.do);
+  /* Playing a card is what moves an account between bands — without this the
+     board never changed and the score band was decoration. */
+  const mv=c&&CARDMOVE[c.cust];
+  if(mv&&mv[0]==="up"&&HEALTH[c.cust]){const to=parseInt((mv[1].split("→")[1]||"").trim(),10);
+   if(to){HEALTH[c.cust][1]+=to-HEALTH[c.cust][0];HEALTH[c.cust][0]=to;
+    HEALTH[c.cust][2]=to>=70?"thriving":to>=50?"steady":to>=35?"wobbling":"risk";}}
+  S.doneOpen=1;render();
+  const f=$("#dflash");
+  if(f&&mv){f.hidden=false;f.innerHTML=mv[0]==="up"
+   ?`✓ Played. <b>${c.cust} ${mv[1]}</b> — ${mv[2]}.`
+   :`✓ Played. <b>${c.cust} holds at ${HEALTH[c.cust]?HEALTH[c.cust][0]:"where it was"}</b> — ${mv[2]}.`;}
+  return;}
+ /* Resuming from the alert itself. The switch is easy to set during an
+    incident and easy to forget afterwards, so the place that tells you it is on
+    is also the place that turns it off. */
+ if(t.closest("[data-resume]")&&window.PulseLive&&PulseLive.setSendingPaused){
+  PulseLive.setSendingPaused(false).then(()=>{
+   if(PulseLive.loadAlerts) PulseLive.loadAlerts(render); else render();});return;}
+ const askd=t.closest("[data-asked]");
+ if(askd&&window.PulseLive&&PulseLive.askCustom){
+  /* Re-runs the question. The SQL is remembered, so this costs a query rather
+     than a call to an agent — and the rows are fetched fresh, never cached. */
+  PulseLive.askCustom(decodeURIComponent(askd.dataset.asked),PULSE_BAG,render);return;}
+ const brk=t.closest("[data-breaker]");
+ if(brk&&window.PulseLive&&PulseLive.clearBreaker){
+  brk.disabled=true;brk.textContent="…";
+  PulseLive.clearBreaker(brk.dataset.breaker,render);return;}
+ const ach=t.closest("[data-act]");if(ach){S.act=ach.dataset.act;S.openRow=null;render();return;}
+ /* A row opens in place rather than in a panel: the evidence belongs next to
+    the claim it supports, and Autopilot is a surface you scan, not one you
+    navigate. */
+ const dec=t.closest("[data-decision]");
+ if(dec&&!t.closest("button")&&!t.closest("textarea")){
+  openPanel("autopilot",dec.dataset.decision);$("#pk").hidden=false;return;}
+ /* Manifest editing. Every path goes through PulseLive so the store, not the
+    screen, is the source of truth — a rule that only changed in the DOM would
+    be a lie the next time anyone loaded the page. */
+ const re=t.closest("[data-redit]");if(re){S.editRule=re.dataset.redit;S.addingTo=null;render();return;}
+ if(t.closest("[data-rcancel]")){S.editRule=null;S.addingTo=null;render();return;}
+ const rao=t.closest("[data-raddopen]");if(rao){S.addingTo=rao.dataset.raddopen;S.editRule=null;render();return;}
+ const rs=t.closest("[data-rsave]");
+ if(rs&&window.PulseLive&&PulseLive.editRule){
+  const ta=$(`[data-rt="${rs.dataset.rsave}"]`);
+  if(ta&&ta.value.trim()){rs.disabled=true;rs.textContent="…";
+   PulseLive.editRule(rs.dataset.rsave,ta.value.trim(),()=>{S.editRule=null;render();});}
+  return;}
+ const radd=t.closest("[data-radd]");
+ if(radd&&window.PulseLive&&PulseLive.addRule){
+  const ta=$(`[data-rnew="${radd.dataset.radd}"]`);
+  if(ta&&ta.value.trim()){radd.disabled=true;radd.textContent="…";
+   PulseLive.addRule(radd.dataset.radd,ta.value.trim(),()=>{S.addingTo=null;render();});}
+  return;}
+ const rr=t.closest("[data-rretire]");
+ if(rr&&window.PulseLive&&PulseLive.retireRule){
+  PulseLive.retireRule(rr.dataset.rretire,render);return;}
+ const rlz=t.closest("[data-release]");
+ if(rlz&&window.PulseLive&&PulseLive.releaseDraft){
+  const id=+rlz.dataset.release;
+  const ta=$(`[data-body="${id}"]`);
+  rlz.disabled=true;rlz.textContent="…";
+  PulseLive.releaseDraft(id,ta?ta.value:null,PULSE_BAG,render);return;}
+ const dc=t.closest("[data-discard]");
+ if(dc&&window.PulseLive&&PulseLive.discardDraft){
+  dc.disabled=true;dc.textContent="…";
+  PulseLive.discardDraft(+dc.dataset.discard,PULSE_BAG,render);return;}
+ const us=t.closest("[data-unsuppress]");
+ if(us&&window.PulseLive&&PulseLive.unsuppress){
+  us.disabled=true;us.textContent="…";
+  PulseLive.unsuppress(us.dataset.unsuppress,PULSE_BAG,render);return;}
  const sn=t.closest("[data-snooze]");if(sn){S.doneIds.add(+sn.dataset.snooze);render();return;}
  const un=t.closest("[data-undo]");if(un){S.doneIds.delete(+un.dataset.undo);render();return;}
  if(t.closest("#dtog")){S.doneOpen=S.doneOpen?0:1;render();return;}
@@ -1324,8 +2039,58 @@ document.addEventListener("click",e=>{
  const wr=t.closest("[data-wrong]");if(wr){$$(".menu").forEach(x=>x.hidden=true);
   const w=$("#wr-"+wr.dataset.wrong);w.hidden=!w.hidden;return;}
  const ws=t.closest("[data-wsel]");if(ws){S.doneIds.add(+ws.dataset.wsel);render();return;}
- const nr=t.closest("[data-newrule]");if(nr){openRule("New rule · "+nr.dataset.newrule,1);return;}
+ const nr=t.closest("[data-newrule]");if(nr){openNewRule(nr.dataset.newrule);return;}
+ const orl=t.closest("[data-openrule]");if(orl){openRule(orl.dataset.openrule);return;}
  const rl=t.closest("[data-rule]");if(rl){openRule(rl.dataset.rule);return;}
+ /* Saving, testing and turning off a motion rule. All three go through the
+    store: a rule that only changed on screen would be a lie the next time
+    anyone loaded the page. */
+ /* Writing a rule is three steps: type it, read back what Pulse understood,
+    then decide whether to turn it on. The compiler runs once, here — never when
+    a rule is being evaluated. */
+ const rcp=t.closest("[data-rule-compile]");
+ if(rcp&&window.PulseLive&&PulseLive.compileRule){
+  const ta=$("#rule-en");
+  if(!ta||!ta.value.trim())return;
+  rcp.disabled=true;rcp.textContent="reading…";
+  const box=$("#rule-compiled");
+  if(box)box.innerHTML=`<p style="color:var(--muted);font-size:13px">Working out what that means…</p>`;
+  PulseLive.compileRule(rcp.dataset.ruleCompile,ta.value.trim(),c=>{
+   rcp.disabled=false;rcp.textContent="Read it back to me →";
+   if(c)showCompiled(rcp.dataset.ruleCompile,ta.value.trim(),c);
+   else if(box)box.innerHTML=`<p style="color:var(--watch);font-size:13px">Could not read that back. Try again, or save it without running it.</p>`;});
+  return;}
+ const rsn=t.closest("[data-rule-save-new]");
+ if(rsn&&window.PulseLive&&PulseLive.addMotionRule){
+  const cm=window.__compiled;
+  const ta=$("#rule-en");
+  const english=(ta&&ta.value.trim())||(cm&&cm.english);
+  if(!english)return;
+  rsn.disabled=true;rsn.textContent="…";
+  PulseLive.addMotionRule(rsn.dataset.ruleSaveNew,english,
+   cm&&cm.c&&cm.c.can_compile?{...cm.c,live:rsn.dataset.live==="1"}:{live:false},
+   ()=>{window.__compiled=null;$("#ov").hidden=true;render();});
+  return;}
+ const rsv=t.closest("[data-rule-save]");
+ if(rsv&&window.PulseLive&&PulseLive.saveMotionRule){
+  const ta=$("#rule-en");
+  if(ta&&ta.value.trim()){rsv.disabled=true;rsv.textContent="…";
+   PulseLive.saveMotionRule(rsv.dataset.ruleSave,ta.value.trim(),()=>{$("#ov").hidden=true;render();});}
+  return;}
+ const rtst=t.closest("[data-rule-test]");
+ if(rtst&&window.PulseLive&&PulseLive.testMotionRule){
+  const box=$("#tres");box.hidden=false;box.textContent="Replaying the last 30 days…";
+  PulseLive.testMotionRule(rtst.dataset.ruleTest,res=>{
+   box.innerHTML=res
+    ?`Would have applied to <b>${res.fired}</b> of ${res.considered} signups in the last ${res.days} days. `+
+     (res.different?`<b>${res.different}</b> would have been decided differently${
+       res.examples.length?" — "+res.examples[0]:""}.`:"Every one of them would have been decided the same way.")+
+     `<br><span style="color:var(--muted)">${res.note}</span>`
+    :"Could not run the test.";});
+  return;}
+ const rret=t.closest("[data-rule-retire]");
+ if(rret&&window.PulseLive&&PulseLive.retireMotionRule){
+  PulseLive.retireMotionRule(rret.dataset.ruleRetire,()=>{$("#ov").hidden=true;render();});return;}
  if(t.closest("#rtest")){$("#tres").hidden=false;return;}
  const ra=t.closest("[data-reassign]");if(ra){$$(".menu").forEach(x=>x.hidden=true);
   openReassign(CARDS[+ra.dataset.reassign].cust,1);return;}
@@ -1345,8 +2110,6 @@ document.addEventListener("click",e=>{
   if(window.PulseLive)window.PulseLive.loadMoreAccountFeed("people",PULSE_BAG,render);return;}
  if(t.closest("#morerecent")){
   if(window.PulseLive)window.PulseLive.loadMoreAccountFeed("recently",PULSE_BAG,render);return;}
- if(t.closest("#morefiltered")){
-  if(window.PulseLive)window.PulseLive.loadMoreFiltered(PULSE_BAG,render);return;}
  if(t.closest("#moreaudit")){
   if(window.PulseLive)window.PulseLive.loadMoreAudit(PULSE_BAG,render);return;}
  if(t.closest("#pinq")){togglePin();return;}
@@ -1361,6 +2124,7 @@ document.addEventListener("click",e=>{
   if(TYPEDQ[qid]&&window.PulseLive&&window.PulseLive.askCustom){
    window.PulseLive.askCustom(TYPEDQ[qid],PULSE_BAG,render);return;}
   S.ask=qid;S.sel=new Set();S.askTab="ask";S.v="ask";render();return;}
+ const tt2=t.closest("[data-tt]");if(tt2){S.teamTab=tt2.dataset.tt;render();return;}
  const tb=t.closest("[data-tab]");if(tb){S.tab=tb.dataset.tab;render();return;}
  if(t.closest("#revm")){const m=$("#moneyb");m.hidden=!m.hidden;
   $("#revm").textContent=m.hidden?"Show payments and rates":"Hide payments and rates";return;}
@@ -1376,6 +2140,10 @@ document.addEventListener("change",e=>{
 $("#pq").addEventListener("input",e=>pF(e.target.value));
 document.addEventListener("keydown",e=>{
  const open=!$("#pal").hidden;
+ /* The header search bar is focusable, so ↵ and space open it too. */
+ if(!open&&(e.key==="Enter"||e.key===" ")&&document.activeElement
+  &&document.activeElement.closest&&document.activeElement.closest("[data-pal]")){
+  e.preventDefault();pO();return;}
  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="k"){e.preventDefault();open?pC():pO();return;}
  if(open){if(e.key==="Escape")pC();
   if(e.key==="ArrowDown"){e.preventDefault();pS=Math.min(pS+1,pR.length-1);pD();}
@@ -1469,40 +2237,155 @@ const RULEDEF={
  who:"Rhea, Sana, Arjun · 312 accounts",
  ver:"v8 · changed by Priya Sundaram today 08:58 · 7 earlier versions"};
 
-function openRule(title,kind){
- const d=RULEDEF;
+/**
+ * The rule sheet.
+ *
+ * Written in plain English on purpose. If you cannot read a rule aloud, it is
+ * too complicated to trust — and the person changing it is a salesperson, not
+ * an engineer.
+ *
+ * What a person edits is the sentence. Underneath it, in smaller type, is what
+ * Autopilot actually checks — shown, never hidden, because a rule you cannot
+ * verify is a rule you are only hoping about.
+ */
+/**
+ * Writing a new rule.
+ *
+ * A person types the sentence. Turning that into something Autopilot can check
+ * is a separate step, done once and confirmed by a person — never at decision
+ * time. Until that happens the rule is saved, visible, and honest about not
+ * running yet.
+ */
+function openNewRule(motion){
  $("#ovb").innerHTML=`<div class="red">
-  <h3>${title}</h3><p class="sub">Plain language on purpose — if you cannot read a rule aloud, it is too complicated to trust.</p>
-  <h4>When</h4>
-  <div class="cl2"><span class="fld">${d.when} <span class="car">▼</span></span></div>
-  <h4>If all of these are true</h4>
-  ${d.ifs.map(([f,o,v],i)=>`<div class="cl2"><span class="fld">${f} <span class="car">▼</span></span>
-   <span class="fld">${o} <span class="car">▼</span></span>
-   <button class="val">${v}</button><span class="gr2"></span>
-   <button class="rm" data-rmif="${i}">Remove</button></div>`).join("")}
-  <button class="add">＋ Add a condition</button>
-  <h4>Then</h4>
-  ${d.thens.map(([k,a,v],i)=>`<div class="cl2"><span class="kind" data-k="${k}">${k}</span>
-   <span class="fld">${a} <span class="car">▼</span></span>
-   ${v?`<button class="val">${v}</button>`:""}<span class="gr2"></span>
-   <button class="rm" data-rmthen="${i}">Remove</button></div>`).join("")}
-  <button class="add">＋ Add an action</button>
-  <h4>Stop if</h4>
-  ${d.stops.map(x=>`<div class="cl2"><span>${x}</span><span class="gr2"></span>
-   <button class="rm">Remove</button></div>`).join("")}
-  <button class="add">＋ Add a stop rule</button>
-  <h4>Who it applies to</h4>
-  <div class="who2">${d.who} <button class="add" style="padding:0;margin-left:8px">Change</button></div>
-  <div class="row" style="margin-top:20px"><button class="go solid" id="ovdo">Save as v9 →</button>
-   <button class="go" id="rtest">Test on the last 30 days</button>
-   <button class="go" style="color:var(--watch)">Turn it off</button>
+  <h3>New ${motion} rule</h3>
+  <p class="sub">Write it as a sentence you could say out loud to a new teammate.
+   Pulse will read it back as the check it would actually perform — if that is not
+   what you meant, change the words rather than the machinery.</p>
+  <h4>The rule</h4>
+  <textarea id="rule-en" placeholder="For example: If a signup has not sent a message twelve days after signing up, a person should take over."
+   style="width:100%;min-height:80px;font:inherit;font-size:14px;padding:11px;border:1px solid var(--line2);
+   border-radius:8px;background:var(--raise);color:var(--ink);resize:vertical"></textarea>
+  <div class="row" style="margin-top:16px">
+   <button class="go solid" data-rule-compile="${motion}">Read it back to me →</button>
    <button class="go" id="ovx">Cancel</button></div>
-  <div class="test" id="tres" hidden>Would have fired <b>41 times</b> in the last 30 days — 39 answered inside ten minutes, 2 escalated to a manager. Nothing would have been sent to a customer. Two signups would newly qualify under the change.</div>
-  <div class="ver">${d.ver}<br>EVERY SAVE IS A NEW VERSION. NOTHING IS OVERWRITTEN.</div></div>`;
+  <div id="rule-compiled" style="margin-top:18px"></div>
+  <div class="ver">NOTHING RUNS UNTIL YOU CONFIRM IT.</div></div>`;
  $("#ov").hidden=false;
 }
 
+/**
+ * Show what the compiler understood, in the reader's own language.
+ *
+ * This is the only screen between a sentence and an automation, so it says the
+ * check in words rather than in fields, and it offers two ways to save. A rule
+ * that is written down but not running is useful; a rule that looks live and
+ * never fires is a trap.
+ */
+function showCompiled(motion,english,c){
+ const box=$("#rule-compiled"); if(!box) return;
+ const names={score:"the signup's score",confidence:"how sure the AI is",verdict:"what the AI decided",
+  motion:"how they arrived",entity:"which entity",is_free_mail:"a free mailbox",mobile_present:"a mobile number",
+  accounts_on_domain:"accounts on the same domain",domain_matches_known_customer:"the domain already pays us",
+  domain_matches_competitor:"the domain is a competitor",signup_step_reached:"how far they got in signup",
+  industry:"their industry",owner_auto_assigned:"somebody owns the account",days_since_signup:"days since they signed up",
+  messages_sent:"messages they have sent",days_since_payment:"days since their last payment",
+  spend_change_pct:"spend against the window before"};
+ const ops={">=":"is at least","<=":"is at most",">":"is over","<":"is under","==":"is","!=":"is not","in":"is one of"};
+ const doing={score:"score the signup",raise_card:"put a card in front of a person",
+  nurture:"start the message sequence",suppress:"file it under Suppressed",
+  draft:"write a message and hold it",wait:"wait",notify:"tell someone"};
+ const line=x=>`${names[x.field]||x.field} ${ops[x.op]||x.op} <b>${x.value}</b>`;
 
+ if(!c.can_compile){
+  box.innerHTML=`<div class="cl2" style="display:block;padding:14px 16px;background:var(--sink);border-radius:8px">
+    <b style="color:var(--watch)">Pulse cannot check this yet.</b>
+    <p style="margin:8px 0 0;color:var(--ink2);font-size:13.5px">It would need ${
+     c.missing.map(m=>`<b>${m}</b>`).join(", and ")}.</p>
+    <p style="margin:8px 0 0;color:var(--muted);font-size:12.5px">You can still save it. It will sit with the
+     other rules, marked as not running, so nobody believes it is protecting them.</p></div>
+   <div class="row" style="margin-top:14px">
+    <button class="go" data-rule-save-new="${motion}" data-live="0">Save it anyway →</button>
+    <button class="go" id="ovx2" onclick="document.getElementById('rule-en').focus()">Rewrite it</button></div>`;
+  window.__compiled={motion,english,c};return;}
+
+ box.innerHTML=`<div class="cl2" style="display:block;padding:14px 16px;background:var(--sink);border-radius:8px">
+   <div class="lab">What Pulse would check</div>
+   <div style="font-size:14px;color:var(--ink);line-height:1.9;margin-top:8px">
+    <b>When</b> ${String(c.when).replace(/_/g," ")}<br>
+    ${c.conditions.length?`<b>and</b> ${c.conditions.map(line).join("<br><b>and</b> ")}<br>`:""}
+    ${c.stop_if.length?`<b>unless</b> ${c.stop_if.map(line).join("<br><b>or</b> ")}<br>`:""}
+    <b>then</b> ${doing[c.do]||c.do}${c.sla_minutes?` within ${c.sla_minutes} minutes`:""}${
+     c.days?` for ${c.days} days`:""}
+    ${c.act==="card"?" — a person decides":" — on its own, and logged"}
+   </div>
+   ${c.confidence<0.7?`<p style="margin:10px 0 0;color:var(--watch);font-size:12.5px">
+     Pulse is only ${c.confidence.toFixed(2)} sure it read this the way you meant. Worth rewording.</p>`:""}
+  </div>
+  <div class="row" style="margin-top:14px">
+   <button class="go solid" data-rule-save-new="${motion}" data-live="1">That is right — turn it on →</button>
+   <button class="go" data-rule-save-new="${motion}" data-live="0">Save, but do not run it yet</button>
+   <button class="go" id="ovx">Cancel</button></div>`;
+ window.__compiled={motion,english,c};
+}
+
+function openRule(ruleKey){
+ const mr=window.PulseLive&&PulseLive.state.motionRules;
+ const r=mr?Object.values(mr).flat().find(x=>x.key===ruleKey):null;
+ if(!r){$("#ovb").innerHTML=`<div class="red"><h3>Rule not found</h3>
+   <p class="sub">It may have been retired. Reload and try again.</p>
+   <div class="row" style="margin-top:20px"><button class="go" id="ovx">Close</button></div></div>`;
+  $("#ov").hidden=false;return;}
+
+ const plain=c=>{
+  const names={score:"the signup's score",confidence:"how sure the AI is",
+   verdict:"what the AI decided",motion:"how they arrived",touches_14d:"messages sent in 14 days",
+   days_since_signup:"days since they signed up",messages_sent:"messages they have sent",
+   credit_used_pct:"free credit used",volume_change_pct:"volume change",replies:"replies received",
+   from_decision_maker:"the sender is a decision maker"};
+  const ops={">=":"is at least","<=":"is at most",">":"is over","<":"is under",
+   "==":"is","!=":"is not","in":"is one of"};
+  return `${names[c[0]]||c[0]} ${ops[c[1]]||c[1]} <b>${c[2]}</b>`;};
+
+ const doing={score:"score the signup",raise_card:"put a card in front of a person",
+  nurture:"start the message sequence",suppress:"file it under Suppressed",
+  draft:"write a message and hold it",wait:"wait",notify:"tell someone"};
+
+ $("#ovb").innerHTML=`<div class="red">
+  <h3>${r.motion.charAt(0).toUpperCase()+r.motion.slice(1)} rule</h3>
+  <p class="sub">Write it as a sentence a person could say out loud. If you cannot read a
+   rule aloud, it is too complicated to trust.</p>
+
+  <h4>The rule</h4>
+  <textarea id="rule-en" style="width:100%;min-height:66px;font:inherit;font-size:14px;padding:11px;
+   border:1px solid var(--line2);border-radius:8px;background:var(--raise);color:var(--ink);
+   resize:vertical">${r.english.replace(/</g,"&lt;")}</textarea>
+
+  <h4>What Autopilot checks</h4>
+  <div class="cl2" style="display:block;padding:12px 14px;background:var(--sink);border-radius:8px">
+   <div style="font-size:13.5px;color:var(--ink2);line-height:1.9">
+    <b>When</b> ${r.when.replace(/_/g," ")}<br>
+    ${r.if.length?`<b>and</b> ${r.if.map(plain).join("<br><b>and</b> ")}<br>`:""}
+    ${(r.stopIf&&r.stopIf.length)?`<b>unless</b> ${r.stopIf.map(plain).join("<br><b>or</b> ")}<br>`:""}
+    <b>then</b> ${doing[r.then.do]||r.then.do}${r.then.sla_minutes?` within ${r.then.sla_minutes} minutes`:""}
+    ${r.then.act==="card"?" — a person decides":" — on its own, and logged"}
+   </div>
+   <p style="margin:10px 0 0;font-size:12px;color:var(--muted)">
+    ${r.live?"Autopilot runs this today."
+     :"Written down, but Autopilot does not run this yet. It needs something Pulse cannot see so far."}</p>
+  </div>
+
+  <div class="row" style="margin-top:20px">
+   <button class="go solid" id="rule-save" data-rule-save="${r.key}">Save as ${
+    "v"+((+String(r.version).replace("v","")||1)+1)} →</button>
+   <button class="go" id="rtest" data-rule-test="${r.key}">Test on the last 30 days</button>
+   <button class="go" style="color:var(--watch)" data-rule-retire="${r.key}">Turn it off</button>
+   <button class="go" id="ovx">Cancel</button></div>
+  <div class="test" id="tres" hidden></div>
+  <div class="ver">${r.version} · ${r.source==="human"?"written by your team":"shipped with Pulse"}<br>
+   EVERY SAVE IS A NEW VERSION. NOTHING IS OVERWRITTEN.</div></div>`;
+ $("#ov").hidden=false;
+}
 
 function openPanel(kind,arg){
  const B=$("#pkb");
@@ -1522,7 +2405,8 @@ function openPanel(kind,arg){
    <h4>The rows behind it</h4>${tb}
    <div class="row"><button class="go solid" data-openask="${arg}">Open in Ask →</button>
     <button class="go">Recompute</button></div>
-   <div class="stamp">${a.st.map(x=>`<span>${x}</span>`).join("")}</div>`;
+   ${(st=>`<div class="stamp">${st.map(x=>`<span>${x}</span>`).join("")}</div>`)(
+     a.st.map(x=>x==="Rhea Menon"&&ME.name?ME.name:x))}`;
  }
  if(kind==="partner"){
   const pt=PARTNERS.find(x=>x[0]===arg)||PARTNERS[0];
@@ -1562,6 +2446,62 @@ function openPanel(kind,arg){
    <div class="lrow" data-rule="${d.pol.replace(/"/g,"&quot;")}" style="cursor:pointer">
     <span class="nm2">${d.pol}</span><span class="ds">Open in Rules</span><span class="rt3">→</span></div>
    ${d.fyi?`<div class="stamp"><span>FYI ${d.fyi}</span><span>logged</span></div>`:`<div class="stamp"><span>no person notified</span><span>logged</span></div>`}`;
+ }
+ if(kind==="autopilot"){
+  /* One decision, in full. The feed is scannable on purpose, so everything that
+     would make a row unreadable lives here: the evidence, how sure it was, the
+     rule that produced it, and the message if one was written. */
+  const st=window.PulseLive&&PulseLive.state;
+  const rows=(st&&st.activity)||[];
+  const [sk,ag]=String(arg).split("::");
+  const d=rows.find(x=>x.signalKey===sk&&x.agent===ag);
+  if(!d){$("#pk").hidden=true;return;}
+  const draft=d.draftId&&st.drafts?st.drafts.find(x=>x.id===d.draftId):null;
+  const cf=d.confidence!=null?Math.round(d.confidence*100):null;
+  const lo=d.confidence!=null&&d.confidence<0.6?1:0;
+  const name=d.title.replace(/^Scored |^Suppressed |^A person .*? to /,"").split(" — ")[0];
+
+  B.innerHTML=`<div class="pkh">${MARK(name,40)||`<span class="mark" style="width:40px;height:40px;border-radius:11px;font-size:15px">P</span>`}
+   <div class="t4"><div class="lb2">${d.agent} · ${d.when}</div><b>${d.title}</b></div>
+   <button class="cx2" data-pkx>✕</button></div>
+
+   <p class="why" style="font-weight:500;color:var(--ink);font-size:16px;margin:20px 0 0">${d.detail}</p>
+
+   ${d.errorCode?`<h4>What went wrong</h4>
+    <p class="why"><b>${d.errorCode}</b> — nothing was acted on and nothing was sent.
+     It stays held and is tried again on the next pass.</p>`:""}
+
+   ${d.confidence!=null?`<h4>How sure it was</h4>
+    <div class="cfp" data-lo="${lo}"><b>${d.confidence.toFixed(2)}</b>
+     <span class="trk"><i style="width:${cf}%"></i></span>
+     <span class="cfn">${lo?"Below the 0.60 floor — it was not allowed to suppress on this."
+      :"Above the 0.60 floor — it was allowed to act."}</span></div>`:""}
+
+   ${d.reasons&&d.reasons.length?`<h4>What it looked at</h4>
+    ${d.reasons.map(x=>`<div class="ln"><span>${x}</span></div>`).join("")}`:""}
+
+   ${d.score!=null?`<h4>The score</h4><p class="why">${d.score} out of 100.
+    ${d.score>=80?"Above the call threshold, so a person was asked."
+     :d.score>=40?"In the nurture band, so a sequence started instead of a person."
+     :"Below 40, so it was filed under Suppressed — reviewable, never deleted."}</p>`:""}
+
+   ${draft?`<h4>The message, held for you</h4>
+    <textarea data-body="${draft.id}" style="width:100%;min-height:120px;font:inherit;font-size:13.5px;
+     line-height:1.6;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--raise);
+     color:var(--ink);resize:vertical">${draft.body.replace(/</g,"&lt;")}</textarea>
+    ${draft.holdReason?`<p style="font-size:12.5px;color:var(--muted);margin:8px 0 0">Held: ${draft.holdReason}</p>`:""}
+    <div class="row" style="margin-top:10px"><button class="go solid" data-release="${draft.id}">Release →</button>
+     <button class="go" data-discard="${draft.id}">Discard</button>
+     <span class="dmsg" data-dmsg="${draft.id}" style="font-size:12.5px;color:var(--muted);align-self:center"></span></div>`:""}
+
+   ${d.verdict==="suppress"?`<h4>Put it back</h4>
+    <p class="why">Nothing is deleted. Putting it back returns it to the deck with its reasons attached.</p>
+    <div class="row"><button class="go solid" data-unsuppress="${d.signalKey}">Put it back →</button></div>`:""}
+
+   <h4>The policy behind it</h4>
+   <p class="why">Policy ${d.policyVersion||"—"}${d.model?`, decided on ${d.model}`:""}.
+    ${d.agent==="signup-triage"?"The score came from the agent; the verdict came from the motion's rules, applied in code.":""}</p>
+   <div class="stamp"><span>${d.signalKey}</span><span>logged</span></div>`;
  }
  if(kind==="rowdetail"){
   const [tm,head,detail,tag]=arg;
@@ -1713,6 +2653,7 @@ const PULSE_BAG = {
   get ASK() { return ASK; },
   get AUTO() { return AUTO; },
   get STANDINGS() { return STANDINGS; },
+  get FLIGHT() { return FLIGHT; },
   get PINNED() { return PINNED; },
   get HISTORY() { return HISTORY; },
   /* The live layer replaces HISTORY wholesale with the real catalogue; the
@@ -1726,6 +2667,9 @@ const PULSE_BAG = {
   get REPS() { return REPS; },
   set REPS(v) { REPS = v; },
   get ME() { return ME; },
+  /* The live score band and board. Null keeps the sample board on screen. */
+  setBoard: (b) => { BOARD = b; },
+  get BOARD() { return BOARD; },
 };
 
 if (window.PulseLive) {
@@ -1753,6 +2697,11 @@ if (window.PulseLive) {
     }
   });
 
+  /* Paint the skeleton before asking for anything. boot() awaits the first
+     response before it calls render, so without this the page sits blank for
+     however long the database takes — and the host is 200ms away on a good
+     day. */
+  render();
   window.PulseLive.boot(PULSE_BAG, render);
 } else {
   render();

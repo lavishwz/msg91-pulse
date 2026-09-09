@@ -7,15 +7,15 @@ export default function Page() {
         <button className="brand" data-nav="now">
           <span className="mark">P</span> Pulse
         </button>
-        <nav className="nav" role="tablist" aria-label="Surfaces">
-          <button role="tab" aria-selected="true" data-nav="now">Now</button>
-          <button role="tab" aria-selected="false" data-nav="ask">Ask</button>
-          <button role="tab" aria-selected="false" data-nav="auto">Autopilot</button>
-        </nav>
-        <button className="kbtn" data-pal="">
-          <span>Search</span>
-          <span className="hint">⌘K</span>
-        </button>
+        {/* Search is the centre of the header, not a button beside it — one wide
+            bar you can hit from anywhere, exactly as in pulse-v2-game. The nav
+            tabs are gone with it: the scope pills on Now are the navigation,
+            and Ask and Autopilot live in the account menu. */}
+        <div className="askbar" data-pal="" role="button" tabIndex={0}>
+          <span>Ask or search anything</span>
+          <span className="gr3"></span>
+          <span className="kk2">⌘K</span>
+        </div>
         <div className="who whow">
           <button id="abtn" style={{ display: "flex", alignItems: "center", gap: "9px" }}>
             Rhea Menon <span className="avi">RM</span>
@@ -23,7 +23,15 @@ export default function Page() {
           <div className="amenu" id="amenu" hidden>
             <div className="hd2">Rhea Menon · Sales</div>
             <button data-nav="profile">Your profile and connections</button>
+            <div className="sp"></div>
+            <div className="hd2">Ask</div>
+            <button data-nav="ask">Questions and answers</button>
+            <div className="sp"></div>
+            <div className="hd2">Autopilot</div>
+            <button data-nav="auto" data-tab2="activity">What AI is doing now</button>
+            <button data-nav="auto" data-tab2="rules">Rules and what it may do</button>
             <button data-nav="auto" data-tab2="connections">What Pulse is connected to</button>
+            <button data-nav="auto" data-tab2="audit">Audit log · who saw what</button>
             <div className="sp"></div>
             <button id="startonb">Replay first-run setup</button>
             <button data-admin="">Admin · products, rates, team</button>

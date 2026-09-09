@@ -12,7 +12,7 @@
  * real and which are still the prototype's sample data.
  */
 window.PulseLive = (function () {
-  const state = { loaded: false, error: null, real: [], mock: [], me: null, ids: {} };
+  const state = { loaded: false, error: null, real: [], mock: [], me: null, ids: {}, cardsLoaded: false, boardLoaded: false, autopilot: null, drafts: [], policy: null, manifest: null, motionRules: null, asked: [], digest: null, verdicts: {}, alerts: [] };
 
   /** How many rows of an answer are on screen at once. Matches lib/pulse/ask.ts. */
   const PAGE_ROWS = 50;
@@ -105,6 +105,18 @@ window.PulseLive = (function () {
       // The profile page reads its identity from ME.
       if (bag.ME) {
         bag.ME.name = data.me.name;
+        /* The header is server-rendered with the prototype's name, so it is the
+           one place the real one has to be written in by hand. */
+        const nameBtn = document.querySelector("#abtn");
+        if (nameBtn) {
+          nameBtn.innerHTML =
+            escapeHtml(data.me.name) +
+            ' <span class="avi">' +
+            escapeHtml(data.me.initials || data.me.name.slice(0, 2).toUpperCase()) +
+            "</span>";
+        }
+        const menuHead = document.querySelector("#amenu .hd2");
+        if (menuHead) menuHead.textContent = data.me.name + " · Sales";
         bag.ME.email_addr = data.me.email || null;
         bag.ME.accounts = data.me.accounts;
       }
@@ -298,8 +310,24 @@ window.PulseLive = (function () {
   /** Replace the audit feed with real staff actions. */
   async function loadAudit(bag, render) {
     try {
-      const data = await get("/api/pulse/audit?view=staff&limit=25");
-      bag.AUTO.audit.f = data.rows.map((r) => [r.when, r.actor + " " + r.what, r.detail, "config", r.tag]);
+      // Two sources, one log. Legacy staff changes come from MSG91's own change
+      // log; acts on Autopilot's records come from Pulse's store. Both answer
+      // the Audit log's question — are the people behaving? — so they belong in
+      // the same feed rather than in two places nobody cross-references.
+      const [data, human] = await Promise.all([
+        get("/api/pulse/audit?view=staff&limit=25"),
+        get("/api/pulse/autopilot/decisions?view=human&limit=25").catch(() => ({ rows: [] })),
+      ]);
+      const humanRows = (human.rows || []).map((r) => [
+        r.when,
+        r.title,
+        r.detail + " On Autopilot's own records.",
+        "approve",
+        "ok",
+      ]);
+      bag.AUTO.audit.f = humanRows.concat(
+        data.rows.map((r) => [r.when, r.actor + " " + r.what, r.detail, "config", r.tag]),
+      );
       if (data.anomaly) {
         bag.AUTO.audit.sys = [
           "Anomaly",
@@ -313,23 +341,454 @@ window.PulseLive = (function () {
         ];
       }
       state.auditNext = data.nextCursor ?? null;
-      const filtered = await get("/api/pulse/audit?view=filtered&limit=20");
-      bag.AUTO.filtered.f = filtered.rows.map((r) => [r.when, r.what, r.why, r.tag, ""]);
-      state.filteredNext = filtered.nextCursor ?? null;
+      // The old "abandoned at step N" feed had its own tab and no longer does:
+      // suppression is an action type in Activity now, filtered by a chip. The
+      // query is dropped rather than kept for a surface nothing renders.
       render();
     } catch (err) {
       console.warn("[pulse] audit failed:", err.message);
     }
   }
 
+  /**
+   * Replace the Autopilot feeds with real decisions.
+   *
+   * Live and the AI log are the same table read in order — Autopilot's promise
+   * is "every decision AI made, with the evidence behind it", and that is
+   * literally `SELECT * FROM pulse_decision ORDER BY at DESC`. Filtered is the
+   * suppressions from the same table, which is why nothing is ever deleted.
+   *
+   * If the store is unreachable the prototype's sample rows stay on screen. A
+   * surface that has never decided anything should look like a prototype, not
+   * like a broken page.
+   */
+  async function loadAutopilot(bag, render) {
+    try {
+      const data = await get("/api/pulse/autopilot/decisions?limit=60");
+      if (!data.rows.length) return; // nothing decided yet — leave the sample
+      // The rows are handed over whole rather than flattened into the feed
+      // tuple: Activity expands each one to its evidence, confidence and
+      // policy, and none of that survives a five-element array.
+      state.activity = data.rows;
+      state.autopilot = data.summary;
+      state.autopilotNext = data.nextCursor ?? null;
+
+      // No banner here any more. "A signup is waiting on a person" is work, and
+      // work belongs on Now where somebody is deciding what to do next — not on
+      // a tab they open when they want to check whether they trust the AI.
+
+      state.real.push("autopilot decisions (pulse_decision, " + data.summary.total + " rows)");
+
+      render();
+    } catch (err) {
+      console.warn("[pulse] autopilot decisions failed:", err.message);
+    }
+  }
+
+  /**
+   * Drafts waiting on a person.
+   *
+   * Held is the only status this loads: released and discarded drafts are
+   * history and belong in the log, not in a queue of things to do.
+   */
+  async function loadDrafts(bag, render) {
+    try {
+      const [d, p] = await Promise.all([
+        get("/api/pulse/autopilot/drafts?status=held&limit=25"),
+        get("/api/pulse/autopilot/policy"),
+      ]);
+      state.drafts = d.drafts;
+      state.policy = p.policy;
+      // Attach each held draft to the decision that produced it, so opening a
+      // row in Activity shows the message rather than sending someone to hunt
+      // for it on another tab.
+      if (state.activity) {
+        const bySignal = new Map(d.drafts.map((x) => [x.signalKey, x.id]));
+        state.activity.forEach((r) => {
+          if (r.agent === "signup-triage" && bySignal.has(r.signalKey)) r.draftId = bySignal.get(r.signalKey);
+        });
+      }
+      render();
+    } catch (err) {
+      console.warn("[pulse] drafts failed:", err.message);
+    }
+  }
+
+  /** Who is acting, as an id the store can key on — not the whole profile. */
+  function actor() {
+    const m = state.me;
+    if (!m) return "unknown";
+    return String(m.id || m.user_pid || m.name || "unknown");
+  }
+
+  /** Say why an action was refused, on the draft it was refused on. */
+  function draftMessage(id, text) {
+    const el = document.querySelector('[data-dmsg="' + id + '"]');
+    if (el) el.textContent = text;
+  }
+
+  /**
+   * Release a draft, with whatever the rep typed.
+   *
+   * The edited text is sent rather than the original, because the server checks
+   * the price rule against what is actually going out — a rep can edit a price
+   * in, and the control has to see it.
+   */
+  async function releaseDraft(id, body, bag, render) {
+    try {
+      const original = (state.drafts || []).find((d) => d.id === id);
+      const edited = body != null && original && body.trim() !== original.body.trim();
+      const res = await fetch("/api/pulse/autopilot/drafts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action: "release", actor: actor(), body: edited ? body : undefined }),
+      });
+      const out = await res.json();
+      if (!out.ok) { draftMessage(id, out.error || "could not release"); return; }
+      await loadDrafts(bag, render);
+      loadAutopilot(bag, render);
+    } catch (err) {
+      draftMessage(id, err.message);
+    }
+  }
+
+  async function discardDraft(id, bag, render) {
+    try {
+      const res = await fetch("/api/pulse/autopilot/drafts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action: "discard", actor: actor() }),
+      });
+      const out = await res.json();
+      if (!out.ok) { draftMessage(id, out.error || "could not discard"); return; }
+      await loadDrafts(bag, render);
+    } catch (err) {
+      draftMessage(id, err.message);
+    }
+  }
+
+  /** The kill switch. Writes the policy row the runner reads before every pass. */
+  async function setSendingPaused(paused) {
+    const res = await fetch("/api/pulse/autopilot/policy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paused, actor: actor() }),
+    });
+    const out = await res.json();
+    if (out.ok) state.policy = out.policy;
+    return out.ok;
+  }
+
+  /**
+   * The manifest, from pulse_policy.
+   *
+   * Falls back silently: if the store does not answer, pulse.js keeps showing
+   * the constant it shipped with, which is the right behaviour for a statement
+   * that must always be on screen.
+   */
+  async function loadManifest(bag, render) {
+    try {
+      const d = await get("/api/pulse/autopilot/manifest");
+      state.manifest = d.manifest;
+      render();
+    } catch (err) {
+      console.warn("[pulse] manifest failed:", err.message);
+    }
+  }
+
+  async function manifestAction(payload, then) {
+    try {
+      const res = await fetch("/api/pulse/autopilot/manifest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ actor: actor() }, payload)),
+      });
+      const out = await res.json();
+      if (!out.ok) { console.warn("[pulse] rule change refused:", out.error); return; }
+      // Re-read rather than patching state: an edit writes a new version, so the
+      // row that comes back is not the row that was sent.
+      await loadManifest(null, () => {});
+      if (then) then();
+    } catch (err) {
+      console.warn("[pulse] rule change failed:", err.message);
+    }
+  }
+
+  const addRule = (side, text, then) => manifestAction({ action: "add", side, text }, then);
+  const editRule = (key, text, then) => manifestAction({ action: "edit", key, text }, then);
+  const retireRule = (key, then) => manifestAction({ action: "retire", key }, then);
+
+  /**
+   * The month's written verdicts and the portfolio digest.
+   *
+   * Both are written by a separate month-end job, so this only reads. If the
+   * month has not been run, the account page keeps its live stub sentence and
+   * Room to grow keeps the prototype's ranked opportunities — an empty month
+   * should still show a person what to do.
+   */
+  async function loadMonthly(bag, render) {
+    try {
+      const d = await get("/api/pulse/autopilot/monthly?scope=team");
+      state.digest = d.digest;
+      render();
+    } catch (err) {
+      console.warn("[pulse] digest failed:", err.message);
+    }
+  }
+
+  /** One account's verdict, fetched when its page is opened. */
+  async function loadVerdict(pid, render) {
+    if (!pid || (state.verdicts && state.verdicts[pid] !== undefined)) return;
+    state.verdicts = state.verdicts || {};
+    try {
+      const d = await get("/api/pulse/autopilot/monthly?account=" + encodeURIComponent(pid));
+      state.verdicts[pid] = d.verdict;
+      if (d.verdict) render();
+    } catch (err) {
+      state.verdicts[pid] = null;
+    }
+  }
+
+  /**
+   * System exceptions for Now.
+   *
+   * Loaded for Team and Company only. Fetched on every render of those scopes
+   * rather than cached: an alert that is thirty seconds stale is useless, and
+   * the query is four counts.
+   */
+  async function loadAlerts(render) {
+    try {
+      const d = await get("/api/pulse/autopilot/alerts");
+      const before = JSON.stringify(state.alerts || []);
+      state.alerts = d.alerts;
+      if (render && before !== JSON.stringify(d.alerts)) render();
+    } catch (err) {
+      console.warn("[pulse] alerts failed:", err.message);
+    }
+  }
+
+  /** The four motions' rules, from pulse_policy. */
+  async function loadMotionRules(render) {
+    try {
+      const d = await get("/api/pulse/autopilot/rules");
+      state.motionRules = d.rules;
+      if (render) render();
+    } catch (err) {
+      console.warn("[pulse] motion rules failed:", err.message);
+    }
+  }
+
+  async function ruleAction(payload, then) {
+    try {
+      const res = await fetch("/api/pulse/autopilot/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.assign({ actor: actor() }, payload)),
+      });
+      const out = await res.json();
+      if (!out.ok) { console.warn("[pulse] rule change refused:", out.error); return null; }
+      await loadMotionRules(null);
+      if (then) then(out);
+      return out;
+    } catch (err) {
+      console.warn("[pulse] rule change failed:", err.message);
+      return null;
+    }
+  }
+
+  const saveMotionRule = (key, english, then) => ruleAction({ action: "edit", key, english }, then);
+
+  /**
+   * Save a new rule, with whatever the compiler worked out.
+   *
+   * `compiled` carries the trigger, conditions and action in the shape the API
+   * expects, plus whether the person said to turn it on. Without it the rule is
+   * still saved — written down, visible, and marked as not running.
+   */
+  const addMotionRule = (motion, english, compiled, then) =>
+    ruleAction(
+      {
+        action: "add",
+        motion,
+        english,
+        machine: compiled && compiled.can_compile
+          ? {
+              when: compiled.when,
+              if: compiled.conditions.map((c) => [c.field, c.op, coerce(c.value)]),
+              stopIf: (compiled.stop_if || []).map((c) => [c.field, c.op, coerce(c.value)]),
+              then: {
+                act: compiled.act,
+                do: compiled.do,
+                reason: compiled.reason || undefined,
+                sla_minutes: compiled.sla_minutes || undefined,
+                days: compiled.days || undefined,
+              },
+              live: Boolean(compiled.live),
+            }
+          : { live: false },
+      },
+      then,
+    );
+
+  /**
+   * The compiler returns every value as text, because a schema cannot know
+   * which fields are numbers. The runner compares numerically, so "80" has to
+   * become 80 — otherwise a score of 92 fails a >= "80" test.
+   */
+  function coerce(v) {
+    if (v === "true") return true;
+    if (v === "false") return false;
+    if (v !== "" && !isNaN(Number(v))) return Number(v);
+    return v;
+  }
+
+  /** Turn a sentence into a check. Once, at writing time. */
+  async function compileRule(motion, english, cb) {
+    try {
+      const res = await fetch("/api/pulse/autopilot/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "compile", motion, english }),
+      });
+      const out = await res.json();
+      cb(out.ok ? out.compiled : null);
+    } catch (err) {
+      cb(null);
+    }
+  }
+  const retireMotionRule = (key, then) => ruleAction({ action: "retire", key }, then);
+
+  /** Replay a rule against decisions already made. Nothing is sent. */
+  async function testMotionRule(key, cb) {
+    try {
+      const res = await fetch("/api/pulse/autopilot/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "test", key, days: 30 }),
+      });
+      const out = await res.json();
+      cb(out.ok ? out.test : null);
+    } catch (err) {
+      cb(null);
+    }
+  }
+
+  /**
+   * Questions people have already asked, matching what is being typed.
+   *
+   * These are the cheapest answers in the app — the SQL is already written, so
+   * picking one costs a query rather than a call to an agent. Worth putting in
+   * front of someone before they retype the same question in different words.
+   */
+  /**
+   * Questions people actually typed, most-asked first.
+   *
+   * The Asked tab used to list only the catalogue that shipped with the app, so
+   * a question somebody asked this morning appeared nowhere — which made the
+   * whole surface look like it was not recording anything.
+   */
+  /**
+   * In flight — who holds the ball, from what Autopilot is actually doing.
+   *
+   * Replaces the prototype's sample rows only when there is something real to
+   * show. An empty flight list is a legitimate state, but so is a brand-new
+   * install with nothing decided yet, and those two should not look the same.
+   */
+  /** Let a stopped agent run again. Deliberate, and recorded against a person. */
+  async function clearBreaker(agent, render) {
+    try {
+      const res = await fetch("/api/pulse/autopilot/breakers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent, actor: actor() }),
+      });
+      await res.json();
+      await loadAlerts(null);
+      if (render) render();
+    } catch (err) {
+      console.warn("[pulse] could not clear the breaker:", err.message);
+    }
+  }
+
+  async function loadFlight(bag, render) {
+    try {
+      const d = await get("/api/pulse/autopilot/decisions?view=flight&limit=12");
+      if (!d.rows.length) return;
+      bag.FLIGHT.length = 0;
+      d.rows.forEach((r) => {
+        // The renderer appends the "d" itself, so days stays a number here.
+        bag.FLIGHT.push([r.account, r.what, r.ball, r.days, r.old ? 1 : 0, r.doing]);
+      });
+      state.real.push("in flight (drafts held, timers set, messages out)");
+      render();
+    } catch (err) {
+      console.warn("[pulse] in flight failed:", err.message);
+    }
+  }
+
+  async function loadAsked(render) {
+    try {
+      const d = await get("/api/pulse/nl");
+      state.asked = d.asked || [];
+      if (render) render();
+    } catch (err) {
+      console.warn("[pulse] asked list failed:", err.message);
+    }
+  }
+
+  async function searchQuestions(q) {
+    try {
+      const d = await get("/api/pulse/nl?q=" + encodeURIComponent(q));
+      return d.asked || [];
+    } catch (err) {
+      return [];
+    }
+  }
+
+  /** Put a suppressed signup back in front of a person. */
+  async function unsuppress(signalKey, bag, render) {
+    try {
+      const res = await fetch("/api/pulse/autopilot/decisions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signalKey }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || res.statusText);
+      // Re-read rather than patching the row in place: the reversal is itself a
+      // decision row, so the feed has genuinely changed.
+      await loadAutopilot(bag, render);
+    } catch (err) {
+      console.warn("[pulse] unsuppress failed:", err.message);
+      render();
+    }
+  }
+
   /** Enrich a company page with its real detail the first time it is opened. */
   async function loadAccount(name, bag, render) {
     const id = state.ids[name];
+    // The month's verdict is asked for whether or not the rest of the page is
+    // already loaded — it is written by a different job on a different
+    // schedule, so it can appear after the page did.
+    if (id && bag.CUST[name]) {
+      bag.CUST[name].pid = id;
+      loadVerdict(id, render);
+    }
     if (!id || !bag.CUST[name] || !bag.CUST[name].__stub) return;
     try {
       const d = await get("/api/pulse/accounts/" + id);
       const c = bag.CUST[name];
+      /* The board's score, with the four components behind it. */
+      if (d.health) c.health = d.health;
       c.__stub = false;
+      /* Who works at the company, from the members it invited. An empty list is
+         the honest answer for a young account — and is itself a signal, since an
+         account where you know one person churns at roughly twice the rate. */
+      if (Array.isArray(d.people) && d.people.length) {
+        c.pe = d.people.map((p) => [p.name, p.email, p.role || "member"]);
+      }
+      /* Autopilot's own record of this company: what it decided, what it wrote
+         and is holding, and what it intends to do next. */
+      c.autopilot = d.autopilot || null;
       c.la = (d.routes || []).map((r) => [
         r.product,
         r.balance > 0 ? "active" : "stopped",
@@ -590,20 +1049,6 @@ window.PulseLive = (function () {
   }
 
   /** Load more suppressed signups onto the Filtered feed. */
-  async function loadMoreFiltered(bag, render) {
-    if (state.filteredNext == null) return;
-    try {
-      const data = await get("/api/pulse/audit?view=filtered&limit=20&cursor=" + state.filteredNext);
-      bag.AUTO.filtered.f = bag.AUTO.filtered.f.concat(
-        (data.rows || []).map((r) => [r.when, r.what, r.why, r.tag, ""]),
-      );
-      state.filteredNext = data.nextCursor ?? null;
-      render();
-    } catch (err) {
-      console.warn("[pulse] more filtered failed:", err.message);
-    }
-  }
-
   /** Load more rows onto the audit feed. */
   async function loadMoreAudit(bag, render) {
     if (state.auditNext == null) return;
@@ -619,11 +1064,76 @@ window.PulseLive = (function () {
     }
   }
 
+  /**
+   * The score band and the board.
+   *
+   * One request per scope, cached — the board is a bounded scoring pass over a
+   * page of accounts and costs about a second, so switching scope back and
+   * forth must not re-run it. Fetched after the first paint: Now is readable
+   * without it, and the sample board is what shows until it lands.
+   */
+  const boards = {};
+  async function loadBoard(scope, bag, render) {
+    if (boards[scope] !== undefined) {
+      state.boardLoaded = true;
+      bag.setBoard(boards[scope]);
+      render();
+      return;
+    }
+    boards[scope] = null;
+    // Health is scored per scope and takes seconds against a remote database.
+    // Until it lands, the band counts must not show the prototype's numbers —
+    // that is the section that made the page look like it changed its mind.
+    state.boardLoaded = false;
+    try {
+      const d = await get("/api/pulse/board?scope=" + encodeURIComponent(scope));
+      boards[scope] = d.board || null;
+      if (boards[scope]) {
+        state.real.push(
+          "health for " +
+            d.board.total +
+            " accounts (ms_trans + ms_text_bal, weighted)",
+        );
+      }
+      state.boardLoaded = true;
+      bag.setBoard(boards[scope]);
+      render();
+    } catch (err) {
+      // Failed is not pending: fall back to the sample band rather than leaving
+      // a skeleton up for ever.
+      state.boardLoaded = true;
+      delete boards[scope];
+      console.warn("[pulse] board failed:", err.message);
+    }
+  }
+
   return {
+    clearBreaker,
+    loadFlight,
+    loadAsked,
+    searchQuestions,
+    compileRule,
+    loadMotionRules,
+    saveMotionRule,
+    addMotionRule,
+    retireMotionRule,
+    testMotionRule,
+    loadAlerts,
+    loadMonthly,
+    loadVerdict,
+    loadManifest,
+    addRule,
+    editRule,
+    retireRule,
+    loadDrafts,
+    releaseDraft,
+    discardDraft,
+    setSendingPaused,
+    unsuppress,
+    loadAutopilot,
     revealCommercial,
     loadMoreAccounts,
     loadMoreAudit,
-    loadMoreFiltered,
     loadMoreAccountFeed,
     askCustom,
     searchCompanies,
@@ -663,19 +1173,36 @@ window.PulseLive = (function () {
         get("/api/pulse/cards?per=4")
           .then((c) => {
             applyCards(c.cards, bag);
+            state.cardsLoaded = true;
             render();
             this.report();
           })
           .catch((err) => {
             console.warn("[pulse] cards failed:", err.message);
+            // Failed is not pending. Fall back to the prototype's cards rather
+            // than leaving a skeleton on screen forever.
+            state.cardsLoaded = true;
+            render();
             this.report();
           });
+
+        // The score band and the board for the scope Now opens on.
+        loadBoard(bag.S.scope, bag, render);
 
         // The question Ask opens on, so the first view of the surface is real.
         if (state.defaultAsk) loadAnswer(state.defaultAsk, bag, render);
         // Autopilot's logs are only needed once that surface is opened, but they
         // are cheap and make the first click instant.
-        loadAudit(bag, render);
+        // Autopilot's own decisions first, then the staff audit log. Both write
+        // to the Filtered tab and the real suppressions must land last.
+        loadAutopilot(bag, render).then(() => loadAudit(bag, render));
+        loadDrafts(bag, render);
+        loadManifest(bag, render);
+        loadMotionRules(render);
+        loadAsked(render);
+        loadFlight(bag, render);
+        loadMonthly(bag, render);
+        loadAlerts(render);
       } catch (err) {
         state.error = err.message;
         console.error(
@@ -687,6 +1214,7 @@ window.PulseLive = (function () {
     },
     loadAnswer,
     loadAccount,
+    loadBoard,
     state,
     report() {
       const lines = ["%c[pulse] live from MySQL:%c"].concat(state.real.map((r) => "  ✓ " + r));

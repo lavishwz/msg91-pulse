@@ -11,3 +11,11 @@ next-env.d.ts
 
 # local dev database (a live MariaDB data directory, created by npm run db:local)
 .localdb
+
+# Credential backups. `.env*.local` above matches .env.local but NOT
+# .env.local.bak — these held a live MYSQL_PASSWORD, GTWY_PAUTHKEY,
+# AUTOPILOT_TICK_SECRET and PULSE_STORE_PASSWORD while untracked.
+.env.local.bak
+.env.local.bak*
+*.env.local.bak*
+.env.*.bak

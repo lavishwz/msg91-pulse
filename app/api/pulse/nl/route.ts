@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { pool } from "@/lib/db";
-import { isConfigured, plan } from "@/lib/pulse/nl";
+import { isConfigured, plan, schemaVersion } from "@/lib/pulse/nl";
+import { retire, asked, search as searchQuestions } from "@/lib/pulse/qcache";
 import { GtwyError } from "@/lib/pulse/gtwy";
 import { guard, MAX_ROWS } from "@/lib/pulse/sqlguard";
 
@@ -50,8 +51,11 @@ export async function POST(req: Request) {
   const started = Date.now();
 
   try {
-    const p = await plan(question);
+    const p = await plan(question, null);
     const planMs = Date.now() - started;
+    // A cached plan skipped the agent entirely. Worth surfacing: an answer that
+    // arrives in 20ms instead of 10s should be explainable, not mysterious.
+    const cached = "cached" in p && Boolean((p as { cached?: boolean }).cached);
 
     if (!p.answerable || !p.sql) {
       return NextResponse.json({
@@ -66,6 +70,7 @@ export async function POST(req: Request) {
         rows: [],
         columns: [],
         timing: { planMs, queryMs: 0 },
+      cached,
       });
     }
 
@@ -122,6 +127,7 @@ export async function POST(req: Request) {
       model: p.model,
       usage: p.usage,
       timing: { planMs, queryMs },
+      cached,
     });
   } catch (err) {
     // A GTWY failure is a different class of problem from a MySQL failure, and
@@ -208,3 +214,40 @@ function normalise(v: unknown): string | number | null {
 }
 
 export const dynamic = "force-dynamic";
+
+
+/**
+ * DELETE /api/pulse/nl — { question, reason } stops serving a remembered plan.
+ *
+ * This is what "this answer was wrong" does. One bad translation served fifty
+ * times is worse than fifty fresh calls, so a single complaint retires it and
+ * the next person to ask gets a new plan from the agent.
+ */
+export async function DELETE(req: Request) {
+  try {
+    const b = (await req.json()) as { question?: string; reason?: string };
+    if (!b.question) {
+      return NextResponse.json({ ok: false, error: "question is required" }, { status: 400 });
+    }
+    const done = await retire(b.question, schemaVersion(), b.reason ?? "marked wrong by a person");
+    return NextResponse.json({ ok: done, retired: done });
+  } catch (err) {
+    return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 500 });
+  }
+}
+
+/**
+ * GET — what people actually ask, most-asked first. The Asked tab.
+ * GET ?q=… — the same list, filtered. This is what ⌘K searches.
+ */
+export async function GET(req: Request) {
+  const q = new URL(req.url).searchParams.get("q");
+  try {
+    if (q && q.trim().length >= 2) {
+      return NextResponse.json({ ok: true, asked: await searchQuestions(q.trim(), 6) });
+    }
+    return NextResponse.json({ ok: true, asked: await asked(30) });
+  } catch (err) {
+    return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 503 });
+  }
+}

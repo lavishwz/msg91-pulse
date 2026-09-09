@@ -472,3 +472,35 @@ export async function countAccounts(filter: AccountFilter = {}): Promise<number>
   );
   return Number(row?.n ?? 0);
 }
+
+
+/**
+ * The people at a company, from the members it has invited.
+ *
+ * `ms_invite_member` is the only place MSG91 records who works at a customer.
+ * Most young accounts have none, and an empty list is the honest answer — it is
+ * also itself a signal, because an account where you know one person churns at
+ * roughly twice the rate of one where you know three.
+ */
+export async function accountPeople(
+  id: number,
+  req: Page = page({ limit: 8 }),
+): Promise<Paged<{ name: string; email: string; role: string | null }>> {
+  const rows = await query<{ member_name: string | null; member_email: string | null; member_role: string | null }>(
+    `SELECT member_name, member_email, member_role
+       FROM ms_invite_member
+      WHERE member_company_id = ?
+      ORDER BY member_id DESC ${limitClause(req)}`,
+    [id],
+  );
+  return toPaged(
+    rows
+      .filter((r) => r.member_email)
+      .map((r) => ({
+        name: (r.member_name ?? "").trim() || (r.member_email ?? "").split("@")[0],
+        email: r.member_email ?? "",
+        role: (r.member_role ?? "").trim() || null,
+      })),
+    req,
+  );
+}
