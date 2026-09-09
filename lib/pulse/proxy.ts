@@ -4,7 +4,7 @@
  * Two ways to ask who somebody is, and Pulse uses whichever is configured:
  *
  *   1. Admin, server-to-server. `authkey: PROXY_ADMIN_TOKEN` against
- *      `${PROXY_BASE_URL}/${NEXT_PUBLIC_REFERENCEID}/getDetails?user_id=…`.
+ *      `${PROXY_BASE_URL}/${REFERENCEID}/getDetails?user_id=…`.
  *      Exact, and the same call the ViaSocket admin panel makes.
  *   2. User-scoped. The visitor's own `proxy_auth_token` against
  *      `${PROXY_BASE_URL}/c/getDetails`. Needs no admin key, which means a
@@ -18,7 +18,7 @@
  */
 
 const BASE_URL = (process.env.PROXY_BASE_URL ?? "https://routes.msg91.com/api").replace(/\/+$/, "");
-const REFERENCE_ID = (process.env.NEXT_PUBLIC_REFERENCEID ?? "").trim();
+const REFERENCE_ID = (process.env.REFERENCEID ?? "").trim();
 const ADMIN_TOKEN = (process.env.PROXY_ADMIN_TOKEN ?? "").trim();
 
 export type ProxyIdentity = {
@@ -127,7 +127,7 @@ export async function resolveIdentity(args: {
 }): Promise<ProxyIdentity> {
   if (!isProxyConfigured()) {
     throw new Error(
-      "NEXT_PUBLIC_REFERENCEID is not set, so Pulse cannot ask Proxy who you are. See docs/auth.md.",
+      "REFERENCEID is not set, so Pulse cannot ask Proxy who you are. See docs/auth.md.",
     );
   }
 

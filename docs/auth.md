@@ -117,7 +117,7 @@ handlers themselves already insisted on.
 Two variables are enough:
 
 ```
-NEXT_PUBLIC_REFERENCEID=1258584i17889575326aa1535c30048   # Pulse's app id on Proxy
+REFERENCEID=1258584i17889575326aa1535c30048   # Pulse's app id on Proxy
 JWT_SECRET=<openssl rand -base64 48>                       # signs the session cookie
 ```
 
@@ -127,7 +127,7 @@ prefill an invitee's display name. Without it, login falls back to asking Proxy
 about the visitor using the visitor's own token, which needs no key at all.
 
 Changing `JWT_SECRET` invalidates every session; changing
-`NEXT_PUBLIC_REFERENCEID` points the widget at a different registered app.
+`REFERENCEID` points the widget at a different registered app.
 
 ## Files
 

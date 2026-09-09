@@ -21,7 +21,7 @@ unauthenticated API call gets a 401.
 Two variables are needed in `.env.local`:
 
 ```
-NEXT_PUBLIC_REFERENCEID=1258584i17889575326aa1535c30048
+REFERENCEID=1258584i17889575326aa1535c30048
 JWT_SECRET=<openssl rand -base64 48>
 ```
 

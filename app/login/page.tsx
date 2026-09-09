@@ -13,7 +13,7 @@ import LoginForm from "./login-form";
 export const metadata = { title: "Sign in · MSG91 Pulse" };
 
 export default function LoginPage() {
-  const referenceId = (process.env.NEXT_PUBLIC_REFERENCEID ?? "").trim();
+  const referenceId = (process.env.REFERENCEID ?? "").trim();
 
   return (
     <main className="authpage">

@@ -75,7 +75,7 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
     // Case 2: a fresh arrival. The widget needs the reference id to render.
     if (!referenceId) {
       setError(
-        "NEXT_PUBLIC_REFERENCEID is not set, so the MSG91 sign-in widget cannot load. See docs/auth.md.",
+        "REFERENCEID is not set, so the MSG91 sign-in widget cannot load. See docs/auth.md.",
       );
       setStatus("error");
       return;
