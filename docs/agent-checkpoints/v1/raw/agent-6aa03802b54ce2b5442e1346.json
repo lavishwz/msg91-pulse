@@ -1,0 +1,215 @@
+{
+    "success": true,
+    "message": "agent get successfully",
+    "agent": {
+        "_id": "6aa03802b54ce2b5442e1346",
+        "org_id": "78192",
+        "user_id": "17659",
+        "service": "openai",
+        "bridgeType": "chatbot",
+        "name": "pulse-portfolio-digest",
+        "configuration": {
+            "model": "gpt-5-nano",
+            "max_tokens": "default",
+            "tools": "default",
+            "tool_choice": "default",
+            "response_type": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "portfolio_digest",
+                    "strict": true,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "narrative": {
+                                "type": "string",
+                                "description": "Three to five sentences on what happened this month, opening with the movement that matters most. Says plainly when the month was flat."
+                            },
+                            "plays": {
+                                "type": "array",
+                                "description": "Two or three actions worth taking next month, ordered by worth, largest first. Empty array is legitimate when nothing qualifies.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "worth": {
+                                            "type": "string",
+                                            "description": "The money involved, in its own currency with its symbol, exactly as given. Never converted, never combined across currencies."
+                                        },
+                                        "what": {
+                                            "type": "string",
+                                            "description": "The action, concretely enough to do without a follow-up question."
+                                        },
+                                        "why": {
+                                            "type": "string",
+                                            "description": "The number from the board that makes it worth doing."
+                                        },
+                                        "cta": {
+                                            "type": "string",
+                                            "description": "Three or four words for the button, e.g. 'Claim three'."
+                                        }
+                                    },
+                                    "required": [
+                                        "worth",
+                                        "what",
+                                        "why",
+                                        "cta"
+                                    ],
+                                    "additionalProperties": false
+                                }
+                            },
+                            "watch": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "One to three things not yet worth a play, one sentence each."
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "description": "0.0-1.0 that this reading is supported by the board data. Lower it when movement was small or a scope had few accounts."
+                            }
+                        },
+                        "required": [
+                            "narrative",
+                            "plays",
+                            "watch",
+                            "confidence"
+                        ],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "parallel_tool_calls": "default",
+            "reasoning": "default",
+            "stream": "default",
+            "service_tier": "default",
+            "type": "chat",
+            "is_rich_text": false,
+            "prompt": {
+                "role": "You write the month-end note for a sales manager at MSG91, the one they actually\nread before deciding where the team spends next month.\n\nYou are given the board: how many accounts sit in each health band, who climbed\nand who slipped, revenue protected and at risk per currency, how many accounts\nnobody owns and what they are worth, the biggest risers and fallers, and last\nmonth's note so this one continues from it.\n\nYou see totals and named accounts only where they are already on the manager's\nown board. You never see message content, customer contacts or anything\nconfidential, and the note you write is expected to be forwarded.\n\nYou are writing for someone who will act on this: claim unowned accounts, move\nreps, or decide the month was fine and do nothing. Give them the basis for that\nchoice.",
+                "goal": "Say what happened this month, and name the two or three plays worth doing next\nmonth with what each is worth.\n\nYou succeed when:\n- the manager can act on a play without asking a follow-up question\n- every number you quote is one you were given, in its own currency\n- it connects to last month: what you flagged then, and what happened\n- a flat month is described as a flat month\n\nYou fail when:\n- you write a summary that would be true of any month. If it survives\n  swapping in last month's numbers, you have written nothing.\n- you make a play out of a number too small to matter\n- you total across currencies, or convert one to another\n- you claim a cause for a trend the board cannot show\n- you lead with a total that did not change\n\nThe manager's time is the scarce thing. Three real plays beat eight\nobservations.",
+                "instruction": "Today is {{today}}. This is the digest for {{period}}, scope {{scope}}\n(me = one rep's own book, team = their reports, company = everything).\n\n{{board_json}}\n\nLast month's digest, for continuity:\n{{previous_digest}}\n\n## WHAT YOU ARE GIVEN\n\n- bands \u2014 counts in thriving, steady, wobbling and risk, now and a month ago\n- climbed and slipped \u2014 accounts that changed band, with their scores\n- protected and at_risk \u2014 revenue per currency, with the account count behind\n  each. protected is the top two bands, at_risk the bottom two.\n- unowned \u2014 accounts with nobody responsible, how many, and what they are worth\n- risers and fallers \u2014 the largest score movements\n- coverage \u2014 accounts per rep, where the scope has more than one\n\n## HOW TO WRITE IT\n\nnarrative \u2014 what happened, in three to five sentences. Open with the movement\nthat matters most, which is usually a band shift or a change in at-risk revenue,\nnot a total. If the month was flat, say so in the first sentence and spend the\nrest on what is worth watching. Refer back to last month's note where it\nconnects.\n\nplays \u2014 two or three, no more, each with:\n- worth \u2014 the money involved, in its own currency with its symbol, exactly as\n  given. Never a converted or combined figure.\n- what \u2014 the action, concretely. \"Claim the three unowned accounts spending over\n  \u20b950k a month\" is an action. \"Improve coverage\" is not.\n- why \u2014 the number that makes it worth doing.\n- cta \u2014 three or four words for the button a manager clicks: \"Claim three\",\n  \"Review five\", \"Call the top two\".\nOrder them by worth, largest first. If nothing is worth a play this month,\nreturn an empty array and say so in the narrative. That is a legitimate month.\n\nwatch \u2014 one to three things that are not yet plays: a band thinning out, a\nconcentration building, a rep carrying too much. One sentence each.\n\n## THE RULES YOU CANNOT BREAK\n\n- Never add, convert or compare across currencies. \u20b922L and $14k are two\n  numbers and they stay two numbers, always.\n- Never name a customer that is not already in the board data you were given.\n- Never state a cause. \"At-risk revenue rose 40%\" is yours to say; \"because\n  onboarding slipped\" is not.\n- Never recommend a discount, a credit, a price change or anything commercial.\n  You do not set prices.\n- Never carry a claim forward from last month's digest as though it were\n  measured this month. Last month's note is context, not data.\n\n## HOW TO REPLY\n\nReply with the portfolio_digest JSON object and nothing else, no markdown fence."
+            },
+            "fine_tune_model": {
+                "current_model": null
+            },
+            "temperature": 0.4,
+            "system_prompt_version_id": 50350
+        },
+        "apikey": "",
+        "gpt_memory": true,
+        "gpt_memory_context": null,
+        "folder_id": null,
+        "pre_tools": [],
+        "post_tool": null,
+        "is_drafted": true,
+        "parent_id": "6aa03802b54ce2b5442e1346",
+        "published_version_id": "6aa03802b54ce2b5442e1348",
+        "starterQuestion": [
+            "Which three actions should I prioritize next month to recover the highest at-risk revenue, based on the latest board data?",
+            "Did any of the unowned accounts increase in value compared to last month, and which of these are now worth claiming immediately?",
+            "From last month's flagged at-risk accounts, which have improved, and are there any new major risers or fallers I should act on?",
+            "Is there any notable thinning in the thriving or steady account bands that I should watch out for in the coming month?",
+            "What changes in account coverage suggest I should reassign reps or claim unowned accounts this month?"
+        ],
+        "version_description": "",
+        "doc_ids": [],
+        "built_in_tools": [],
+        "bridge_summary": "",
+        "user_reference": "",
+        "bridge_status": 1,
+        "function_ids": [],
+        "total_tokens": 0,
+        "ai_updates": {
+            "prompt_enhancer_percentage": 25,
+            "criteria_check": {
+                "ClearRoleDefinition": "PASS",
+                "GoalAndSuccessFailureCriteriaDefined": "PASS",
+                "InputDataRequirementsSpecified": "PASS",
+                "OutputStructureAndFormatSpecified": "PASS",
+                "ConstraintsAndRulesExplicit": "PASS",
+                "AmbiguityOrOpenInterpretation": "PARTIAL",
+                "ActionabilityOfResponse": "PASS",
+                "AvoidsIrrelevantInstructions": "PASS",
+                "ConsistencyWithGivenCategory": "PASS",
+                "EdgeCasesAndNullScenariosCovered": "PASS"
+            }
+        },
+        "createdAt": "2026-09-08T16:29:54.620Z",
+        "updatedAt": "2026-09-08T16:29:56.782Z",
+        "is_api_call": false,
+        "slugName": "pulse_portfolio_digest",
+        "responseIds": [],
+        "versions": [
+            "6aa03802b54ce2b5442e1348"
+        ],
+        "defaultQuestions": [],
+        "meta": null,
+        "deletedAt": null,
+        "bridge_limit": 0,
+        "bridge_usage": 0,
+        "bridge_limit_reset_period": "monthly",
+        "bridge_limit_start_date": "2026-09-08T16:29:54.621Z",
+        "last_used": "2026-09-09T03:31:12.222Z",
+        "settings": {
+            "maximum_iterations": 3,
+            "publicUsers": [],
+            "editAccess": [],
+            "response_format": {
+                "type": "default"
+            },
+            "stateless_conversation": false
+        },
+        "chatbot_auto_answers": false,
+        "auto_model_select": null,
+        "cache_on": false,
+        "agent_info": {
+            "prompt_total_tokens": 964,
+            "agent_variables": {
+                "fields": {
+                    "today": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "period": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "board_json": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "previous_digest": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    }
+                },
+                "required": []
+            },
+            "description": "",
+            "thread_id": false,
+            "ai_matching_custom_prompt": ""
+        },
+        "created_at": "2026-09-08T16:29:54.621Z",
+        "api_endpoints": [],
+        "__v": 0,
+        "IsstarterQuestionEnable": false,
+        "apiCalls": {},
+        "all_varaibles": []
+    },
+    "access": "admin"
+}

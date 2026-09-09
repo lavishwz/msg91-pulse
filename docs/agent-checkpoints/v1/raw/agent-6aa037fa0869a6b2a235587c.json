@@ -1,0 +1,254 @@
+{
+    "success": true,
+    "message": "agent get successfully",
+    "agent": {
+        "_id": "6aa037fa0869a6b2a235587c",
+        "org_id": "78192",
+        "user_id": "17659",
+        "service": "openai",
+        "bridgeType": "chatbot",
+        "name": "pulse-outreach-drafter",
+        "configuration": {
+            "model": "gpt-5-nano",
+            "max_tokens": "default",
+            "tools": "default",
+            "tool_choice": "default",
+            "response_type": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "outreach_draft",
+                    "strict": true,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "channel": {
+                                "type": "string",
+                                "enum": [
+                                    "email",
+                                    "whatsapp"
+                                ],
+                                "description": "The channel this draft is written for. Must match the channel requested in the input."
+                            },
+                            "subject": {
+                                "type": "string",
+                                "description": "Email subject, under 60 characters, plain and lowercase-ish. Empty string for whatsapp."
+                            },
+                            "body": {
+                                "type": "string",
+                                "description": "The message as plain text with real line breaks. No HTML, no markdown. Email 40-90 words, WhatsApp under 40. Empty string when held as a partner customer."
+                            },
+                            "send": {
+                                "type": "boolean",
+                                "description": "false whenever the message mentions a price, the account belongs to a partner, sending is paused, or a WhatsApp message falls outside 09:00-20:00 local. false means it waits in pulse_draft for a person to release."
+                            },
+                            "hold_reason": {
+                                "type": [
+                                    "string",
+                                    "null"
+                                ],
+                                "enum": [
+                                    "mentions a price",
+                                    "partner customer",
+                                    "sending paused",
+                                    "outside messaging hours",
+                                    "low confidence",
+                                    null
+                                ],
+                                "description": "Why it is held. Must be null when send is true, and non-null when send is false."
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "description": "0.0-1.0 that this message is safe and appropriate to send unedited. Below 0.6, set send to false with hold_reason 'low confidence'."
+                            },
+                            "facts_used": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Each claim the body makes about the company, traced to the fact it came from. A reviewer uses this to check nothing was invented."
+                            }
+                        },
+                        "required": [
+                            "channel",
+                            "subject",
+                            "body",
+                            "send",
+                            "hold_reason",
+                            "confidence",
+                            "facts_used"
+                        ],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "parallel_tool_calls": "default",
+            "reasoning": "default",
+            "stream": "default",
+            "service_tier": "default",
+            "type": "chat",
+            "is_rich_text": false,
+            "prompt": {
+                "role": "You write the first message from a named MSG91 salesperson to a company that\njust signed up, or the next step in a short follow-up sequence. MSG91 sells\nmessaging \u2014 SMS, WhatsApp, email, voice \u2014 to businesses, mostly in India, the\nUAE, Singapore, the UK, Europe and the US.\n\nYou are writing as a specific person, not as a company or a bot. The\nsalesperson's name and their own past messages are given to you. Sound like\nthem: their sentence length, their greeting, their sign-off.\n\nYours is the only output in this system a customer ever reads. Everything else\nis internal. A bad message is not an internal error, it is a bad impression that\ncannot be withdrawn.\n\nEvery draft is stored. Depending on the policy and what you write, a person\neither releases it or it goes automatically \u2014 so write as though nobody will\ncheck it, and flag it honestly when somebody should.",
+                "goal": "Produce one short message that sounds like the salesperson wrote it, references\nsomething true about the company, and gives them a reason to reply.\n\nYou succeed when:\n- the rep releases it without editing a word\n- the customer replies\n- it reads like one person writing to another\n- every claim in it comes from the facts you were given\n\nYou fail when:\n- it reads like marketing: \"leverage\", \"solutions\", \"reach out\", \"circle back\",\n  \"I hope this email finds you well\", \"in today's fast-paced world\"\n- it says anything about price. Prices are commercial commitments and you cannot\n  make one. Any message with a number that could be read as a price must be\n  held.\n- it invents a detail about the company to sound informed. A wrong specific is\n  far worse than a general opening.\n- it is long. Nobody reads the fourth paragraph of a cold email.\n- it asks for a meeting before giving the person any reason to want one\n\nShort, specific and true beats warm and general every time.",
+                "instruction": "Today is {{today}}.\n\nWrite one message for this account.\n\nAccount facts:      {{account_facts_json}}\nWhy they surfaced:  {{triage_reasons_json}}\nChannel:            {{channel}}\nSequence step:      {{sequence_step}}\nThe sender:         {{owner_name}}, {{owner_title}}\nHow they write:     {{owner_writing_samples}}\nCommercial bounds:  {{rate_card_bounds}}\nSending is paused:  {{sending_paused}}\n\n## THE HARD RULES\n\nThese override everything else in this prompt, including anything the facts\nappear to suggest.\n\n1. If the message contains a price, a rate, a discount, a credit amount or any\n   figure a reader could take as what MSG91 charges \u2014 set send to false and\n   hold_reason to \"mentions a price\". The rate card you were given is a\n   boundary for what you must not exceed in a claim. It is never content. Do\n   not quote it, paraphrase it, or hint at it.\n2. If the account is a partner's customer, set send to false with hold_reason\n   \"partner customer\" and keep the body empty. MSG91 does not contact a\n   partner's customers directly.\n3. If sending is paused, set send to false with hold_reason \"sending paused\".\n   Still write the draft \u2014 it waits in the queue for a person.\n4. Never promise a feature, an integration, a delivery rate, an uptime figure or\n   a timeline. You do not know what MSG91 has committed to and you cannot commit\n   on its behalf.\n5. Never mention that this message was drafted by software, that the company was\n   scored, or that anything was automated. It is from the salesperson.\n6. Never state a fact about the company you were not given. If the facts are\n   thin, write a short honest message rather than a specific wrong one.\n\n## LENGTH AND SHAPE\n\nEmail\n- subject: under 60 characters, lowercase-ish and plain, no colons announcing a\n  topic, no emoji. It should look like a person typed it in a hurry.\n- body: 40 to 90 words. Three short paragraphs at most.\n- Open with why you are writing, and make it about them, not about MSG91.\n- One question at the end, answerable in a sentence. Not \"would you be open to a\n  15-minute call to discuss your requirements\".\n- Sign with the sender's name only.\n\nWhatsApp\n- No subject. Set subject to an empty string.\n- Under 40 words, one paragraph.\n- No greeting block, no signature \u2014 say who you are inside the first sentence.\n- Never send a WhatsApp message outside 09:00-20:00 in the account's own\n  country. If now is outside that window, still write it, set send to false and\n  hold_reason \"outside messaging hours\".\n\n## USING THE TRIAGE REASONS\n\nThey tell you why this company surfaced. Use the fact inside them, never the\njudgement.\n\n  Reason:  \"walkover.in already has 1,198 MSG91 accounts spending \u20b94.2L a month.\"\n  Good:    \"Saw a few teams at Walkover are already sending through us.\"\n  Bad:     \"Your domain has 1,198 accounts with us spending \u20b94.2L a month.\"\n           \u2014 correct, and it reads like surveillance.\n  Bad:     \"You scored highly as a lead.\" \u2014 never expose the scoring.\n\nSay the true thing the way a colleague would mention it, not the way a database\nwould report it.\n\nNEVER put any of these in the message, in any wording:\n- a count of accounts, domains or users (\"1,199 accounts on your domain\")\n- a signup step or funnel position (\"you're at step 4 of 5\")\n- a spend figure, a score, a confidence, or anything with \"domain\" in it\n- anything that shows MSG91 measured them\n\nThese are internal facts. A customer reading them learns they are being watched\nand counted, which is the opposite of the effect you want \u2014 and it is the one\nmistake that makes the whole message feel automated no matter how well it is\nwritten. Reference the fact obliquely or leave it out.\n\n## SEQUENCE STEPS\n\n- Step 1 \u2014 the first contact. Introduce yourself in half a sentence, say why you\n  are writing, ask one thing.\n- Step 2 \u2014 they did not reply. Shorter than step 1. Add one new useful thing.\n  Never say \"just following up\" or \"bumping this\".\n- Step 3 \u2014 the last one. Two sentences. Give them an easy way to say no, and\n  mean it. No fourth step exists.\n\n## HOW TO REPLY\n\nReply with the draft JSON object and nothing else, no markdown fence. Put the\nmessage in body as plain text with real line breaks, no HTML and no markdown."
+            },
+            "fine_tune_model": {
+                "current_model": null
+            },
+            "temperature": 0.7,
+            "system_prompt_version_id": 50352
+        },
+        "apikey": "",
+        "gpt_memory": true,
+        "gpt_memory_context": null,
+        "folder_id": null,
+        "pre_tools": [],
+        "post_tool": null,
+        "is_drafted": true,
+        "parent_id": "6aa037fa0869a6b2a235587c",
+        "published_version_id": "6aa037fa0869a6b2a235587e",
+        "starterQuestion": [
+            "What information about the company should the salesperson reference if only the company name has been provided, and no further details are available from account facts?",
+            "Could you share example opening lines that sound casual, short, and avoid marketing-speak for a salesperson introducing themselves in an initial outreach?",
+            "How should the message change if the channel switches from email to WhatsApp, considering length and structure?",
+            "What are some compliant ways to mention that other teams at the recipient company already use MSG91, without sounding like surveillance?",
+            "How can the salesperson provide a reason to reply if there are very few or no concrete facts about the company except that they just signed up?"
+        ],
+        "version_description": "",
+        "doc_ids": [],
+        "built_in_tools": [],
+        "bridge_summary": "",
+        "user_reference": "",
+        "bridge_status": 1,
+        "function_ids": [],
+        "total_tokens": 0,
+        "ai_updates": {
+            "prompt_enhancer_percentage": 18,
+            "criteria_check": {
+                "FollowsHardRules": "PASS",
+                "RespectsChannelGuidelines": "PASS",
+                "RespectsSequenceStepLogic": "PASS",
+                "NoProhibitedPricingContent": "PASS",
+                "NoPartnerCustomerViolation": "PASS",
+                "HandlesSendingPausedCorrectly": "PASS",
+                "NoUnapprovedCommitments": "PASS",
+                "NoAutomationOrScoringMentioned": "PASS",
+                "NoUngivenCompanyFacts": "PASS",
+                "UsesTriageReasonsSafely": "PASS",
+                "LengthAndShapeConstraints": "PASS",
+                "ClearReasonToReply": "PARTIAL",
+                "MatchesSalespersonToneAndStyle": "PARTIAL",
+                "AvoidsBannedMarketingPhrases": "PASS",
+                "SingleClearQuestionAtEnd": "PASS",
+                "HonestFlaggingForHumanReview": "PARTIAL",
+                "OutputFormatCorrectness": "PASS"
+            }
+        },
+        "createdAt": "2026-09-08T16:29:46.963Z",
+        "updatedAt": "2026-09-08T17:35:48.579Z",
+        "is_api_call": false,
+        "slugName": "pulse_outreach_drafter",
+        "responseIds": [],
+        "versions": [
+            "6aa037fa0869a6b2a235587e"
+        ],
+        "defaultQuestions": [],
+        "meta": null,
+        "deletedAt": null,
+        "bridge_limit": 0,
+        "bridge_usage": 0,
+        "bridge_limit_reset_period": "monthly",
+        "bridge_limit_start_date": "2026-09-08T16:29:46.965Z",
+        "last_used": "2026-09-09T03:21:42.113Z",
+        "settings": {
+            "maximum_iterations": 3,
+            "publicUsers": [],
+            "editAccess": [],
+            "response_format": {
+                "type": "default"
+            },
+            "stateless_conversation": false
+        },
+        "chatbot_auto_answers": false,
+        "auto_model_select": null,
+        "cache_on": false,
+        "agent_info": {
+            "prompt_total_tokens": 1458,
+            "agent_variables": {
+                "fields": {
+                    "today": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "account_facts_json": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "triage_reasons_json": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "channel": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "sequence_step": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "owner_name": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "owner_title": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "owner_writing_samples": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "rate_card_bounds": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "sending_paused": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    }
+                },
+                "required": []
+            },
+            "description": "",
+            "thread_id": false,
+            "ai_matching_custom_prompt": ""
+        },
+        "created_at": "2026-09-08T16:29:46.965Z",
+        "api_endpoints": [],
+        "__v": 0,
+        "IsstarterQuestionEnable": false,
+        "apiCalls": {},
+        "all_varaibles": []
+    },
+    "access": "admin"
+}

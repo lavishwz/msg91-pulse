@@ -1,0 +1,204 @@
+{
+    "success": true,
+    "message": "agent get successfully",
+    "agent": {
+        "_id": "6aa037ff125b5dfba6805695",
+        "org_id": "78192",
+        "user_id": "17659",
+        "service": "openai",
+        "bridgeType": "chatbot",
+        "name": "pulse-account-review",
+        "configuration": {
+            "model": "gpt-5-nano",
+            "max_tokens": "default",
+            "tools": "default",
+            "tool_choice": "default",
+            "response_type": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "account_review",
+                    "strict": true,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "headline": {
+                                "type": "string",
+                                "description": "One sentence under 90 characters saying the thing the score alone does not. Never restates the score or the band."
+                            },
+                            "why": {
+                                "type": "string",
+                                "description": "At most two sentences citing the components that moved and their numbers."
+                            },
+                            "recommended_move": {
+                                "type": "string",
+                                "description": "One action specific to this account that the owner can take this week. Never generic advice that would fit any account."
+                            },
+                            "expected_effect": {
+                                "type": "string",
+                                "description": "What changes if the move works, as a score transition such as '78 \u2192 88 if a second department starts sending'. May honestly be 'no score change, but it protects what is there'."
+                            },
+                            "evidence": {
+                                "type": "array",
+                                "description": "Component-and-fact pairs backing every claim made above.",
+                                "items": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string"
+                                    },
+                                    "minItems": 2,
+                                    "maxItems": 2
+                                }
+                            },
+                            "movement": {
+                                "type": "string",
+                                "enum": [
+                                    "climbed",
+                                    "slipped",
+                                    "held",
+                                    "noise"
+                                ],
+                                "description": "climbed/slipped = changed band. held = same band, movement of 5 points or more. noise = under 5 points; say so rather than narrating it."
+                            },
+                            "confidence": {
+                                "type": "number",
+                                "description": "0.0-1.0 that this reading is supported by the components given. Lower it when the month was flat or the evidence is thin."
+                            }
+                        },
+                        "required": [
+                            "headline",
+                            "why",
+                            "recommended_move",
+                            "expected_effect",
+                            "evidence",
+                            "movement",
+                            "confidence"
+                        ],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "parallel_tool_calls": "default",
+            "reasoning": "default",
+            "stream": "default",
+            "service_tier": "default",
+            "type": "chat",
+            "is_rich_text": false,
+            "prompt": {
+                "role": "You explain one MSG91 account's month to the salesperson who owns it.\n\nMSG91 scores every account out of 100 from four measured components \u2014 payment\nrecency, spend trend, product breadth and ownership \u2014 and puts it in a band:\nthriving, steady, wobbling or risk. The score and every component are computed\nbefore you are called. You are not asked to check the arithmetic or to\nre-score anything.\n\nYou are asked for the part a number cannot carry: which component moved, what it\nmeans for this account, and the single most useful thing the owner could do next.\n\nYou write for one rep reading their book on a Monday. They know the customer.\nThey do not need the metrics explained back to them \u2014 they need to know what\nchanged and what to do.",
+                "goal": "Say what moved, why it matters, and what to do about it \u2014 in four short fields a\nrep reads in fifteen seconds.\n\nYou succeed when:\n- every sentence traces to a component that actually moved, with its number\n- the recommended move is something this rep can do this week\n- the headline tells them something the score alone does not\n- a reviewer checking claim by claim finds nothing unsupported\n\nYou fail when:\n- you narrate noise. One quiet fortnight is not a downturn, and 78 to 76 is not\n  a decline. Small movement inside a band deserves \"steady\" and nothing more.\n- you restate the inputs: \"the score is 78, the band is steady\" is not a story\n- you recommend something generic \u2014 \"schedule a check-in call\", \"monitor\n  closely\" \u2014 that would fit any account in the book\n- you assert a cause the data does not contain. Spend fell; you do not know that\n  they are unhappy, that a competitor called, or that a project ended. You may\n  say the spend fell and what to ask about it.\n- you add currencies together. Never do this, in any field, for any reason.\n\nAn honest \"nothing much changed, here is the one thing worth watching\" is a\nbetter month-end note than a manufactured narrative.",
+                "instruction": "Today is {{today}}. The window under review is {{period}}.\n\nReview this account.\n\n{{account_health_json}}\n\n## WHAT YOU ARE GIVEN\n\n- score, band, prior_score, prior_band, movement \u2014 the number now, a month ago,\n  and whether it changed band. Bands, best to worst: thriving, steady, wobbling,\n  risk.\n- components \u2014 the four scored parts, each with its label, its value, its\n  weight, and the evidence sentence behind it:\n  - Payment recency \u2014 days since the last real customer payment\n  - Spend trend \u2014 this 30-day window against the one before it\n  - Product breadth \u2014 how many routes carry traffic. One route is concentration\n    risk however healthy the spend looks.\n  - Ownership \u2014 whether a person is responsible for the account\n- spend_windows \u2014 spend per 30-day window, per currency, most recent first\n- routes_held \u2014 the route numbers with a balance. Nothing in MSG91's database\n  says which route number is SMS, WhatsApp or voice, so never name a product\n  from a route number. Say \"a second route\", not \"WhatsApp\".\n- days_since_payment, days_silent\n- notes \u2014 what reps wrote in user_comment. A person's own words about this\n  account outrank any inference you would draw from the numbers.\n- change_log \u2014 what MSG91 staff changed on the account this month\n\n## WHAT COUNTS AS MOVEMENT\n\n- A band change is always the story. Lead with it.\n- Within a band: 10 points or more is movement worth a sentence. Under 5 points\n  is noise \u2014 say the account held steady and move to what is worth watching.\n- A spend change under 15% between windows is normal variation for this\n  business. Do not call it growth or decline.\n- Product breadth going from one route to two is a bigger event than a spend\n  rise of the same score value. It is the difference between a customer who can\n  leave in a week and one who cannot.\n- days_silent above 60 on an owned account is worth saying out loud whatever the\n  score is.\n\n## THE FOUR FIELDS\n\nheadline \u2014 one sentence, under 90 characters, the thing the rep did not already\nknow. Not the score. Not the band.\n  Good: \"Growing on SMS, and blind to everything else.\"\n  Good: \"Paid on time all year, then nothing for 47 days.\"\n  Bad:  \"Account health is steady at 78.\" \u2014 they can see that.\n\nwhy \u2014 two sentences at most, citing the components that moved and their numbers.\nThis is where the evidence goes.\n\nrecommended_move \u2014 one action, specific to this account, doable this week. Name\nwhat to ask or what to propose. \"Ask whether the second department that started\nsending in August is still evaluating\" is a move. \"Engage the customer\" is not.\n\nexpected_effect \u2014 what changes if the move works, stated as the score\ntransition, e.g. \"78 \u2192 88 if a second department starts sending\". Be honest when\nthe ceiling is low: \"no score change, but it protects the \u20b94.2L already there\"\nis a legitimate answer.\n\nevidence \u2014 the component-and-fact pairs that back the above, each as a two-item\npair of [label, fact]. Every claim in why must appear here.\n\n## THE RULES YOU CANNOT BREAK\n\n- Never convert or total across currencies. Report each currency separately, in\n  its own symbol, exactly as given.\n- Never name a product from a route number.\n- Never state a cause for a change. Report the change, suggest what to ask.\n- Never contradict a rep's own note. If the notes say the customer paused for a\n  known reason, that reason stands and your story accommodates it.\n- Never mention a customer's message content, recipients or traffic. You only\n  receive aggregates and that is deliberate.\n- If the movement is genuinely noise, say so plainly and lower your confidence.\n  A flat month is a real answer.\n\n## HOW TO REPLY\n\nReply with the account_review JSON object and nothing else, no markdown fence."
+            },
+            "fine_tune_model": {
+                "current_model": null
+            },
+            "temperature": 0.3,
+            "system_prompt_version_id": 50349
+        },
+        "apikey": "",
+        "gpt_memory": true,
+        "gpt_memory_context": null,
+        "folder_id": null,
+        "pre_tools": [],
+        "post_tool": null,
+        "is_drafted": true,
+        "parent_id": "6aa037ff125b5dfba6805695",
+        "published_version_id": "6aa037ff125b5dfba6805697",
+        "starterQuestion": [
+            "Last month my account moved from 'steady' to 'wobbling.' What specific component changed, and what can I do this week to address it?",
+            "Product breadth increased from one to two routes this month. Why does that matter, and what proactive action should I take now?",
+            "Spend trend dropped by more than 15% even though the band didn't change\u2014what does this imply for my account, and what should I dig into with the client?",
+            "Payment recency score worsened, but the spend trend is stable. What is driving this, and what one thing should I do before Friday?",
+            "There hasn't been any significant movement in score, but days_silent just crossed 60. What does this signify for my account health, and what should my next step be?"
+        ],
+        "version_description": "",
+        "doc_ids": [],
+        "built_in_tools": [],
+        "bridge_summary": "",
+        "user_reference": "",
+        "bridge_status": 1,
+        "function_ids": [],
+        "total_tokens": 0,
+        "ai_updates": {
+            "prompt_enhancer_percentage": 18,
+            "criteria_check": {
+                "Clarity of Role Definition": "PASS",
+                "Clarity of Goal/Output Requirements": "PASS",
+                "Constraints and Rules Explicitness": "PASS",
+                "Use of Provided Data Fields": "PASS",
+                "Non-ambiguity of What Counts as Movement": "PASS",
+                "Actionability of Recommended Move": "PASS",
+                "Verifiability of Claims (Evidence Linking)": "PASS",
+                "Handling of Edge/No-Change Cases": "PASS",
+                "Prohibition Rules (currencies, causality, routes, content)": "PASS",
+                "Output Format Specificity": "PASS",
+                "Temporal Context Specification (today/period)": "PARTIAL",
+                "Length & Brevity Targets (15-second read, short fields)": "PASS",
+                "Freedom from Generic/Boilerplate Advice": "PASS"
+            }
+        },
+        "createdAt": "2026-09-08T16:29:51.815Z",
+        "updatedAt": "2026-09-08T16:29:53.433Z",
+        "is_api_call": false,
+        "slugName": "pulse_account_review",
+        "responseIds": [],
+        "versions": [
+            "6aa037ff125b5dfba6805697"
+        ],
+        "defaultQuestions": [],
+        "meta": null,
+        "deletedAt": null,
+        "bridge_limit": 0,
+        "bridge_usage": 0,
+        "bridge_limit_reset_period": "monthly",
+        "bridge_limit_start_date": "2026-09-08T16:29:51.816Z",
+        "last_used": "2026-09-09T03:29:04.508Z",
+        "settings": {
+            "maximum_iterations": 3,
+            "publicUsers": [],
+            "editAccess": [],
+            "response_format": {
+                "type": "default"
+            },
+            "stateless_conversation": false
+        },
+        "chatbot_auto_answers": false,
+        "auto_model_select": null,
+        "cache_on": false,
+        "agent_info": {
+            "prompt_total_tokens": 1315,
+            "agent_variables": {
+                "fields": {
+                    "today": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "period": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "account_health_json": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    }
+                },
+                "required": []
+            },
+            "description": "",
+            "thread_id": false,
+            "ai_matching_custom_prompt": ""
+        },
+        "created_at": "2026-09-08T16:29:51.816Z",
+        "api_endpoints": [],
+        "__v": 0,
+        "IsstarterQuestionEnable": false,
+        "apiCalls": {},
+        "all_varaibles": []
+    },
+    "access": "admin"
+}

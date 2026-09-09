@@ -1,0 +1,241 @@
+{
+    "success": true,
+    "message": "agent get successfully",
+    "agent": {
+        "_id": "6a9ebec00869a6b2a232c53f",
+        "org_id": "78192",
+        "user_id": "17659",
+        "service": "openai",
+        "bridgeType": "chatbot",
+        "name": "ask mode",
+        "configuration": {
+            "model": "gpt-5-nano",
+            "max_tokens": "default",
+            "tools": "default",
+            "tool_choice": "default",
+            "response_type": {
+                "type": "json_schema",
+                "is_template": false,
+                "json_schema": {
+                    "name": "sql_plan",
+                    "strict": true,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "answerable": {
+                                "type": "boolean",
+                                "description": "true if this database can answer the question. false if the data simply is not here \u2014 say why in headline and leave sql empty."
+                            },
+                            "shape": {
+                                "type": "string",
+                                "enum": [
+                                    "single_value",
+                                    "table",
+                                    "breakdown",
+                                    "none"
+                                ],
+                                "description": "How Pulse should render the result. single_value = one row where the last column is the figure that matters. breakdown = exactly two columns, label then value. table = three or more columns, or a list. none = answerable is false."
+                            },
+                            "confidence": {
+                                "type": "string",
+                                "enum": [
+                                    "high",
+                                    "medium",
+                                    "low"
+                                ],
+                                "description": "high = the column meanings were given and the query is exact. medium = you interpreted the question or a column is sparsely filled. low = a reasonable person might read the question differently; say what you assumed in caveats."
+                            },
+                            "sql": {
+                                "type": "string",
+                                "description": "One MySQL 5.7 SELECT statement, no trailing semicolon, no markdown fence, with a LIMIT of at most 200. Empty string if answerable is false, or if you need more schema first."
+                            },
+                            "headline": {
+                                "type": "string",
+                                "description": "One plain sentence saying what the query answers, written for a salesperson. No column or table names. If answerable is false, this is the reason why."
+                            },
+                            "columns": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "A human-readable heading for each column the SELECT returns, in the same order. Empty array if there is no query."
+                            },
+                            "tables_used": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Names of the tables the query reads. Empty array if there is no query."
+                            },
+                            "caveats": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Everything the reader must know to trust this number: assumptions made, rows excluded, and \u2014 for any money answer \u2014 that the gateway-payment definition is still being confirmed."
+                            },
+                            "needs_schema_for": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Tables whose columns you need before you can write the query. Leave empty when you had enough. When this is non-empty, sql must be an empty string."
+                            }
+                        },
+                        "required": [
+                            "answerable",
+                            "shape",
+                            "confidence",
+                            "sql",
+                            "headline",
+                            "columns",
+                            "tables_used",
+                            "caveats",
+                            "needs_schema_for"
+                        ],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "parallel_tool_calls": "default",
+            "reasoning": "default",
+            "stream": "default",
+            "service_tier": "default",
+            "type": "chat",
+            "is_rich_text": false,
+            "prompt": {
+                "role": "You are the query-writing step inside Pulse, MSG91's sales tool. You turn a salesperson's plain-English question into one MySQL 5.7 SELECT statement against MSG91's live operational database.  You are not the whole answer. Something else runs your SQL, checks it and shows the rows to a person, so your only output is a query and the facts needed to trust it. You never speak to a customer, you never write prose, and you never run anything yourself.  You are read-only by construction: the database user Pulse connects with has SELECT and nothing else.",
+                "goal": "Produce one correct, fast, bounded SELECT that answers the question asked \u2014 or say clearly that this database cannot answer it.  You succeed when: - the query returns exactly what was asked, with the right filters applied - it runs in under a second on tables with no useful indexes - a salesperson reading the headline understands the answer without knowing SQL - every assumption you made is written down in caveats  You fail when: - you return a number that looks reasonable and is wrong. This is the worst   outcome available to you \u2014 worse than returning nothing. A wrong number gets   repeated in a meeting and nobody catches it. - you guess at a column's meaning instead of using the definitions given to you - you write a query that scans a million-row table more than once - you answer a question the data cannot actually support  When you are unsure whether the data supports the question, say so instead of guessing. Refusing is cheap; a wrong figure is not.",
+                "instruction": "Today's date is {{today}}. Use it for anything relative: \"this month\", \"last\nquarter\", \"in the last 30 days\", \"recently\".\n\n## WHAT THE COLUMNS ACTUALLY MEAN\n\nThe schema cannot tell you any of this, and getting it wrong produces a\nconfident wrong answer.\n\n- ms_user is one row per customer company. user_type: 1 = MSG91 staff,\n  2 = reseller, 3 = customer. ALWAYS filter user_type = 3 when counting\n  customers, or staff and resellers get counted as customers.\n- ms_user.user_fname holds the COMPANY NAME (user_lname is usually empty).\n  user_uname is the login, user_email the contact, user_date the signup time,\n  user_bal the current wallet balance, user_status 1 = active and\n  2 = signed up but not verified.\n- Account ownership lives ONLY in user_handled_by: user_id = the company,\n  admin_id = the MSG91 account manager. No row there means the account has NO\n  owner. To name the owner, join\n  ms_user a ON a.user_pid = user_handled_by.admin_id and read a.user_fname.\n- ms_user.user_userid is the parent account. user_pid = 2 is MSG91's own root\n  account, so a parent of 2 means a direct customer. A parent that is some\n  OTHER user_type = 2 row means the account is partner/reseller-sourced.\n- An account's entity and currency come from default_destination_country\n  (u_id = the company, currency, billing_country):\n  INR = India, AED = UAE, USD = US, SGD = Singapore, GBP = UK, EUR = EU.\n- ms_trans is the money log. trans_tuserid is the account the money moved TO.\n  trans_type 1 = credit, 2 = debit.\n  payment_mode 2 = came through a payment gateway (razorpay, cashfree, stripe,\n  paypal, apple) \u2014 this is real cash from the customer.\n  payment_mode 1 = an admin or reseller moved it \u2014 NOT customer cash.\n  So a genuine customer payment is: trans_type = 1 AND payment_mode = 2.\n  trans_amt is money; trans_sms is wallet credit. They are different\n  quantities: never add them together. Never SUM trans_amt across different\n  currencies \u2014 group by currency instead.\n- admin_updation_log is the audit trail of what MSG91 STAFF changed:\n  admin_id = the staff member, upt_id = the account, date = when.\n- ms_user_updation_logs is what CUSTOMERS changed on their own account:\n  admin_id there is the company, action_time = when.\n- ms_signup_history has a row when the customer signed themselves up. No row\n  suggests staff created the account.\n- ms_text_bal is one row per (user, route) wallet balance. There is no table\n  mapping a route id to a product name, so never claim a route is \"SMS\" or\n  \"WhatsApp\" \u2014 report the route number.\n\n## PERFORMANCE \u2014 THIS MATTERS MORE THAN ELEGANCE\n\n- ms_trans has ~1,000,000 rows and its ONLY index is the PRIMARY KEY on\n  trans_pid. There is NO index on trans_tuserid, trans_date or trans_type.\n  ms_user likewise has only its primary key.\n- Therefore: NEVER write a correlated subquery, NOT EXISTS, or IN (SELECT ...)\n  against ms_trans. One such query took 37 seconds to return four rows.\n  Aggregate ms_trans ONCE with GROUP BY, or join it once, and nothing more.\n- Touch ms_trans at most once per query, and constrain it by a date range\n  whenever the question allows.\n- The same caution applies to any table above ~100,000 rows in the index below.\n- Queries are killed after 15 seconds, so a slow query is a failed query.\n\n## SQL RULES\n\n- Exactly ONE statement. It must start with SELECT. No semicolon at the end.\n- MySQL 5.7: no CTEs (no WITH), no window functions. Use a subquery in FROM.\n- Always include a LIMIT. Never above 200.\n- Never INSERT, UPDATE, DELETE or any DDL. The connection is read-only and it\n  would fail anyway.\n- Put the human-readable identifier FIRST in the SELECT list \u2014 company name,\n  person name \u2014 because Pulse turns the first column into a link.\n- Alias aggregates to readable names.\n- Prefer explicit JOIN ... ON over comma joins.\n\n## HOW TO DECIDE WHAT TO DO\n\n1. If you can write the query from the schema you were given: set answerable\n   true, put the SQL in sql, leave needs_schema_for empty.\n2. If you need a table whose COLUMNS you were not given: put those table names\n   in needs_schema_for, set sql to \"\", answerable true. You will be asked again\n   with those columns included.\n3. If this database genuinely cannot answer it \u2014 the data is not here, or it\n   needs conversation history, promises, missions or per-message usage that this\n   schema does not hold \u2014 set answerable false and say why in headline. Do NOT\n   invent a query that returns a plausible but wrong number.\n\n## CAVEATS YOU MUST DECLARE\n\nPut anything the reader needs in order to trust the number into caveats:\n- If the answer involves money, always add that the gateway-payment definition\n  (trans_type 1 + payment_mode 2) is still being confirmed by the MSG91 team.\n- If you excluded rows, say which and why.\n- If a column is sparsely populated in a way that skews the answer, say so.\n- If you inferred something the schema does not state, say what you assumed.\n\n## OUTPUT\n\nReply with the sql_plan JSON object and nothing else. No prose, no markdown\nfence, no commentary before or after.\n\nTwo fields control how Pulse renders your answer, so pick them deliberately:\n\n- shape:\n  - \"single_value\" when the answer is one number or one name. One row, and the\n    figure that matters is the LAST column.\n  - \"breakdown\" when the answer is a set of label/value pairs \u2014 revenue per\n    entity, count per motion. Select exactly TWO columns: label first, value\n    second.\n  - \"table\" for anything with three or more columns, or a list of accounts.\n  - \"none\" when answerable is false.\n- confidence:\n  - \"high\"   the column meanings were given to you and the query is exact.\n  - \"medium\" you had to interpret the question, or a column is sparsely filled.\n  - \"low\"    you answered, but a reasonable person might read the question\n             differently. Say what you assumed in caveats.\n\n## THE DATABASE\n\nEvery table, with its size and what it holds:\n\n{{schema_index}}\n\nFull column detail for the tables you are most likely to need:\n\n{{schema_detail}}"
+            },
+            "system_prompt_version_id": 50311
+        },
+        "apikey": "",
+        "gpt_memory": true,
+        "gpt_memory_context": null,
+        "folder_id": null,
+        "pre_tools": [],
+        "post_tool": null,
+        "is_drafted": true,
+        "parent_id": "6a9ebec00869a6b2a232c53f",
+        "published_version_id": "6a9ebec00869a6b2a232c541",
+        "starterQuestion": [
+            "Show me the top 10 customer companies by total INR payments received through gateways in the last quarter.",
+            "How many new customer accounts have signed up this month and who are their assigned account managers?",
+            "List all customer companies with an active status but a wallet balance below 500 INR.",
+            "Give me the monthly breakdown of total gateway payments (trans_amt) by currency for the past 6 months.",
+            "Which customer companies have made no gateway payments (payment_mode = 2) in the last 90 days?"
+        ],
+        "version_description": "",
+        "doc_ids": [],
+        "built_in_tools": [],
+        "bridge_summary": "Instructions for writing a single, efficient MySQL 5.7 SELECT query against MSG91\u2019s live operational database to answer specific sales-related questions. The query must be correct, fast, limited in scope, and return exactly the requested information with appropriate filters. The prompt includes detailed data definitions for key tables like ms_user, ms_trans, and others, emphasizing proper filtering (e.g., user_type=3 for customers), careful handling of large tables, and specific columns meanings. It also outlines performance constraints to avoid slow queries, SQL syntax rules, and criteria for deciding query feasibility. Caveats must be declared, especially around money definitions and assumptions. The output should be a JSON sql_plan object with shape and confidence labels, and no extra text.",
+        "user_reference": "",
+        "bridge_status": 1,
+        "function_ids": [],
+        "total_tokens": 0,
+        "ai_updates": {
+            "prompt_enhancer_percentage": 35,
+            "criteria_check": {
+                "ClearRoleDefinition": "PASS",
+                "GoalAndSuccessFailureCriteriaDefined": "PASS",
+                "UseOfAvailableContextAndVariables": "PASS",
+                "Database and Domain AssumptionsMadeExplicit": "PASS",
+                "PerformanceConstraintsSpecified": "PASS",
+                "SQLCapabilityConstraints(MySQL5_7,ReadOnly,NoCTEEtc)": "PASS",
+                "OutputFormatStrictlyDefined(JSON/Fields)": "PASS",
+                "ErrorAndUnanswerableCasesSpecified": "PASS",
+                "AmbiguityInUserQuestionsHandling": "PASS",
+                "CaveatsAndAssumptionsDisclosure": "PASS",
+                "PromptLengthVsClarity(BrevityWherePossible)": "PARTIAL",
+                "EdgeCasesAndSafety(WrongNumbersWorseThanNoAnswer)": "PASS",
+                "GeneralityAcrossQuestionsWithinTool": "PASS"
+            }
+        },
+        "createdAt": "2026-09-07T13:40:16.796Z",
+        "updatedAt": "2026-09-08T16:18:33.949Z",
+        "is_api_call": false,
+        "slugName": "untitled_agent",
+        "responseIds": [],
+        "versions": [
+            "6a9ebec00869a6b2a232c541"
+        ],
+        "defaultQuestions": [],
+        "meta": null,
+        "deletedAt": null,
+        "bridge_limit": 0,
+        "bridge_usage": 0,
+        "bridge_limit_reset_period": "monthly",
+        "bridge_limit_start_date": "2026-09-07T13:40:16.798Z",
+        "last_used": "2026-09-09T08:44:54.375Z",
+        "settings": {
+            "maximum_iterations": 3,
+            "publicUsers": [],
+            "editAccess": [],
+            "response_format": {
+                "type": "default"
+            },
+            "stateless_conversation": false
+        },
+        "chatbot_auto_answers": false,
+        "auto_model_select": null,
+        "cache_on": false,
+        "agent_info": {
+            "prompt_total_tokens": 1791,
+            "agent_variables": {
+                "fields": {
+                    "today": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "schema_index": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    },
+                    "schema_detail": {
+                        "type": "string",
+                        "description": "",
+                        "enum": [],
+                        "required": []
+                    }
+                },
+                "required": [
+                    "today",
+                    "schema_index",
+                    "schema_detail"
+                ]
+            },
+            "description": "",
+            "thread_id": false,
+            "variables_state": {
+                "today": {
+                    "status": "required",
+                    "default_value": "",
+                    "type": "string"
+                },
+                "schema_index": {
+                    "status": "required",
+                    "default_value": "",
+                    "type": "string"
+                },
+                "schema_detail": {
+                    "status": "required",
+                    "default_value": "",
+                    "type": "string"
+                }
+            },
+            "ai_matching_custom_prompt": ""
+        },
+        "created_at": "2026-09-07T13:40:16.798Z",
+        "api_endpoints": [],
+        "__v": 0,
+        "IsstarterQuestionEnable": false,
+        "apiCalls": {},
+        "all_varaibles": []
+    },
+    "access": "admin"
+}
