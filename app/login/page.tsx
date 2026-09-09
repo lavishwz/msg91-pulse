@@ -9,12 +9,11 @@
 
 import { Suspense } from "react";
 import LoginForm from "./login-form";
+import { REFERENCE_ID } from "@/lib/pulse/proxy-app";
 
 export const metadata = { title: "Sign in · MSG91 Pulse" };
 
 export default function LoginPage() {
-  const referenceId = (process.env.REFERENCEID ?? "").trim();
-
   return (
     <main className="authpage">
       <div className="authcard">
@@ -31,7 +30,7 @@ export default function LoginPage() {
         {/* useSearchParams() bails out of prerendering, so the client half sits
             under a boundary of its own. */}
         <Suspense fallback={<div className="authwait">Loading the sign-in widget…</div>}>
-          <LoginForm referenceId={referenceId} />
+          <LoginForm referenceId={REFERENCE_ID} />
         </Suspense>
       </div>
     </main>
