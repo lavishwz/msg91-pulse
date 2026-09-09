@@ -9,7 +9,7 @@
     "lint": "next lint",
     "db:check": "node scripts/db-check.mjs",
     "test:guard": "node --experimental-strip-types tests/sqlguard.test.mjs",
-    "test": "npm run test:guard && npm run test:ruleguard && npm run test:gtwy && npm run test:allowlist && npm run test:drafts && npm run test:members",
+    "test": "npm run test:guard && npm run test:ruleguard && npm run test:watermark && npm run test:gtwy && npm run test:allowlist && npm run test:drafts && npm run test:members",
     "test:gtwy": "node --experimental-strip-types tests/gtwy.test.mjs",
     "test:allowlist": "node --experimental-strip-types tests/allowlist.test.mjs",
     "db:local": "bash scripts/local-db/up.sh",
@@ -20,6 +20,7 @@
     "store:reset": "bash scripts/pulse-store/up.sh reset",
     "test:drafts": "node --experimental-strip-types tests/drafts.test.mjs",
     "store:migrate": "curl -s -X POST \"http://127.0.0.1:3100/api/pulse/store/migrate?secret=$(grep ^AUTOPILOT_TICK_SECRET= .env.local | cut -d= -f2-)\"",
+    "test:watermark": "node --experimental-strip-types tests/watermark.test.mjs",
     "test:ruleguard": "node --experimental-strip-types tests/rule-guard.test.mjs",
     "test:members": "node --experimental-strip-types tests/members.test.mjs"
   },

@@ -22,8 +22,9 @@
  *   first time it ran.
  */
 
+import { randomUUID } from "node:crypto";
 import { query } from "@/lib/db";
-import { read, write } from "@/lib/store";
+import { read, write, acquireLock, releaseLock } from "@/lib/store";
 import { guard } from "@/lib/pulse/sqlguard";
 import { judgeRow } from "../agents";
 import { due, recordRun, type Automation } from "./automations";
@@ -57,6 +58,8 @@ export type AutomationPass = {
   ran: number;
   alerts: number;
   runs: AutomationRun[];
+  /** Set when the pass did not run at all, e.g. another one holds the lock. */
+  skipped?: string;
 };
 
 /**
@@ -85,6 +88,19 @@ async function advanceMark(key: string, position: string, count: number): Promis
     ["automation:" + key, position, count],
   );
   MARKS.set(key, position);
+}
+
+/**
+ * A watermark value as a string that sorts correctly.
+ *
+ * The driver hands DATETIME columns back as Date objects, and String(date)
+ * gives "Wed Jun 24 2026 05:21:14 GMT+0530" — which compares alphabetically,
+ * so Wednesday sorts after Monday and the watermark stops meaning anything.
+ * ISO is the only form where string order and time order agree.
+ */
+function markOf(v: unknown): string {
+  if (v instanceof Date) return v.toISOString();
+  return String(v ?? "");
 }
 
 /** Write what the worker decided, as a card a person will see. */
@@ -168,7 +184,7 @@ export async function runOne(a: Automation, deadline = Date.now() + PASS_BUDGET_
   const mark = a.watermarkCol ? await loadMark(a.key) : null;
   let fresh = rows;
   if (a.watermarkCol && mark) {
-    fresh = rows.filter((r) => String(r[a.watermarkCol!] ?? "") > mark);
+    fresh = rows.filter((r) => markOf(r[a.watermarkCol!]) > mark);
   }
   fresh = fresh.slice(0, a.maxRows);
 
@@ -181,7 +197,7 @@ export async function runOne(a: Automation, deadline = Date.now() + PASS_BUDGET_
       break;
     }
     if (a.watermarkCol) {
-      const v = String(row[a.watermarkCol] ?? "");
+      const v = markOf(row[a.watermarkCol]);
       if (v > highest) highest = v;
     }
     try {
@@ -210,16 +226,32 @@ export async function runOne(a: Automation, deadline = Date.now() + PASS_BUDGET_
 
 /** One pass over everything due. Called by the tick. */
 export async function runAutomations(limit = 10, budgetMs = PASS_BUDGET_MS): Promise<AutomationPass> {
-  const deadline = Date.now() + budgetMs;
-  const list = await due(new Date(), limit);
-  const runs: AutomationRun[] = [];
-  for (const a of list) {
-    if (Date.now() > deadline) break;
-    runs.push(await runOne(a, deadline));
+  /* One pass at a time.
+     A pass takes up to ninety seconds and the tick is called from outside on a
+     schedule, so nothing stops a second call arriving mid-pass. Two passes
+     overlapping is not merely wasted spend: each reads the automation rows for
+     itself, so a pass that started before a rule changed goes on running the
+     old query alongside the new one, and the alerts interleave. That happened
+     the first time this ran, and it is why the lock is here rather than left
+     to the caller. */
+  const holder = randomUUID();
+  const got = await acquireLock("automations", holder, Math.ceil(budgetMs / 1000) + 30);
+  if (!got) return { ran: 0, alerts: 0, runs: [], skipped: "another pass is already running" };
+
+  try {
+    const deadline = Date.now() + budgetMs;
+    const list = await due(new Date(), limit);
+    const runs: AutomationRun[] = [];
+    for (const a of list) {
+      if (Date.now() > deadline) break;
+      runs.push(await runOne(a, deadline));
+    }
+    return {
+      ran: runs.length,
+      alerts: runs.reduce((n, r) => n + r.alerts, 0),
+      runs,
+    };
+  } finally {
+    await releaseLock("automations", holder);
   }
-  return {
-    ran: runs.length,
-    alerts: runs.reduce((n, r) => n + r.alerts, 0),
-    runs,
-  };
 }
