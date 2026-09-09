@@ -82,6 +82,45 @@ export default function Page() {
         <div className="sh" id="ovb" role="dialog" aria-modal="true" suppressHydrationWarning></div>
       </div>
 
+      {/* Connection status, pinned bottom-left.
+          Deliberately not in the header: it is reference, not navigation, and it
+          is looked at when something seems wrong rather than on the way to
+          somewhere. Bottom-left is where a status bar has lived since every IDE
+          and browser put one there, and it stays out of the way of the scope
+          pills and the card deck. Fixed rather than page-end so it is legible
+          on a deploy without scrolling to find it. */}
+      <footer className="dbbar" aria-label="Database connections">
+        <span className="dbdots">
+          <span
+            id="dbdot-msg91"
+            className="dbdot"
+            data-state="unknown"
+            data-tip="Checking MSG91||Asking whether Pulse can reach MSG91's database — the accounts, payments and signups it reads."
+            role="status"
+            aria-live="polite"
+          >
+            <i></i>
+            <span className="sr">MSG91 database: checking</span>
+          </span>
+          <span className="dblbl">MSG91</span>
+        </span>
+        <span className="dbsep"></span>
+        <span className="dbdots">
+          <span
+            id="dbdot"
+            className="dbdot"
+            data-state="unknown"
+            data-tip="Checking the store||Asking whether Pulse can reach the database it writes decisions to."
+            role="status"
+            aria-live="polite"
+          >
+            <i></i>
+            <span className="sr">Store: checking</span>
+          </span>
+          <span className="dblbl">Store</span>
+        </span>
+      </footer>
+
       {/* The live-data layer must be defined before the renderer runs. */}
       <Script src="/pulse-live.js" strategy="afterInteractive" />
       <Script src="/pulse.js" strategy="afterInteractive" />

@@ -307,6 +307,70 @@ window.PulseLive = (function () {
     return byCode[res && res.code] || "Something went wrong working that out. Try asking it a different way.";
   }
 
+  /**
+   * Keep the header's store light current.
+   *
+   * Polled rather than derived from whichever request happened last: the store
+   * can go while the app carries on serving MSG91 data perfectly, and that is
+   * exactly the failure nobody notices. Sixty seconds is often enough to catch
+   * it and rare enough to cost nothing.
+   *
+   * The three states are kept distinct on purpose. "Connected but nothing
+   * migrated" and "cannot connect" both mean Autopilot is doing nothing, but
+   * they are fixed by different things — one by running the migration, the
+   * other by correcting PULSE_STORE_*.
+   */
+  function paintDot(id, state, title, detail) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.dataset.state = state;
+    el.dataset.tip = `${title}||${detail}`;
+    const sr = el.querySelector(".sr");
+    if (sr) sr.textContent = title;
+  }
+
+  async function checkStore() {
+    try {
+      const res = await fetch("/api/health/store", { headers: { accept: "application/json" } });
+      const body = await res.json().catch(() => ({ ok: false, error: "bad JSON" }));
+      if (body.ok && Number(body.tables) > 0) {
+        paintDot("dbdot", "live", "Store connected",
+          `${body.database} · ${body.tables} tables. Autopilot can write decisions.`);
+      } else if (body.ok) {
+        paintDot("dbdot", "empty", "Store empty",
+          `Connected to ${body.database}, but it has no tables — the schema never migrated, so Autopilot will record nothing. Run npm run store:up.`);
+      } else {
+        paintDot("dbdot", "down", "Store unreachable",
+          "Pulse cannot reach the database it writes to, so Autopilot is recording nothing. Check PULSE_STORE_HOST, PORT, USER and PASSWORD.");
+      }
+    } catch (err) {
+      paintDot("dbdot", "down", "Store unreachable", "The health check itself failed: " + err.message);
+    }
+  }
+
+  /**
+   * The read connection. Distinct from the store check because this is the one
+   * that is IP-bound: it works on a machine MSG91 has allowlisted and nowhere
+   * else, which is why a deployed copy can look healthy and show nothing real.
+   */
+  async function checkMsg91() {
+    try {
+      const res = await fetch("/api/health/db", { headers: { accept: "application/json" } });
+      const body = await res.json().catch(() => ({ ok: false, error: "bad JSON" }));
+      if (body.ok) {
+        paintDot("dbdot-msg91", "live", "MSG91 connected",
+          `${body.database || "MSG91"}${body.serverVersion ? " · MySQL " + body.serverVersion : ""}. Accounts, payments and signups are real.`);
+      } else {
+        paintDot("dbdot-msg91", "down", "MSG91 unreachable",
+          "Pulse cannot reach MSG91's database, so every account and number on screen is the prototype's sample data. The host is IP-bound — this copy may not be allowlisted.");
+      }
+    } catch (err) {
+      paintDot("dbdot-msg91", "down", "MSG91 unreachable", "The health check itself failed: " + err.message);
+    }
+  }
+
+  const checkConnections = () => { checkMsg91(); checkStore(); };
+
   /** Replace the audit feed with real staff actions. */
   async function loadAudit(bag, render) {
     try {
@@ -1162,7 +1226,12 @@ window.PulseLive = (function () {
      * Fetch and apply. `bag` carries references to the renderer's data objects;
      * `render` is the renderer's own entry point.
      */
+    checkConnections,
     async boot(bag, render) {
+      /* Before anything else: neither light may sit on "checking" if the very
+         first request is the one that fails. */
+      checkConnections();
+      setInterval(checkConnections, 60_000);
       try {
         const data = await get("/api/pulse/bootstrap");
         apply(data, bag);

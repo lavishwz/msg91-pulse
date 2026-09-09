@@ -4,7 +4,7 @@
  --line:#E4DFD2; --line2:#D5CFBE;
  --br:#1E75B9; --br-d:#175C92; --br-s:#E5EFF8;
  --watch:#8A6C1E; --watch-s:#F0E9D6;
- --ok:#48684A;
+ --ok:#48684A;--bad:#8F3A2C;
  --sh:0 1px 2px rgba(26,24,19,.04),0 8px 22px -14px rgba(26,24,19,.18);
  --f:"Instrument Sans",system-ui,-apple-system,sans-serif;
  --m:"IBM Plex Mono",ui-monospace,monospace;
@@ -806,3 +806,68 @@ h1 .sl{color:var(--faint)}
 .skcard{border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:14px;background:var(--raise)}
 @keyframes skpulse{0%{background-position:100% 50%}100%{background-position:0 50%}}
 @media (prefers-reduced-motion:reduce){.sk{animation:none}}
+
+/* ── store indicator ───────────────────────────────────────────────────────
+   Is the writable half reachable? The read connection failing is obvious, the
+   screen empties. The store failing is not: Autopilot decides nothing and the
+   Rules tab falls back to sample copy that reads like a working product. So the
+   light stays on screen, and it pulses — a still dot reads as decoration, a
+   moving one reads as a live reading.
+
+   Three states, because two would conflate two different faults:
+     live     connected, schema migrated      green
+     empty    connected, nothing migrated     amber
+     down     cannot reach it at all          red
+     unknown  not asked yet                   grey, no pulse            */
+.dbdots{display:inline-flex;align-items:center;gap:5px;flex:none}
+
+/* The bar itself. Pinned bottom-left, quiet enough to ignore and legible enough
+   to answer "is any of this real?" without opening a console. */
+.dbbar{position:fixed;left:14px;bottom:12px;z-index:40;display:flex;align-items:center;gap:9px;
+ padding:5px 10px 5px 8px;border:1px solid var(--line);border-radius:999px;
+ background:var(--raise);box-shadow:0 1px 3px rgba(26,24,19,.07);
+ font-family:var(--m);font-size:10px;letter-spacing:.09em;text-transform:uppercase;
+ color:var(--faint);pointer-events:auto}
+.dbbar:hover{color:var(--ink2)}
+.dblbl{line-height:1}
+.dbsep{width:1px;height:11px;background:var(--line);flex:none}
+
+/* On a narrow screen the deck already runs to the edges; shrink to the dots. */
+@media (max-width:560px){
+ .dbbar{left:10px;bottom:10px;gap:7px;padding:5px 8px}
+ .dblbl{display:none}}
+.dbdot{display:inline-flex;align-items:center;justify-content:center;
+ width:18px;height:18px;flex:none;margin-left:-2px;cursor:default;position:relative}
+.dbdot i{width:7px;height:7px;border-radius:50%;background:var(--faint);
+ display:block;position:relative;z-index:1}
+
+/* The halo is a second element rather than a box-shadow so it can scale
+   without nudging layout. */
+.dbdot::after{content:"";position:absolute;width:7px;height:7px;border-radius:50%;
+ background:currentColor;opacity:0;color:var(--faint)}
+
+.dbdot[data-state="live"]{color:var(--ok)}
+.dbdot[data-state="live"] i{background:var(--ok)}
+.dbdot[data-state="live"]::after{animation:dbpulse 2.4s ease-out infinite}
+
+.dbdot[data-state="empty"]{color:var(--watch)}
+.dbdot[data-state="empty"] i{background:var(--watch)}
+.dbdot[data-state="empty"]::after{animation:dbpulse 2.4s ease-out infinite}
+
+.dbdot[data-state="down"]{color:var(--bad)}
+.dbdot[data-state="down"] i{background:var(--bad)}
+.dbdot[data-state="down"]::after{animation:dbpulse 1.2s ease-out infinite}
+
+@keyframes dbpulse{
+ 0%{transform:scale(1);opacity:.55}
+ 70%{transform:scale(3.1);opacity:0}
+ 100%{transform:scale(3.1);opacity:0}}
+
+/* A pulse is decoration; the colour carries the meaning. Anyone who has asked
+   for less motion still gets the reading. */
+@media (prefers-reduced-motion:reduce){.dbdot::after{animation:none}}
+
+/* Visually hidden, still read aloud — the dot is the only thing telling you
+   the write path is gone, so it cannot be colour alone. */
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+ clip:rect(0 0 0 0);white-space:nowrap;border:0}
