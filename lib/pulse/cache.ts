@@ -45,3 +45,18 @@ export async function cached<T>(
 export function clearCache(): void {
   store.__pulseCache?.clear();
 }
+
+/**
+ * Drop every entry whose key starts with `prefix`.
+ *
+ * This is what "Recompute" on an answer calls. Without it the button would
+ * re-request a value the server hands straight back out of the TTL map, which
+ * looks identical to doing nothing — the failure this button had to begin with.
+ */
+export function drop(prefix: string): number {
+  const map = store.__pulseCache;
+  if (!map) return 0;
+  let n = 0;
+  for (const k of [...map.keys()]) if (k.startsWith(prefix)) { map.delete(k); n++; }
+  return n;
+}

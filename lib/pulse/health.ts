@@ -264,8 +264,22 @@ export async function healthFor(
 export type BoardBand = {
   band: Band;
   count: number;
-  /** Accounts in the band, worst-first within thriving/steady, best-first below. */
-  accounts: { id: number; name: string; score: number; delta: number }[];
+  /**
+   * Accounts in the band, worst-first within thriving/steady, best-first below.
+   *
+   * `currency` and `moved` are carried per account because the lens on Now
+   * filters client-side: without them the board could only filter the account
+   * *names* it recognises, and the money and movement beside them would go on
+   * describing every account regardless of the country picked.
+   */
+  accounts: {
+    id: number;
+    name: string;
+    score: number;
+    delta: number;
+    currency: string;
+    moved: AccountHealth["moved"];
+  }[];
 };
 
 /** Money is never summed across currencies (handover §7.2). */
@@ -315,7 +329,14 @@ export function toBoard(
     const inBand = scored
       .filter((a) => a.h.band === band)
       .sort((x, y) => y.h.score - x.h.score)
-      .map((a) => ({ id: Number(a.id), name: a.name, score: a.h.score, delta: a.h.delta }));
+      .map((a) => ({
+        id: Number(a.id),
+        name: a.name,
+        score: a.h.score,
+        delta: a.h.delta,
+        currency: (a.currency ?? "").trim().toUpperCase() || "INR",
+        moved: a.h.moved,
+      }));
     return { band, count: inBand.length, accounts: inBand };
   });
 

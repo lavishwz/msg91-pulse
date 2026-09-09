@@ -964,10 +964,22 @@ VIEWS.forEach(function(v){
 
 const S={v:"now",scope:"me",tab:"activity",ask:"mine",teamTab:"won",from:null,cust:null,doneOpen:0,flightOpen:1,roomOpen:0,newRep:0,askTab:"ask",ostep:0,editRule:null,addingTo:null,act:"all",openRow:null,sel:new Set(),doneIds:new Set(),C:new Set(),M:new Set()};
 const main=$("#main");
+/* Opportunities dismissed with "Not now", by their headline. Keyed by text
+   rather than index because the list is rebuilt from live data on every load
+   and an index would dismiss whatever moved into that slot. */
+S.roomOff=new Set();
+/* Tags picked in the Add-a-tag sheet before it is saved. */
+S.tagPick=new Set();
+/* Autopilot proposals already answered, so an answered one stops asking. */
+S.prDone=new Set();
 
-function lensLab(){const c=[...S.C],m=[...S.M];if(!c.length&&!m.length)return "All";
- const p=a=>a.length<=2?a.join(" + "):a[0]+" +"+(a.length-1);
- return [c.length?p(c):null,m.length?p(m):null].filter(Boolean).join(" · ");}
+/* One country and one motion at a time — see the note on GEO. The label shows
+   the flag and the currency, so the symbol on every number below it is
+   accounted for rather than left to be guessed at. */
+function lensLab(){const c=lensCountry(),m=[...S.M][0]||null;
+ if(!c&&!m)return "All";
+ const cl=c?flagOf(c)+" "+c+" · "+lensCur():null;
+ return [cl,m].filter(Boolean).join(" · ");}
 /**
  * The live board, or null while it is still loading / when the prototype runs
  * standalone. Shape: /api/pulse/board's `board`.
@@ -976,10 +988,91 @@ let BOARD=null;
 
 /* Money, native currency, never summed across currencies. */
 const CUR={INR:"₹",AED:"AED ",USD:"$",SGD:"S$",GBP:"£",EUR:"€"};
-function purse(n,c){const sym=CUR[c]||(c?c+" ":"");
+
+/* The four countries the lens offers, each with the flag shown beside its name
+   and the currency its accounts actually transact in. The lens is single-select
+   precisely so this mapping is unambiguous: two countries at once would mean
+   two currencies, and this product never converts between them. */
+const GEO={
+ India:{flag:"🇮🇳",cur:"INR"},
+ UAE:{flag:"🇦🇪",cur:"AED"},
+ US:{flag:"🇺🇸",cur:"USD"},
+ Singapore:{flag:"🇸🇬",cur:"SGD"},
+ UK:{flag:"🇬🇧",cur:"GBP"},
+ Europe:{flag:"🇪🇺",cur:"EUR"}};
+/* Currency → country, so a live account can be placed from the only country
+   signal the database carries. */
+const CUR2GEO={};Object.keys(GEO).forEach(k=>{CUR2GEO[GEO[k].cur]=k;});
+
+/* Which countries the lens offers.
+   Derived from the accounts actually on the board rather than hardcoded: the
+   prototype's four included Singapore, which no live account uses, and left
+   out GBP, which plenty do — so picking a country could only ever narrow to
+   nothing or to everything. The prototype's list stands in until the board
+   has answered. */
+const GEO_ALL=["India","UAE","US","Singapore"];
+function lensCountries(){
+ if(!BOARD||!BOARD.bands)return GEO_ALL;
+ const seen=new Set();
+ BOARD.bands.forEach(b=>b.accounts.forEach(a=>{
+  const g=CUR2GEO[String(a.currency||"").toUpperCase()];if(g)seen.add(g);}));
+ /* Whatever is already picked stays offered, so a lens cannot become
+    unclearable when the board reloads without it. */
+ S.C.forEach(c=>seen.add(c));
+ return seen.size?Object.keys(GEO).filter(k=>seen.has(k)):GEO_ALL;}
+/* The country the lens is on, or null for All. */
+/* Where an opportunity leads. Only the ones with an unambiguous saved question
+   get an "Open in Ask" button — the rest open their own evidence and stop
+   there, which is better than sending someone to an answer about something
+   else. */
+function oppAsk(title,cta){const t=(title+" "+cta).toLowerCase();
+ if(/claim|nobody|unowned/.test(t))return "unowned";
+ if(/slip|wake|churn|risk/.test(t))return "churn";
+ if(/second product|flat/.test(t))return "flat";
+ if(/prospect|signed up|new compan/.test(t))return "signups";
+ if(/partner/.test(t))return "partner";
+ return null;}
+/* Where an answer's own action leads, or null if it names something Pulse
+   cannot yet do (create a mission, send a digest, export). A null hides the
+   button: an action that has nowhere to go should not be on screen at all,
+   which is the whole reason this audit started. */
+function answerActDest(act){const t=String(act||"").toLowerCase();
+ if(/unassigned|unowned|claim|nobody/.test(t))return {reassign:1};
+ if(/partner/.test(t))return {ask:"partner"};
+ if(/churn|recovery|risk/.test(t))return {ask:"churn"};
+ if(/flat/.test(t))return {ask:"flat"};
+ if(/signup|signed up/.test(t))return {ask:"signups"};
+ if(/draft|escalat|autopilot/.test(t))return {auto:1};
+ return null;}
+function lensCountry(){const c=[...S.C];return c.length?c[0]:null;}
+/* Its currency code, and the symbol every amount is written in while it is on. */
+function lensCur(){const c=lensCountry();return c&&GEO[c]?GEO[c].cur:null;}
+function lensSym(){const k=lensCur();return k?CUR[k]:null;}
+function flagOf(c){return c&&GEO[c]?GEO[c].flag:"";}
+/* The currency, in order: what the row itself carries, then the country the
+   lens is on, then INR. The last step is not a new assumption — the lakh/crore
+   branch below was already the no-currency default; it just used to render the
+   number with no symbol at all, which is the one thing money must never do. */
+function purse(n,c){c=c||lensCur()||"INR";const sym=CUR[c]||(c?c+" ":"");
  if(c==="INR"||!c)return n>=1e7?sym+(n/1e7).toFixed(2)+"Cr":n>=1e5?sym+(n/1e5).toFixed(1)+"L":sym+Math.round(n).toLocaleString("en-IN");
  return sym+Math.round(n).toLocaleString("en-US");}
-const purses=rows=>(rows&&rows.length?rows.map(r=>purse(r.amount,r.currency)).join(" · "):"—");
+/* Name → currency for the accounts the live board returned. Rebuilt whenever
+   BOARD is replaced, which is the only time it can change. */
+let BCUR=null,BCURSRC=false;
+function boardCurOf(name){
+ if(BCURSRC!==BOARD){BCUR=new Map();BCURSRC=BOARD;
+  if(BOARD&&BOARD.bands)BOARD.bands.forEach(b=>b.accounts.forEach(a=>{
+   if(a.currency)BCUR.set(a.name,String(a.currency).toUpperCase());}));}
+ return BCUR.get(name)||null;}
+
+/* The lens applied to a list of {currency, amount, accounts} rows.
+   These come from the server as an aggregate over every scored account, so
+   without this the money beside the board went on describing the whole book
+   while the headline count above it described one country. */
+function lensRows(rows){const want=lensCur();
+ return want&&rows?rows.filter(r=>String(r.currency||"INR").toUpperCase()===want):(rows||[]);}
+const purses=rows=>{const u=lensRows(rows);
+ return u.length?u.map(r=>purse(r.amount,r.currency)).join(" · "):"—";};
 
 /* The lens filters every scope, not only team and company. It used to return
    your own cards unfiltered, so picking "UAE" while on Your game changed the
@@ -990,10 +1083,27 @@ function vis(){return CARDS.filter(x=>x.s===S.scope).filter(x=>{
 
 /* Board membership. Country and motion come from the sample book snapshot —
    an account the lens knows nothing about stays visible rather than vanishing. */
-function inLens(n){const b=BOOK.find(x=>x[1]===n)||LENS_BOOK.find(x=>x[1]===n);if(!b)return true;
- return (!S.C.size||S.C.has(b[2]))&&(!S.M.size||S.M.has(b[3]));}
+function inLens(n){const b=BOOK.find(x=>x[1]===n)||LENS_BOOK.find(x=>x[1]===n);
+ if(b)return (!S.C.size||S.C.has(b[2]))&&(!S.M.size||S.M.has(b[3]));
+ /* A live account, which the sample book knows nothing about. Its currency is
+    the only country signal MySQL gives us, so that is what the country half of
+    the lens is checked against. Motion has no equivalent in the database, so a
+    motion on its own cannot filter live accounts — they stay visible rather
+    than vanishing, which is the same rule as before. */
+ const want=lensCur();if(!want)return true;
+ const cur=boardCurOf(n);
+ return cur?cur===want:true;}
 /* Names in one band. Live scores when the database has answered, the
    prototype's sample map until then. */
+/* Climbed and slipped, counted over the accounts the lens leaves visible. The
+   server's own totals cover every scored account and cannot answer this once a
+   country is picked. */
+function boardMoves(){
+ if(!BOARD)return {climbed:0,slipped:0};
+ if(!S.C.size&&!S.M.size)return {climbed:BOARD.climbed,slipped:BOARD.slipped};
+ const acc=BOARD.bands.flatMap(b=>b.accounts).filter(a=>inLens(a.name));
+ return {climbed:acc.filter(a=>a.moved==="up").length,
+         slipped:acc.filter(a=>a.moved==="down").length};}
 function bandOf(k){
  if(BOARD){const b=BOARD.bands.find(x=>x.band===k);
   return b?b.accounts.filter(a=>inLens(a.name)).map(a=>a.name):[];}
@@ -1072,8 +1182,8 @@ function vNow(){
    <span class="lensw"><button class="lensb" id="lensb" data-on="${lensLab()!=="All"}">
      <span>${lensLab()}</span><span class="car">▼</span></button>
     <div class="lens" id="lensm" hidden>
-     <h4>Country</h4>${["India","UAE","US","Singapore"].map(c=>
-      `<label><span>${c}</span><input type="checkbox" data-c="${c}" ${S.C.has(c)?"checked":""}><span class="bx"></span></label>`).join("")}
+     <h4>Country</h4>${lensCountries().map(c=>
+      `<label><span>${flagOf(c)} ${c} <em style="font-style:normal;color:var(--faint)">${CUR[GEO[c].cur].trim()}</em></span><input type="checkbox" data-c="${c}" ${S.C.has(c)?"checked":""}><span class="bx"></span></label>`).join("")}
      <h4>Motion</h4>${["Inbound","Outbound","Startup","Partner"].map(m=>
       `<label><span>${m}</span><input type="checkbox" data-m="${m}" ${S.M.has(m)?"checked":""}><span class="bx"></span></label>`).join("")}
      <button class="clr" id="lensc">Clear all</button></div></span></div>`;
@@ -1116,8 +1226,8 @@ function vNow(){
    ${lensLab()!=="All"?`<p class="sub2" style="color:var(--act)">Showing ${lensLab()} only.
      <button id="lensc2" style="color:var(--br);border-bottom:1px solid var(--br-s)">Clear</button></p>`:""}
    <p class="sub2">${BOARD
-     ?`<b>▲ ${BOARD.climbed} climbed a band this month.</b> ${
-        BOARD.slipped===0?"None slipped.":BOARD.slipped===1?"One slipped.":BOARD.slipped+" slipped."}`
+     ?(mv=>`<b>▲ ${mv.climbed} climbed a band this month.</b> ${
+        mv.slipped===0?"None slipped.":mv.slipped===1?"One slipped.":mv.slipped+" slipped."}`)(boardMoves())
      :`<b>▲ 2 climbed a band this month.</b> One slipped.`}</p>
    <div class="hbar">${BANDS.map((b,i)=>`<i class="b${i+1}" style="flex:${bandOf(b[0]).length||0.2}"></i>`).join("")}</div>
    <div class="bandline">${BANDS.map(([k,l,c,d])=>{
@@ -1128,13 +1238,17 @@ function vNow(){
      ${mv?`<em data-d="${mv<0?"down":"up"}">${mv>0?"▲"+mv:"▼"+Math.abs(mv)}</em>`:""}</span>`;}).join("")}</div>
    <div class="flash2" id="dflash" hidden></div></div>
   <div class="protects"><div class="lb3">What that protects</div>
-   ${BOARD?`<p><b>${purses(BOARD.protects)}</b>spent over the last thirty days by the ${
-      BOARD.protects.reduce((n,r)=>n+r.accounts,0)} accounts holding up</p>
-    <p class="rk2">${(()=>{const n=BOARD.atRisk.reduce((x,r)=>x+r.accounts,0);
+   ${BOARD?(()=>{const pro=lensRows(BOARD.protects),rsk=lensRows(BOARD.atRisk);
+     const held=pro.reduce((n,r)=>n+r.accounts,0);
+     return `<p><b>${purses(BOARD.protects)}</b>${held
+       ?`spent over the last thirty days by the ${held} account${held===1?"":"s"} holding up`
+       :`spent over the last thirty days — nothing here is holding up${
+          lensCur()?" in "+lensCur():""}`}</p>
+    <p class="rk2">${(()=>{const n=rsk.reduce((x,r)=>x+r.accounts,0);
       if(!n)return "Nothing here is wobbling or at risk.";
       return `${n} account${n===1?" is":"s are"} wobbling or at risk${
-       BOARD.atRisk.some(r=>r.amount>0)?`, worth ${purses(BOARD.atRisk)} last month`
-        :`, and ${n===1?"it":"they"} spent nothing last month`}.`;})()}</p>`
+       rsk.some(r=>r.amount>0)?`, worth ${purses(BOARD.atRisk)} last month`
+        :`, and ${n===1?"it":"they"} spent nothing last month`}.`;})()}</p>`;})()
     :`<p><b>${G.kept}</b>${G.keptSub}</p>
     <p class="rk2">${G.atRisk}.</p>`}</div></div>`;
 
@@ -1195,10 +1309,10 @@ function vNow(){
    ?grow.map(([t2,h2,p2,ev,cta])=>`<div class="prow3">
      <span class="pb2"><b>${h2}</b><span>${p2}</span>
       <span style="display:block;margin-top:6px;font-size:11px;letter-spacing:.08em;color:var(--faint)">${ev}</span></span>
-     <button class="go">${cta} →</button></div>`).join("")
+     <button class="go" data-opp="${encodeURIComponent(JSON.stringify([t2,h2,p2,ev,cta]))}">${cta} →</button></div>`).join("")
    :POINTS.slice(0,3).map(([v,h2,p2,cta])=>`<div class="prow3">
      <span class="pb2"><b>${h2}</b><span>${p2}</span></span>
-     <button class="go">${cta} →</button></div>`).join("")}
+     <button class="go" data-opp="${encodeURIComponent(JSON.stringify([v,h2,p2,"",cta]))}">${cta} →</button></div>`).join("")}
   <p class="boardnote">${growLive?"Each one is counted from the database as this page loaded."
    :"Three more below."}</p></section>`;
 
@@ -1277,11 +1391,11 @@ function vNow(){
  const roomSec=S.scope==="me"?`<section class="room${auto?" open":""}">
   <div class="lab">${auto?"Where I would look":`<button id="rtog" style="font-family:inherit;letter-spacing:inherit;color:var(--faint)">Room to grow · ${list.length} ${S.roomOpen?"▾":"▸"}</button>`}</div>
   ${auto||S.roomOpen?`${auto?`<p class="lead2">Ranked by what it is worth against what it costs you. Nothing here is urgent — that is the point.</p>`:""}
-   ${list.map(([k,h2,p2,ev,cta])=>`<div class="opp">
+   ${list.filter(r=>!S.roomOff.has(r[1])).map(([k,h2,p2,ev,cta])=>`<div class="opp">
     <div class="ok3"><span class="dot"></span>${k}</div><h3>${h2}</h3><p>${p2}</p>
     <div class="ev2">${ev}</div>
-    <div class="row"><button class="go solid">${cta} →</button>
-     <button class="go">Not now</button></div></div>`).join("")}`:""}</section>`:"";
+    <div class="row"><button class="go solid" data-opp="${encodeURIComponent(JSON.stringify([k,h2,p2,ev,cta]))}">${cta} →</button>
+     <button class="go" data-oppoff="${esc(h2)}">Not now</button></div></div>`).join("")}`:""}</section>`:"";
  const dlist=S.scope==="me"?DONE:S.scope==="team"?DONE_T:DONE_C;
  const dn=dlist.length+S.doneIds.size;
  const doneSec=(!S.newRep)?`<section class="done">
@@ -1377,7 +1491,8 @@ function vAsk(){
     a.total?` OF ${a.total}`:a.nextCursor!=null?"  ·  MORE AVAILABLE":""}</span>
    ${a.nextCursor!=null?`<button class="go solid" id="loadmore" style="padding:5px 13px;font-size:13px">Load ${
     a.total?Math.min(50,a.total-a.rows.length):50} more →</button>`:""}
-   <button class="go" style="padding:5px 13px;font-size:13px">Recompute</button>
+   <button class="go" id="recalc" data-recompute="${S.ask}" style="padding:5px 13px;font-size:13px">${
+    a.__recomputing?"Recomputing…":a.__recomputedAt?"Recomputed "+a.__recomputedAt:"Recompute"}</button>
    ${sel.size?`<span style="color:var(--br)">${sel.size} selected</span>
     <button class="go solid" style="padding:5px 13px;font-size:13px">Reassign ${sel.size} →</button>
     <button class="go" style="padding:5px 13px;font-size:13px">Create missions</button>`:
@@ -1401,7 +1516,7 @@ function vAsk(){
      AI answer that came back as a table — and an untraceable number is the
      one thing this surface must never show. */
    brkRows.length?`<div class="brk"${table?' style="margin-top:14px"':""}>${brkRows.map(([k,v])=>`<div><span>${k}</span><b>${v}</b></div>`).join("")}</div>${brkbar}`:""}
-  <div class="row">${a.cols||!a.act?"":`<button class="go solid">${a.act} →</button>`}
+  <div class="row">${a.cols||!a.act||!answerActDest(a.act)?"":`<button class="go solid" data-answeract="${esc(a.act)}">${a.act} →</button>`}
    <button class="go" id="pinq">${isPinned?"★ Pinned · unpin":"Pin this answer…"}</button>
    <button class="go">Share</button></div>
   ${(st=>`<div class="stamp">${st.map(x=>`<span>${x}</span>`).join("")}</div>`)(
@@ -1534,8 +1649,9 @@ function vAuto(){
       <button class="add" style="font-size:13px;color:var(--br);padding:9px 0 0;border-top:1px solid var(--line);width:100%"
        data-newrule="${key}">＋ Add a rule to ${label}</button></div>`;}).join("")}</div>`;
    })(window.PulseLive&&PulseLive.state.motionRules)}
-   ${t.pr.map(([h,p,a,b])=>`<div class="prop"><h4>${h}</h4><p>${p}</p>
-    <div class="row" style="margin-top:0"><button class="go solid">${a} →</button><button class="go">${b}</button></div></div>`).join("")}`;
+   ${t.pr.filter(([h])=>!S.prDone.has(h)).map(([h,p,a,b])=>`<div class="prop"><h4>${h}</h4><p>${p}</p>
+    <div class="row" style="margin-top:0"><button class="go solid" data-prop="yes" data-propq="${esc(h)}">${a} →</button>
+     <button class="go" data-prop="no" data-propq="${esc(h)}">${b}</button></div></div>`).join("")}`;
  } else if(S.tab==="activity"){
   if(!rows){
    /* The store has not answered, so the prototype's sample feed stands in. A
@@ -1734,7 +1850,7 @@ function vPartner(){
     <span class="rt3">${st.toUpperCase()}</span></div>`).join("")}
    <p style="font-size:12.5px;color:var(--faint);margin-top:12px">Showing 3 of ${pt[3]}. Every account here is co-owned — no price conversation happens without them on the thread.</p></div>
   <div class="row" style="margin-top:26px"><button class="go solid">Send this month's digest →</button>
-   <button class="go">Partner contacts</button></div></div>`;
+   <button class="go" data-pcontacts="${esc(pt[0])}">Partner contacts</button></div></div>`;
 }
 
 let CT=null;
@@ -2091,7 +2207,65 @@ document.addEventListener("click",e=>{
  const rret=t.closest("[data-rule-retire]");
  if(rret&&window.PulseLive&&PulseLive.retireMotionRule){
   PulseLive.retireMotionRule(rret.dataset.ruleRetire,()=>{$("#ov").hidden=true;render();});return;}
- if(t.closest("#rtest")){$("#tres").hidden=false;return;}
+ /* Reached only if the live layer is absent — the real test runs above, on
+    [data-rule-test]. Say so rather than opening an empty box. */
+ if(t.closest("#rtest")){const box=$("#tres");box.hidden=false;
+  box.textContent="The live layer is not loaded, so the rule cannot be replayed here.";return;}
+
+ /* Recompute one answer. The server drops its cached copy first, so the number
+    that comes back is genuinely recomputed. */
+ const rc=t.closest("[data-recompute]");
+ if(rc){const id=rc.dataset.recompute;
+  if(window.PulseLive&&PulseLive.recomputeAnswer){
+   const peek=!$("#pk").hidden;
+   PulseLive.recomputeAnswer(id,PULSE_BAG,()=>{render();if(peek)openPanel("answer",id);});
+  }
+  return;}
+
+ /* The answer's own action, routed by answerActDest. The claim route opens the
+    reassign dialog; that dialog's save is still waiting on a write endpoint. */
+ const aa=t.closest("[data-answeract]");
+ if(aa){const d=answerActDest(aa.dataset.answeract);
+  if(!d)return;
+  if(d.reassign){openReassign("Unassigned",0);return;}
+  if(d.auto){S.v="auto";S.tab="activity";render();return;}
+  S.ask=d.ask;S.sel=new Set();S.askTab="ask";S.v="ask";render();return;}
+
+ /* Room to grow. */
+ const op=t.closest("[data-opp]");
+ if(op){openPanel("opp",JSON.parse(decodeURIComponent(op.dataset.opp)));return;}
+ const off=t.closest("[data-oppoff]");
+ if(off){S.roomOff.add(off.dataset.oppoff);
+  if(off.dataset.pkclose)$("#pk").hidden=true;
+  render();return;}
+
+ const pc=t.closest("[data-pcontacts]");
+ if(pc){openPanel("pcontacts",pc.dataset.pcontacts);return;}
+
+ /* Bulk sheet: narrow the table to the rows that need a decision. */
+ if(t.closest("#bulkdup")){S.bulkDup=!S.bulkDup;openSheet("bulk");return;}
+
+ /* Tag sheet: chips are a picker, and what is picked lands in the box so the
+    text about to be saved is the text on screen. */
+ const tp=t.closest("[data-tagpick]");
+ if(tp){const v=tp.dataset.tagpick;
+  S.tagPick.has(v)?S.tagPick.delete(v):S.tagPick.add(v);
+  openSheet("tag");
+  const box=$("#ovb").querySelector("input.logbox");
+  if(box)box.value=[...S.tagPick].join(", ");
+  return;}
+
+ /* An Autopilot proposal. Answering it writes the rule to the manifest — the
+    list of what AI may and may not do — which is where a standing answer to
+    "should I keep asking about this" belongs. */
+ const pr=t.closest("[data-prop]");
+ if(pr){const side=pr.dataset.prop,q=pr.dataset.propq;
+  S.prDone.add(q);
+  if(window.PulseLive&&PulseLive.addRule)
+   PulseLive.addRule(side==="yes"?"yes":"no",q,()=>{S.tab="rules";render();});
+  else render();
+  return;}
+
  const ra=t.closest("[data-reassign]");if(ra){$$(".menu").forEach(x=>x.hidden=true);
   openReassign(CARDS[+ra.dataset.reassign].cust,1);return;}
  if(t.closest("#ovx")||t===$("#ov")){$("#ov").hidden=true;return;}
@@ -2134,8 +2308,13 @@ document.addEventListener("change",e=>{
  const rw=e.target.closest("[data-row]");
  if(rw){const n=+rw.dataset.row;rw.checked?S.sel.add(n):S.sel.delete(n);render();return;}
  const i=e.target.closest("#lensm input");if(!i)return;
+ /* One country and one motion. Picking a second replaces the first rather than
+    adding to it — S.C and S.M stay Sets so every existing filter reads the
+    same, they just never hold more than one value. Clicking the one already
+    chosen clears that half, which is the only way back to All from a radio. */
  const set=i.dataset.c?S.C:S.M,v=i.dataset.c||i.dataset.m;
- i.checked?set.add(v):set.delete(v);render();
+ const was=set.has(v);set.clear();if(!was)set.add(v);
+ render();
  const m=$("#lensm");if(m)m.hidden=false;});
 $("#pq").addEventListener("input",e=>pF(e.target.value));
 document.addEventListener("keydown",e=>{
@@ -2404,7 +2583,8 @@ function openPanel(kind,arg){
    <p class="why">${a.p}</p>
    <h4>The rows behind it</h4>${tb}
    <div class="row"><button class="go solid" data-openask="${arg}">Open in Ask →</button>
-    <button class="go">Recompute</button></div>
+    <button class="go" data-recompute="${arg}">${
+      a.__recomputing?"Recomputing…":a.__recomputedAt?"Recomputed "+a.__recomputedAt:"Recompute"}</button></div>
    ${(st=>`<div class="stamp">${st.map(x=>`<span>${x}</span>`).join("")}</div>`)(
      a.st.map(x=>x==="Rhea Menon"&&ME.name?ME.name:x))}`;
  }
@@ -2424,7 +2604,39 @@ function openPanel(kind,arg){
     <span class="rt3">${st.toUpperCase()}</span></div>`).join("")}
    <p style="font-size:12.5px;color:var(--faint);margin-top:12px">Showing 3 of ${pt[3]}. Every account here is co-owned — no price conversation happens without them on the thread.</p>
    <div class="row"><button class="go solid">Send this month's digest →</button>
-    <button class="go">Partner contacts</button></div>`;
+    <button class="go" data-pcontacts="${esc(pt[0])}">Partner contacts</button></div>`;
+ }
+ if(kind==="opp"){
+  /* One opportunity, with everything behind it. The CTA on the board used to
+     be decoration; this is what it opens. */
+  const[k,h2,p2,ev,cta]=arg,q=oppAsk(k,cta);
+  B.innerHTML=`<div class="pkh"><div class="t4"><div class="lb2">Room to grow</div>
+    <b>${esc(k)}</b></div><button class="cx2" data-pkx>✕</button></div>
+   <p class="why" style="font-weight:500;color:var(--ink);font-size:16px;margin-bottom:8px">${esc(h2)}</p>
+   <p class="why">${esc(p2)}</p>
+   ${ev?`<h4>What it is counted from</h4><div class="ev2">${esc(ev)}</div>`:""}
+   <div class="row" style="margin-top:18px">${q
+     ?`<button class="go solid" data-openask="${q}">Open in Ask →</button>`:""}
+    <button class="go" data-oppoff="${esc(h2)}" data-pkclose="1">Not now</button></div>
+   <p style="font-size:12.5px;color:var(--faint);margin-top:14px">Dismissing this hides it until the next reload. Nothing is written.</p>`;
+ }
+ if(kind==="pcontacts"){
+  /* Who on our side is on this partner's accounts. Partner-side people are not
+     here because there is no contacts table to read them from — the same
+     reason the person panel says so. */
+  const pt=PARTNERS.find(x=>x[0]===arg)||PARTNERS[0];
+  const mine=BOOK.filter(b=>b[2]===pt[2]&&b[3]==="Partner").slice(0,8);
+  B.innerHTML=`<div class="pkh">${LOGO(pt[0],40)}<div class="t4"><div class="lb2">Partner · ${pt[2]} · ${
+     GEO[pt[2]]?GEO[pt[2]].flag+" "+GEO[pt[2]].cur:""}</div>
+   <b>${esc(pt[0])}</b></div><button class="cx2" data-pkx>✕</button></div>
+   <h4>Who is on it here</h4>
+   ${mine.length?mine.map(b=>`<div class="lrow" data-cust="${esc(b[1])}" style="cursor:pointer">
+     <span class="nm2">${LOGO(b[1],22)}${esc(b[1])}</span>
+     <span class="ds">${esc(ownerOf(b[1]))}</span><span class="rt3">→</span></div>`).join("")
+    :`<p class="why" style="margin-top:14px">No partner-sourced accounts in ${esc(pt[2])} are in your book.</p>`}
+   <h4>Revenue by service</h4>${pt[5].map(x=>`<div class="ln"><span class="cp">${x.split(" ")[0]}</span>
+     <span class="st"></span><i>${x.split(" ").slice(1).join(" ")}</i></div>`).join("")}
+   <p style="font-size:12.5px;color:var(--faint);margin-top:14px">Names on the partner's own side are not here. Pulse has no contacts table yet — only the people MSG91 records against an account.</p>`;
  }
  if(kind==="decision"){
   const d=LOGDET[arg];
@@ -2568,13 +2780,14 @@ function openSheet(kind,arg){
     <span class="fresh">7 ROWS READ · CHECKED AGAINST 3,412 EXISTING ACCOUNTS</span></div>
    <div class="tbl" style="margin-top:16px"><div class="tblscroll"><table>
     <thead><tr><th>Company</th><th>Domain</th><th></th><th>What I found</th></tr></thead>
-    <tbody>${BULK.map(([n,dm,r,note])=>`<tr>
+    <tbody>${BULK.filter(([,,r])=>!S.bulkDup||r==="dup").map(([n,dm,r,note])=>`<tr>
      <td class="c">${r==="junk"?"":LOGO(n,18)+" "}${n}</td><td>${dm}</td>
      <td><span class="rowst" data-r="${r}">${r==="new"?"NEW":r==="dup"?"ALREADY OURS":"SUPPRESSED"}</span></td>
      <td style="white-space:normal;max-width:280px">${note}</td></tr>`).join("")}
     </tbody></table></div></div>
    <div class="row" style="margin-top:16px"><button class="go solid" id="ovdo">Create the 4 new ones →</button>
-    <button class="go">Review the 2 duplicates</button><button class="go" id="ovx">Cancel</button></div>
+    <button class="go" id="bulkdup">${S.bulkDup?"Show all 7 rows":`Review the ${
+      BULK.filter(b=>b[2]==="dup").length} duplicates`}</button><button class="go" id="ovx">Cancel</button></div>
    <div class="ver" style="font-family:var(--m);font-size:10.5px;color:var(--faint);margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
     NEW ACCOUNTS ARE ENRICHED AND SCORED BEFORE THEY REACH ANYONE. DUPLICATES ATTACH TO THE EXISTING ACCOUNT AND TELL ITS OWNER.</div>`;
  }
@@ -2592,7 +2805,8 @@ function openSheet(kind,arg){
  }
  if(kind==="tag"){
   B.innerHTML=`<h3>Add a tag</h3><p class="sub">Tags are free text and filterable in Ask. Pulse adds its own from evidence — those show dashed.</p>
-   <div class="tags" style="margin-bottom:14px">${["Enterprise","Renewal Q4","Needs a case study","Reference-able","Price sensitive","Multi-department","Warm intro available"].map(t=>`<button class="tag2">${t}</button>`).join("")}</div>
+   <div class="tags" style="margin-bottom:14px">${["Enterprise","Renewal Q4","Needs a case study","Reference-able","Price sensitive","Multi-department","Warm intro available"].map(t=>`<button class="tag2" data-tagpick="${esc(t)}" aria-pressed="${S.tagPick.has(t)}"${
+     S.tagPick.has(t)?' style="border-color:var(--br);color:var(--br)"':""}>${t}</button>`).join("")}</div>
    <input class="logbox" style="min-height:0;padding:11px 13px" placeholder="Or write a new one">
    <div class="row" style="margin-top:16px"><button class="go solid" id="ovdo">Add →</button>
     <button class="go" id="ovx">Cancel</button></div>`;

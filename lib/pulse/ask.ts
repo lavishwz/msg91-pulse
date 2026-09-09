@@ -2,7 +2,7 @@ import { query, queryOne } from "@/lib/db";
 import { count, entityFromCurrency, money, USER_TYPE } from "./domain";
 import { countAccounts } from "./accounts";
 import { repActivity } from "./team";
-import { cached, DEFAULT_TTL_MS } from "./cache";
+import { cached, drop, DEFAULT_TTL_MS } from "./cache";
 
 /**
  * Ask (handover §7.3) — natural language replaces every dashboard.
@@ -441,8 +441,11 @@ export const ASK_CATALOGUE: { id: string; question: string; pinned?: boolean }[]
   { id: "entities", question: "How many accounts does each entity have?" },
 ];
 
-export async function answer(id: string, offset = 0): Promise<Answer> {
+export async function answer(id: string, offset = 0, fresh = false): Promise<Answer> {
   const fn = ANSWERS[id];
+  // "Recompute" means recompute. Drop every page of this answer, not just the
+  // one being asked for, so paging on does not reveal the stale tail.
+  if (fresh) drop(`ask:${id}:`);
   // Cached because several of these aggregate ms_trans, which has no usable
   // index and costs a full scan each time (see lib/pulse/cache.ts). The offset
   // is part of the key, so page two is cached separately from page one.

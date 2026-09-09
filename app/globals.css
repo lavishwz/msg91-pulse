@@ -55,7 +55,9 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;pad
  border-radius:7px;font-size:14px;cursor:pointer}
 .lens label:hover{background:var(--sink)}
 .lens input{position:absolute;opacity:0;pointer-events:none}
-.bx{width:15px;height:15px;border:1.5px solid var(--line2);border-radius:4px;display:grid;
+/* Round, because the lens takes one country and one motion at a time. A square
+   box reads as "tick as many as you like", which is exactly what this is not. */
+.bx{width:15px;height:15px;border:1.5px solid var(--line2);border-radius:50%;display:grid;
  place-items:center;flex:none}
 .lens input:checked + .bx{background:var(--br);border-color:var(--br)}
 .lens input:checked + .bx::after{content:"";width:7px;height:4px;border-left:1.7px solid #fff;

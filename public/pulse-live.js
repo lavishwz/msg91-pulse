@@ -234,13 +234,14 @@ window.PulseLive = (function () {
    * `append` is the Load more path: the new rows are added to what is already
    * on screen rather than replacing it, so the reader keeps their place.
    */
-  async function loadAnswer(id, bag, render, append) {
+  async function loadAnswer(id, bag, render, append, fresh) {
     const existing = bag.ASK[id];
     const offset = append && existing && existing.nextCursor != null ? existing.nextCursor : 0;
     if (append && !offset) return;
     try {
       const { answer } = await get(
-        "/api/pulse/ask?q=" + encodeURIComponent(id) + (offset ? "&offset=" + offset : ""),
+        "/api/pulse/ask?q=" + encodeURIComponent(id) +
+          (offset ? "&offset=" + offset : "") + (fresh ? "&fresh=1" : ""),
       );
       const priorRows = append && existing && existing.rows ? existing.rows : [];
       bag.ASK[id] = {
@@ -559,6 +560,24 @@ window.PulseLive = (function () {
     } catch (err) {
       console.warn("[pulse] rule change failed:", err.message);
     }
+  }
+
+  /**
+   * Recompute one saved answer.
+   *
+   * `fresh=1` makes the server drop its TTL entry first. Without that the
+   * request round-trips and hands back the identical numbers, which is
+   * indistinguishable from a button that does nothing.
+   */
+  async function recomputeAnswer(id, bag, render) {
+    if (!id) return;
+    const a = bag.ASK[id];
+    if (a) { a.__recomputing = true; render(); }
+    await loadAnswer(id, bag, render, false, true);
+    const b = bag.ASK[id];
+    if (b) { b.__recomputing = false; b.__recomputedAt = new Date()
+      .toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }); }
+    render();
   }
 
   const addRule = (side, text, then) => manifestAction({ action: "add", side, text }, then);
@@ -1265,6 +1284,7 @@ window.PulseLive = (function () {
       }
     },
     loadAnswer,
+    recomputeAnswer,
     loadAccount,
     loadBoard,
     state,
