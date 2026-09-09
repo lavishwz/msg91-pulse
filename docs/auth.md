@@ -117,8 +117,7 @@ handlers themselves already insisted on.
 Two variables are enough:
 
 ```
-# REFERENCEID is hardcoded in lib/pulse/proxy-app.ts; override only to point
-# at a different registered app on Proxy.
+REFERENCEID=1258584i17889575326aa1535c30048   # Pulse's app id on Proxy
 JWT_SECRET=<openssl rand -base64 48>                       # signs the session cookie
 ```
 

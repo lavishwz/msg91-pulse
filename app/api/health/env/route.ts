@@ -44,7 +44,7 @@ const GROUPS: { group: string; needed: "required" | "optional"; names: string[] 
   {
     group: "Sign-in",
     needed: "required",
-    names: ["JWT_SECRET"],
+    names: ["REFERENCEID", "JWT_SECRET"],
   },
   {
     group: "Autopilot runner",
@@ -73,7 +73,6 @@ const GROUPS: { group: string; needed: "required" | "optional"; names: string[] 
        no-admin-key login path. Listing them as required made the check report
        a failure while everything it actually needs was present. */
     names: [
-      "REFERENCEID",
       "PROXY_BASE_URL",
       "PROXY_ADMIN_TOKEN",
       "MYSQL_SSL",

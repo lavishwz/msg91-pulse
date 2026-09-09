@@ -17,9 +17,8 @@
  * Server-only: PROXY_ADMIN_TOKEN must not reach the browser.
  */
 
-import { REFERENCE_ID } from "./proxy-app";
-
 const BASE_URL = (process.env.PROXY_BASE_URL ?? "https://routes.msg91.com/api").replace(/\/+$/, "");
+const REFERENCE_ID = (process.env.REFERENCEID ?? "").trim();
 const ADMIN_TOKEN = (process.env.PROXY_ADMIN_TOKEN ?? "").trim();
 
 export type ProxyIdentity = {
