@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { runAutomations } from "@/lib/pulse/autopilot/automation-runner";
 import { tickSignups, storeSummary } from "@/lib/pulse/autopilot/runner";
 
 /**
@@ -31,8 +32,19 @@ export async function POST(req: Request) {
 
   try {
     const result = await tickSignups();
+
+    /* The rules people wrote, run by the same tick as the ones that shipped.
+       Separately caught: a rule somebody typed this morning must not be able
+       to take the signup triage down with it. */
+    let automations;
+    try {
+      automations = await runAutomations();
+    } catch (err) {
+      automations = { ran: 0, alerts: 0, runs: [], error: (err as Error).message };
+    }
+
     return NextResponse.json(
-      { ...result, store: await storeSummary() },
+      { ...result, automations, store: await storeSummary() },
       // A tick that held everything is a real answer, not a server error — but
       // it should be visible to whatever is watching the cron.
       { status: result.ok ? 200 : 207 },

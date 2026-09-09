@@ -48,6 +48,14 @@ export const AGENTS = {
     env: "GTWY_AGENT_RULE_COMPILER",
     fallback: "6aa0eba5b54ce2b5442f3601",
   },
+  /* One worker for every automation, rather than an agent per rule. The rule
+     goes in as a variable, so a new rule is a new row in pulse_automation and
+     no change on GTWY at all. */
+  ruleWorker: {
+    slug: "rule-worker",
+    env: "GTWY_AGENT_RULE_WORKER",
+    fallback: "6aa1ad3d48d38ff06b16dcf1",
+  },
 } as const;
 
 export type AgentKey = keyof typeof AGENTS;
@@ -138,6 +146,18 @@ export const CompiledRuleSchema = z.object({
 });
 
 export type CompiledRule = z.infer<typeof CompiledRuleSchema>;
+
+/** What the worker says about one row an automation found. */
+export const RuleWorkerSchema = z.object({
+  subject_id: z.string().nullable(),
+  should_alert: z.boolean(),
+  headline: z.string().nullable(),
+  detail: z.string().nullable(),
+  reasons: z.array(z.string()),
+  confidence: z.number(),
+  needs: z.array(z.string()),
+});
+export type RuleWorkerResult = z.infer<typeof RuleWorkerSchema>;
 
 export type TriageResult = z.infer<typeof TriageResultSchema>;
 export type Draft = z.infer<typeof DraftSchema>;
@@ -395,5 +415,27 @@ export async function compileRule(
     fields: Object.entries(RULE_FIELDS)
       .map(([k, v]) => `- ${k} — ${v}`)
       .join("\n"),
+  });
+}
+
+/* ── the rule worker ────────────────────────────────────────────────────── */
+
+/**
+ * Judge one row an automation found.
+ *
+ * The rule's own words go in as a variable, not as part of the prompt, so
+ * every automation in the product shares this one agent and adding a rule
+ * needs no change on GTWY.
+ */
+export async function judgeRow(
+  ruleEnglish: string,
+  agentTask: string,
+  row: Record<string, unknown>,
+): Promise<AgentCall<RuleWorkerResult>> {
+  return callAgent("ruleWorker", RuleWorkerSchema, "Judge this row.", {
+    today: today(),
+    rule_english: ruleEnglish,
+    agent_task: agentTask,
+    row_json: JSON.stringify(row),
   });
 }
