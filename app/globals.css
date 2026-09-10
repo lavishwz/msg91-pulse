@@ -61,12 +61,15 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;pad
 .lens label:hover{background:var(--sink)}
 .lens input{position:absolute;opacity:0;pointer-events:none}
 /* Round, because the lens takes one country and one motion at a time. A square
-   box reads as "tick as many as you like", which is exactly what this is not. */
+   box reads as "tick as many as you like", which is exactly what this is not.
+   The mark inside is a dot rather than a tick for the same reason: a tick is
+   what you put in a list of things that are each independently on or off, and
+   a dot is what you put beside the one you chose. */
 .bx{width:15px;height:15px;border:1.5px solid var(--line2);border-radius:50%;display:grid;
  place-items:center;flex:none}
-.lens input:checked + .bx{background:var(--br);border-color:var(--br)}
-.lens input:checked + .bx::after{content:"";width:7px;height:4px;border-left:1.7px solid #fff;
- border-bottom:1.7px solid #fff;transform:rotate(-45deg) translate(1px,-1px)}
+.lens input:checked + .bx{border-color:var(--br)}
+.lens input:checked + .bx::after{content:"";width:7px;height:7px;border-radius:50%;
+ background:var(--br)}
 .lens .clr{width:100%;padding:8px 10px;margin-top:5px;border-top:1px solid var(--line);
  font-size:13.5px;color:var(--muted)}
 
@@ -274,9 +277,9 @@ h1 .sl{color:var(--faint)}
 
 /* palette */
 .pal{position:fixed;inset:0;z-index:120;background:rgba(26,24,19,.36);display:flex;
- justify-content:center;padding-top:11vh}
+ justify-content:center;align-items:flex-start;padding:20px;overflow-y:auto}
 .pal[hidden]{display:none}
-.pb{width:min(610px,92vw);max-height:66vh;background:var(--raise);border:1px solid var(--line2);
+.pb{width:min(610px,92vw);max-height:66vh;margin:auto 0;background:var(--raise);border:1px solid var(--line2);
  border-radius:14px;overflow:hidden;display:flex;flex-direction:column;
  box-shadow:0 26px 70px -20px rgba(26,24,19,.4)}
 .pi{display:flex;align-items:center;gap:12px;padding:15px 18px;border-bottom:1px solid var(--line)}
@@ -345,10 +348,23 @@ h1 .sl{color:var(--faint)}
 .srow .dl{font-family:var(--m);font-size:11px;width:32px;text-align:right;flex:none;color:var(--ok)}
 .srow .dl[data-d="down"]{color:var(--watch)}
 /* overlay sheet */
+/* Centred, not pinned near the top. A sheet at 7vh sat in the upper third of a
+   1080-tall window with a field of empty page under it, and the eye had to
+   travel up to find the thing that had just interrupted it. `align-items:center`
+   is the whole change; `overflow-y:auto` on the backdrop is what keeps it safe
+   — .sh caps itself at 82vh, and a sheet taller than the window scrolls the
+   backdrop rather than having its top half cut off above the viewport, which is
+   what centring does to an overflowing flex child without it. */
 .ov{position:fixed;inset:0;z-index:110;background:rgba(26,24,19,.36);display:flex;justify-content:center;
- align-items:flex-start;padding:7vh 20px}
+ align-items:flex-start;padding:20px;overflow-y:auto}
 .ov[hidden]{display:none}
-.sh{width:min(580px,100%);background:var(--raise);border:1px solid var(--line2);border-radius:14px;
+/* `margin:auto 0` and not `align-items:center` on the parent. Both centre a
+   sheet shorter than the window; only this one keeps the top edge reachable
+   when the sheet is taller, because auto margins collapse to zero on the
+   overflowing side while `align-items:center` pushes the top above the scroll
+   origin where nothing can scroll to it. .sh caps at 82vh so that is
+   theoretical today, but a sheet grows by somebody adding a row to it. */
+.sh{width:min(580px,100%);margin:auto 0;background:var(--raise);border:1px solid var(--line2);border-radius:14px;
  padding:24px;box-shadow:0 26px 70px -20px rgba(26,24,19,.4);max-height:82vh;overflow-y:auto}
 .sh h3{font-weight:600;font-size:21px;letter-spacing:-.018em;margin:0 0 6px}
 .sh .sub{margin:0 0 20px;font-size:13.5px;color:var(--muted)}
@@ -938,3 +954,69 @@ h1 .sl{color:var(--faint)}
 /* A tag that would not save. Under the tag list, in the same place the tags
    are, because that is where the person is looking when it happens. */
 .tagerr{margin-top:11px;font-size:13px;color:var(--bad)}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   MOBILE
+   The device-width viewport (app/layout.tsx) is what lets these actually
+   fire on a phone. Everything above already has a handful of breakpoints
+   for the pieces the prototype itself worried about (the header, the score
+   band, the status bar); this block is the rest of the app — the fixed
+   min-widths and side-by-side grids that only ever got built at desktop
+   size, plus the app-chrome details (safe-area, tap targets, overlays)
+   that only matter once the app can actually be held in one hand.
+   ═══════════════════════════════════════════════════════════════════════ */
+@media (max-width:760px){
+ /* header: the search bar gives up its fixed max-width and its keyboard
+    hint, which mean nothing on a screen with no ⌘ key */
+ .askbar span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .askbar .kk2{display:none}
+ .who button#abtn span{display:none}
+ .amenu{width:min(224px,calc(100vw - 24px))}
+
+ /* grids that were only ever laid out two-across */
+ .manifest{grid-template-columns:1fr}
+ .cols4{grid-template-columns:1fr}
+ .col4{min-height:0}
+
+ /* rows built for desktop line-lengths: let the label stack above the
+    detail instead of clipping or forcing horizontal scroll */
+ .pr,.ln,.lrow,.frow,.drow,.oi{flex-wrap:wrap}
+ .pr b,.lrow .nm2,.frow b,.drow b{min-width:0;width:100%}
+ .pr i,.ln i{text-align:left}
+
+ /* dialogs and the palette: full-bleed on a phone rather than a card
+    floating in from the sides */
+ .pb,.sh{width:100%;border-radius:14px 14px 0 0;max-height:88vh}
+ .pal,.ov{padding:0;align-items:flex-end}
+ .pal .pb,.ov .sh{margin:0}
+ .pkb{padding:18px 18px 40px}
+ .lens,.menu{max-width:calc(100vw - 24px)}
+
+ /* onboarding: the two-line heading and lead paragraph were sized for a
+    desktop take-over, not a phone one */
+ .oc h2{font-size:27px}
+ .oc p.lead{font-size:15.5px}
+ .onbar{padding:0 16px}
+
+ /* status bar: keep it clear of the home-indicator/gesture area on iOS */
+ .dbbar{bottom:calc(12px + env(safe-area-inset-bottom))}
+}
+
+@media (max-width:480px){
+ .chead{flex-wrap:wrap}
+ .chead .big-lg{width:44px;height:44px}
+ .phead2{flex-wrap:wrap}
+ .phead2 .pa{width:46px;height:46px}
+ .cxn{flex-wrap:wrap}
+ .cxn .cta{width:100%}
+ .money{grid-template-columns:1fr 1fr}
+ .stats{grid-template-columns:repeat(2,1fr)}
+}
+
+/* Safe-area padding for the app when it's launched standalone (installed
+   PWA) — a browser tab already reserves this space itself, a standalone
+   window on a notched phone does not. */
+@media (display-mode:standalone){
+ .top{padding-top:calc(13px + env(safe-area-inset-top))}
+ .onbar{padding-top:env(safe-area-inset-top)}
+}

@@ -2,6 +2,7 @@ import { query, queryOne } from "@/lib/db";
 import { limitClause, page, toPaged, type Page, type Paged } from "./paginate";
 import { accountName, ago, USER_TYPE } from "./domain";
 import { healthFor } from "./health";
+import { overrideCounts } from "./ownership";
 
 /**
  * The MSG91 team.
@@ -28,6 +29,52 @@ function repInitials(name: string): string {
 }
 
 /**
+ * MSG91's per-rep counts, corrected by Pulse's own reassignments.
+ *
+ * `user_handled_by` does not know about them — Pulse may only read that table —
+ * so without this a rep who was handed thirty accounts this morning still shows
+ * the book they had yesterday, and the standings quietly contradict the account
+ * pages. Degraded to MSG91's raw count if the store is unreachable, like every
+ * other place an override is layered on.
+ *
+ * An account moved *away* from a rep still counts in MSG91's own total, so the
+ * losses are subtracted as well as the gains added. That needs to know who held
+ * each overridden account before, which the counting query does not carry — one
+ * small lookup, and only when there is anything to correct.
+ */
+async function ownerCorrections(): Promise<{
+  gained: Map<string, number>;
+  lost: Map<string, number>;
+}> {
+  let gained = new Map<string, number>();
+  let moved = new Map<string, number | null>();
+  try {
+    ({ gained, moved } = await overrideCounts());
+  } catch (err) {
+    console.warn("[pulse] owner overrides unavailable for standings:", (err as Error).message);
+    return { gained: new Map(), lost: new Map() };
+  }
+
+  const lost = new Map<string, number>();
+  if (moved.size) {
+    const ids = [...moved.keys()].map(Number).filter(Number.isFinite);
+    if (ids.length) {
+      const prior = await query<{ user_id: number; admin_id: number }>(
+        `SELECT user_id, admin_id FROM user_handled_by
+          WHERE user_id IN (${ids.map(() => "?").join(",")})`,
+        ids,
+      );
+      for (const p of prior) {
+        const now = moved.get(String(p.user_id));
+        if (now === Number(p.admin_id)) continue; // restated, not moved
+        lost.set(String(p.admin_id), (lost.get(String(p.admin_id)) ?? 0) + 1);
+      }
+    }
+  }
+  return { gained, lost };
+}
+
+/**
  * Every rep who owns at least one account, biggest book first.
  *
  * One grouped query over `user_handled_by` (5,416 rows, 53 admins) — small
@@ -51,20 +98,88 @@ export async function listReps(meId: number | null, req: Page = page({ limit: 30
       ORDER BY n DESC ${limitClause(req)}`,
   );
 
-  return toPaged(
-    rows.map((r) => {
-      const name = accountName(r);
-      return {
-        id: Number(r.admin_id),
-        name,
-        initials: repInitials(name),
-        email: (r.user_email ?? "").trim(),
-        accounts: Number(r.n),
-        isMe: Number(r.admin_id) === meId,
-      };
-    }),
-    req,
+  const { gained, lost } = await ownerCorrections();
+
+  const corrected = rows.map((r) => {
+    const key = String(r.admin_id);
+    const name = accountName(r);
+    return {
+      id: Number(r.admin_id),
+      name,
+      initials: repInitials(name),
+      email: (r.user_email ?? "").trim(),
+      accounts: Math.max(0, Number(r.n) + (gained.get(key) ?? 0) - (lost.get(key) ?? 0)),
+      isMe: Number(r.admin_id) === meId,
+    };
+  });
+
+  /* Re-sorted, because the correction can change the order and the standings
+     are a ranking — a list labelled "biggest book first" that is not is worse
+     than one that is a day out of date. */
+  corrected.sort((a, b) => b.accounts - a.accounts);
+  return toPaged(corrected, req);
+}
+
+/**
+ * Everyone an account may be handed to.
+ *
+ * Not the same list as `listReps`, and that difference was a bug you could not
+ * see. `listReps` counts from `user_handled_by`, so it can only ever return
+ * people who *already own something* — which is right for the standings and
+ * wrong for the reassign sheet, where the whole point is often to give an
+ * account to somebody who has none. On this database that hid 15 of 49 admins,
+ * the new teammate on day one among them: the sheet offered no way to hand them
+ * their first account, and nobody could tell from looking at it that anyone was
+ * missing.
+ *
+ * So this reads the admins themselves and counts their book with a subquery
+ * rather than a join, which keeps the ones on zero. The `EXISTS` arm is there
+ * because ownership in this schema is not strictly type-1: two of the people
+ * holding accounts today are resellers, and a list of "who may own an account"
+ * that drops somebody who owns thirty is a worse lie than the one being fixed.
+ */
+export async function assignableReps(meId: number | null, cap = 500): Promise<Paged<Rep>> {
+  /* Its own bound, not a caller's page. `page()` clamps every request to
+     MAX_PAGE_SIZE, which is right for a feed and wrong for a list of people to
+     choose from: it silently returned 50 of 51 and the picker had no way to
+     show that somebody had been left off the end. This list is bounded by how
+     many admins MSG91 has — tens — so it is read whole. */
+  const req: Page = { limit: Math.max(1, Math.min(cap, 500)), offset: 0 };
+  const rows = await query<{
+    admin_id: number;
+    n: number;
+    user_fname: string | null;
+    user_lname: string | null;
+    user_uname: string | null;
+    user_email: string | null;
+  }>(
+    `SELECT a.user_pid AS admin_id,
+            a.user_fname, a.user_lname, a.user_uname, a.user_email,
+            (SELECT COUNT(*)
+               FROM user_handled_by h
+               JOIN ms_user c ON c.user_pid = h.user_id AND c.user_type = ${USER_TYPE.CUSTOMER}
+              WHERE h.admin_id = a.user_pid) n
+       FROM ms_user a
+      WHERE a.user_type = ${USER_TYPE.ADMIN}
+         OR EXISTS (SELECT 1 FROM user_handled_by h2 WHERE h2.admin_id = a.user_pid)
+      ORDER BY n DESC, a.user_fname ASC ${limitClause(req)}`,
   );
+
+  const { gained, lost } = await ownerCorrections();
+  const corrected = rows.map((r) => {
+    const key = String(r.admin_id);
+    const name = accountName(r);
+    return {
+      id: Number(r.admin_id),
+      name,
+      initials: repInitials(name),
+      email: (r.user_email ?? "").trim(),
+      accounts: Math.max(0, Number(r.n) + (gained.get(key) ?? 0) - (lost.get(key) ?? 0)),
+      isMe: Number(r.admin_id) === meId,
+    };
+  });
+  corrected.sort((a, b) => b.accounts - a.accounts || a.name.localeCompare(b.name));
+  return toPaged(corrected, req);
 }
 
 /** One rep by id. */

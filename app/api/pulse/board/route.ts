@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { resolveMe } from "@/lib/pulse/team";
 import { listAccounts } from "@/lib/pulse/accounts";
-import { healthFor, toBoard } from "@/lib/pulse/health";
+import { toBoard } from "@/lib/pulse/health";
+import { cachedHealthFor } from "@/lib/pulse/healthCron";
 import { page } from "@/lib/pulse/paginate";
 
 /**
@@ -29,7 +30,11 @@ export async function GET(req: Request) {
     const filter = scope === "me" && meId ? { ownerId: meId } : {};
     const { rows } = await listAccounts(filter, page({ limit: LIMIT }));
 
-    const health = await healthFor(rows.map((a) => ({ id: a.id, hasOwner: Boolean(a.owner), ageDays: a.ageDays })));
+    // Read the last cron pass's scores rather than calling the account-health
+    // agent inline — see lib/pulse/healthCron.ts. An account this page shows
+    // that no pass has reached yet is simply absent from the map here, and
+    // toBoard() already treats an unscored account the same as "too new".
+    const health = await cachedHealthFor(rows.map((a) => a.id));
     const board = toBoard(
       rows.map((a) => ({
         id: a.id,

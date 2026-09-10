@@ -5,6 +5,7 @@ import { growth, ASK_CATALOGUE } from "@/lib/pulse/ask";
 import { auditAnomaly } from "@/lib/pulse/audit";
 import { page } from "@/lib/pulse/paginate";
 import { gate } from "@/lib/pulse/guard";
+import { connectionState } from "@/lib/pulse/connections";
 
 /**
  * GET /api/pulse/bootstrap
@@ -28,24 +29,32 @@ export async function GET() {
        pencil that would only ever come back 403. */
     const seat = await gate(false);
     const role = seat.state === "ok" ? seat.role : null;
+    /* Who is signed in, which is not the same question as which rep's book is
+       on screen (`me`, below). The profile page is about the person, so it
+       needs the session rather than the rep. */
+    const signedInAs =
+      seat.state === "ok" || seat.state === "unavailable" ? seat.session.user : null;
 
     const me = await resolveMe();
     const meId = me?.id ?? null;
 
-    const [mine, wall, g, ranks, anomaly, totals] = await Promise.all([
+    const [mine, wall, g, ranks, anomaly, totals, connections] = await Promise.all([
       meId ? listAccounts({ ownerId: meId }, page({ limit: 20 })) : Promise.resolve(null),
       listAccounts({}, page({ limit: 40 })),
       growth(meId),
       standings(meId, 50),
       auditAnomaly(),
       Promise.all([countAccounts(), countAccounts({ unownedOnly: true })]),
+      signedInAs ? connectionState(signedInAs.email) : Promise.resolve(null),
     ]);
 
     return NextResponse.json({
       ok: true,
       me,
+      signedInAs,
       role,
       can: { editRules: role === "super_admin" },
+      connections,
       myAccounts: mine?.rows ?? [],
       myAccountsNext: mine?.nextCursor ?? null,
       wall: wall.rows,

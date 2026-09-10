@@ -1,8 +1,19 @@
 /**
  * Account health — the number behind the score band and the board.
  *
- * MSG91's schema stores no health score, so Pulse derives one from four things
- * the database *does* know, each weighted (handover §11 — a derivation, never
+ * The band is decided by the `account-health` agent. This file's job is to put
+ * the evidence in front of it: MSG91's schema stores no health score, so Pulse
+ * assembles four things the database *does* know, weighs them into a starting
+ * score, and hands the lot to the agent, which returns the score, the band and
+ * a sentence saying what decided it (see healthJudge.ts).
+ *
+ * The arithmetic below therefore serves two purposes — it is the evidence the
+ * agent reads, and it is the answer that stands whenever the agent cannot be
+ * reached, is not configured, or returns something that fails its guards. Each
+ * account says which happened to it, in `decidedBy`. Nothing on a surface may
+ * claim "AI decided this" for an account the formula scored.
+ *
+ * The four components, each weighted (handover §11 — a derivation, never
  * presented as a stored fact):
  *
  *   recency  30%  how long since the account last paid for anything
@@ -25,6 +36,7 @@
  */
 
 import { query } from "@/lib/db";
+import { judge, verdictSummary, type HealthSignals } from "./healthJudge";
 
 export type Band = "thriving" | "steady" | "wobbling" | "risk";
 
@@ -49,6 +61,23 @@ export type AccountHealth = {
   /** Set when the account changed band this month. */
   moved: "up" | "down" | null;
   components: HealthComponent[];
+  /**
+   * Who reached this verdict. "ai" means the account-health agent answered for
+   * this account; "formula" means the weighted arithmetic below did, either
+   * because no agent is configured or because its answer did not survive the
+   * guards in healthJudge.ts. Carried per account rather than per board: a
+   * batch that half-answers must not let the surface claim more than it has.
+   */
+  decidedBy: "ai" | "formula";
+  /** The agent's one-sentence reason. Null when the formula decided. */
+  reason: string | null;
+  /** The agent's confidence, 0–1. Null when the formula decided. */
+  confidence: number | null;
+  /** True when the agent's score was pulled back toward the formula's. */
+  clamped: boolean;
+  /** The score the formula reached, kept even when the agent overrode it, so
+      the evidence panel can show both rather than only the winner. */
+  formulaScore: number;
 };
 
 export const BAND_ORDER: Band[] = ["thriving", "steady", "wobbling", "risk"];
@@ -175,6 +204,7 @@ export async function healthFor(
   const routesById = new Map(routes.map((r) => [Number(r.id), Number(r.routes ?? 0)]));
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000);
+  const signals: HealthSignals[] = [];
 
   for (const a of accounts) {
     const id = Number(a.id);
@@ -211,12 +241,31 @@ export async function healthFor(
 
     const band = bandOf(score);
     const priorBand = bandOf(prior);
+    /* Everything the agent is shown, gathered while the numbers are in hand.
+       The AI pass runs after this loop so it can go out in batches rather than
+       once per account. */
+    signals.push({
+      id,
+      formulaScore: score,
+      formulaPriorScore: prior,
+      components: [],
+      spend30: w0,
+      spendPrior30: w1,
+      routes: routeCount,
+      hasOwner: a.hasOwner,
+      daysSincePayment: days,
+    });
     out.set(id, {
       id,
       score,
       band,
       spend30: w0,
       delta: score - prior,
+      decidedBy: "formula",
+      reason: null,
+      confidence: null,
+      clamped: false,
+      formulaScore: score,
       moved:
         band === priorBand
           ? null
@@ -255,6 +304,44 @@ export async function healthFor(
           evidence: a.hasOwner ? "a person is responsible for it" : "nobody at MSG91 owns it",
         },
       ],
+    });
+  }
+
+  /* ── the verdict ─────────────────────────────────────────────────────────
+     Everything above is evidence. The band itself is the account-health
+     agent's call, made on exactly the components assembled above — it is given
+     no database access, the same as every other agent.
+
+     Accounts the agent did not answer for keep the formula's score and stay
+     labelled "formula", so a half-answered batch cannot make the surface claim
+     more than it has. See healthJudge.ts for the clamp and the confidence
+     floor that bound how far a verdict may move a score. */
+  const verdicts = await judge(
+    signals.map((s) => ({ ...s, components: out.get(s.id)?.components ?? [] })),
+  );
+
+  for (const [id, v] of verdicts) {
+    const h = out.get(id);
+    if (!h) continue;
+    const band = bandOf(v.score);
+    const priorBand = bandOf(v.priorScore);
+    out.set(id, {
+      ...h,
+      score: v.score,
+      band,
+      delta: v.score - v.priorScore,
+      moved:
+        band === priorBand
+          ? null
+          : BAND_ORDER.indexOf(band) < BAND_ORDER.indexOf(priorBand)
+            ? "up"
+            : "down",
+      decidedBy: "ai",
+      reason: v.reason,
+      confidence: v.confidence,
+      clamped: v.clamped,
+      /* formulaScore is left as it was: the arithmetic's answer, preserved
+         beside the agent's so the account page can show both. */
     });
   }
 
@@ -311,6 +398,14 @@ export type Board = {
   atRisk: Protected[];
   /** How the score is made, for the note under the board. */
   formula: string;
+  /**
+   * Who decided the bands on this board: "ai" when the agent answered for
+   * every scored account, "mixed" when it answered for some, "formula" when
+   * for none. The surface labels itself from this rather than assuming.
+   */
+  decidedBy: "ai" | "mixed" | "formula";
+  /** How many of `total` the agent actually judged. */
+  aiScored: number;
 };
 
 type Scorable = {
@@ -370,8 +465,11 @@ export function toBoard(
     bands,
     protects: purse(scored.filter((a) => a.h.band === "thriving" || a.h.band === "steady")),
     atRisk: purse(scored.filter((a) => a.h.band === "wobbling" || a.h.band === "risk")),
+    decidedBy: verdictSummary(scored.length, scored.filter((a) => a.h.decidedBy === "ai").length),
+    aiScored: scored.filter((a) => a.h.decidedBy === "ai").length,
     formula:
-      "Payment recency 30%, spend trend 30%, product breadth 25%, ownership 15%. " +
-      "Movement compares the same formula over the previous thirty days.",
+      "Payment recency 30%, spend trend 30%, product breadth 25%, ownership 15%, " +
+      "read by the account-health agent, which sets the band and says why. " +
+      "Movement compares the same evidence over the previous thirty days.",
   };
 }

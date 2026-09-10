@@ -191,6 +191,12 @@
   function openMembers() {
     const menu = $("#amenu");
     if (menu) menu.hidden = true;
+    /* The overlay is shared. If the reassign sheet is what is currently in it,
+       it has to be told it is no longer open — otherwise the next render draws
+       it straight back over this one. */
+    if (window.PulseLive && PulseLive.state.reassign && PulseLive.state.reassign.open) {
+      PulseLive.state.reassign.open = null;
+    }
     state.members = null;
     state.msg = null;
     state.bad = false;

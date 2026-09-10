@@ -29,7 +29,21 @@ export const config = {
 
 /** Reachable without a session: the login page and the routes it calls. */
 function isPublic(pathname: string): boolean {
-  return pathname === "/login" || pathname.startsWith("/api/auth/");
+  return (
+    pathname === "/login" ||
+    // The service worker and manifest have to be fetchable with no session:
+    // the browser requests them (and re-validates the worker) on its own
+    // schedule, not only while a person is signed in, and a redirect to
+    // /login in place of the script is what a `new Response()` failure to
+    // register looks like.
+    pathname === "/sw.js" ||
+    pathname === "/manifest.webmanifest" ||
+    pathname.startsWith("/api/auth/") ||
+    // cron-job.org calls these directly, with no cookie and no secret — this
+    // is the un-authed placeholder noted in build.ts/webhook/route.ts, to be
+    // revisited once cron-job.org's outgoing calls carry a shared secret.
+    pathname.startsWith("/api/pulse/autopilot/webhook/")
+  );
 }
 
 /**
@@ -85,8 +99,11 @@ function refuse(req: NextRequest) {
     );
   }
   const url = new URL("/login", req.url);
-  // So a deep link survives the round trip out to Proxy and back.
-  if (req.nextUrl.pathname !== "/") url.searchParams.set("next", req.nextUrl.pathname);
+  // So a deep link survives the round trip out to Proxy and back. The query
+  // string comes with it: a screen's filters live there now (?scope=team), so
+  // the path alone would land somebody a step away from where they were going.
+  const next = req.nextUrl.pathname + req.nextUrl.search;
+  if (next !== "/") url.searchParams.set("next", next);
   return NextResponse.redirect(url);
 }
 

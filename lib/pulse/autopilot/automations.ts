@@ -42,6 +42,11 @@ export type Automation = {
   subjectCol: string | null;
   watermarkCol: string | null;
   agentTask: string | null;
+  mode: "cron" | "event";
+  gtwyAgentId: string | null;
+  cronJobId: string | null;
+  executorPrompt: string | null;
+  optimizedPrompt: string | null;
   maxRows: number;
   capability: "ready" | "blocked";
   blockedReason: string | null;
@@ -74,6 +79,11 @@ function toAutomation(r: Row): Automation {
     subjectCol: (r.subject_col as string) ?? null,
     watermarkCol: (r.watermark_col as string) ?? null,
     agentTask: (r.agent_task as string) ?? null,
+    mode: (r.mode as Automation["mode"]) ?? "cron",
+    gtwyAgentId: (r.gtwy_agent_id as string) ?? null,
+    cronJobId: (r.cron_job_id as string) ?? null,
+    executorPrompt: (r.executor_prompt as string) ?? null,
+    optimizedPrompt: (r.optimized_prompt as string) ?? null,
     maxRows: Number(r.max_rows ?? 50),
     capability: (r.capability as "ready" | "blocked") ?? "ready",
     blockedReason: (r.blocked_reason as string) ?? null,
@@ -89,7 +99,8 @@ function toAutomation(r: Row): Automation {
 
 const COLUMNS = `id, automation_key, rule_key, motion, scope, owner_email, english, summary,
   trigger_kind, when_event, parent_key, every_minutes, find_sql, subject_col, watermark_col,
-  agent_task, max_rows, capability, blocked_reason, state, live, last_run_at, next_run_at,
+  agent_task, mode, gtwy_agent_id, cron_job_id, executor_prompt, optimized_prompt,
+  max_rows, capability, blocked_reason, state, live, last_run_at, next_run_at,
   last_error, run_count, alert_count`;
 
 /** Everything not retired, newest first. What the Rules tab lists. */
@@ -147,6 +158,11 @@ export type NewAutomation = {
   subjectCol?: string | null;
   watermarkCol?: string | null;
   agentTask?: string | null;
+  mode?: "cron" | "event";
+  gtwyAgentId?: string | null;
+  cronJobId?: string | null;
+  executorPrompt?: string | null;
+  optimizedPrompt?: string | null;
   maxRows?: number;
   capability?: "ready" | "blocked";
   blockedReason?: string | null;
@@ -183,22 +199,28 @@ export async function saveAutomation(
     `INSERT INTO pulse_automation
        (automation_key, rule_key, motion, scope, owner_email, english, summary,
         trigger_kind, when_event, parent_key, every_minutes, find_sql, subject_col,
-        watermark_col, agent_task, max_rows, capability, blocked_reason, live, next_run_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())
+        watermark_col, agent_task, mode, gtwy_agent_id, cron_job_id, executor_prompt,
+        optimized_prompt, max_rows, capability, blocked_reason, live, next_run_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())
      ON DUPLICATE KEY UPDATE
         motion=VALUES(motion), scope=VALUES(scope), english=VALUES(english),
         summary=VALUES(summary), trigger_kind=VALUES(trigger_kind),
         when_event=VALUES(when_event), parent_key=VALUES(parent_key),
         every_minutes=VALUES(every_minutes), find_sql=VALUES(find_sql),
         subject_col=VALUES(subject_col), watermark_col=VALUES(watermark_col),
-        agent_task=VALUES(agent_task), max_rows=VALUES(max_rows),
-        capability=VALUES(capability), blocked_reason=VALUES(blocked_reason),
+        agent_task=VALUES(agent_task), mode=VALUES(mode),
+        gtwy_agent_id=VALUES(gtwy_agent_id), cron_job_id=VALUES(cron_job_id),
+        executor_prompt=VALUES(executor_prompt), optimized_prompt=VALUES(optimized_prompt),
+        max_rows=VALUES(max_rows), capability=VALUES(capability),
+        blocked_reason=VALUES(blocked_reason),
         live=VALUES(live), state='active', retired_at=NULL`,
     [
       a.key, a.ruleKey ?? null, a.motion, a.scope ?? "company", a.ownerEmail,
       a.english, a.summary ?? null, a.triggerKind, a.whenEvent ?? null,
       a.parentKey ?? null, a.everyMinutes ?? null, a.findSql ?? null,
       a.subjectCol ?? null, a.watermarkCol ?? null, a.agentTask ?? null,
+      a.mode ?? "cron", a.gtwyAgentId ?? null, a.cronJobId ?? null,
+      a.executorPrompt ?? null, a.optimizedPrompt ?? null,
       a.maxRows ?? 50, a.capability ?? "ready", a.blockedReason ?? null,
       a.live && isRunnable && (a.capability ?? "ready") === "ready" ? 1 : 0,
     ],
@@ -206,7 +228,24 @@ export async function saveAutomation(
   return { ok: true, key: a.key };
 }
 
+/**
+ * Retire one. For a dynamically built automation this also tears down what
+ * was provisioned for it — the cron-job.org job and the GTWY executor agent
+ * — so retiring a rule stops it everywhere, not just in this table. Both
+ * teardown calls are best-effort: a dead external service must not stop the
+ * row itself from being retired.
+ */
 export async function retireAutomation(key: string): Promise<boolean> {
+  const existing = await getAutomation(key);
+  if (existing?.cronJobId) {
+    const { deleteCronJob } = await import("@/lib/pulse/cronjob");
+    await deleteCronJob(existing.cronJobId).catch(() => {});
+  }
+  if (existing?.gtwyAgentId) {
+    const { deleteAgent } = await import("@/lib/pulse/gtwyAdmin");
+    await deleteAgent(existing.gtwyAgentId).catch(() => {});
+  }
+
   const res = await write(
     `UPDATE pulse_automation SET state='retired', live=0, retired_at=NOW()
       WHERE automation_key = ? AND state <> 'retired'`,

@@ -1,6 +1,7 @@
 import { query } from "@/lib/db";
 import { limitClause, page, toPaged, type Page, type Paged } from "./paginate";
 import { accountName, ago, USER_TYPE } from "./domain";
+import { recentOwnerEvents } from "./ownership";
 
 /**
  * Autopilot → Audit log (handover §7.4).
@@ -28,6 +29,8 @@ export type AuditEntry = {
   /** Maps onto the prototype's tag styling: act | ok | warn | "". */
   tag: string;
   typeCode: number;
+  /** The exact moment, ISO. `when` and `at` are for reading; this is for sorting. */
+  ts: string;
 };
 
 /**
@@ -45,8 +48,69 @@ function label(type: number): string {
   return TYPE_LABEL[type] ?? `made a change (type ${type})`;
 }
 
-/** A page of staff actions, newest first. */
+/**
+ * Pulse's own reassignments, in the same shape as MSG91's change log.
+ *
+ * The reassign sheet promises "anyone can do this — it writes an audit event
+ * either way", and it does: `pulse_account_owner_event`, one row per account
+ * moved. Nothing read that table, so the promise was kept in the database and
+ * broken on the screen — every reassignment Pulse made was invisible in the one
+ * surface that exists to answer "who changed what".
+ *
+ * Ids are negated so they cannot collide with `admin_updation_log.id`, and the
+ * actor is a Pulse member's email rather than an `ms_user`, so `actorId` is 0:
+ * these are acts by a person signed in to Pulse, not by an MSG91 admin.
+ */
+async function ownerAudit(window: number): Promise<AuditEntry[]> {
+  const events = await recentOwnerEvents(window);
+  return events.map((e) => {
+    const account = e.accountName ?? `account ${e.accountId}`;
+    const what =
+      e.action === "cleared"
+        ? `withdrew Pulse's owner for ${account}`
+        : e.ownerName
+          ? `reassigned ${account} to ${e.ownerName}`
+          : `took ${account} off its owner`;
+    return {
+      id: -e.id,
+      when: e.at.slice(11, 16),
+      at: ago(new Date(e.at)),
+      actor: e.actor,
+      actorId: 0,
+      account: { id: Number(e.accountId) || 0, name: account },
+      what,
+      detail: [
+        e.previousOwnerName ? `was ${e.previousOwnerName}` : "had no owner before",
+        e.note,
+        e.batch ? "part of one bulk reassignment" : null,
+        "In Pulse's own record — MSG91's user_handled_by is read-only to Pulse.",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      tag: e.action === "assigned" ? "ok" : "warn",
+      typeCode: 0,
+      ts: e.at,
+    };
+  });
+}
+
+/**
+ * A page of staff actions, newest first — both databases in one feed.
+ *
+ * MSG91's `admin_updation_log` and Pulse's reassignments live on different
+ * servers, so they are merged here by time rather than joined in SQL. Both are
+ * read `offset + limit` deep and the merge is sliced to the page, which is
+ * exact for the first few screens and is where the reader ever gets to; past
+ * WINDOW rows the feed is MSG91's alone rather than silently missing Pulse's,
+ * and that boundary is stated in the code rather than guessed at from the gaps.
+ */
+const MERGE_WINDOW = 200;
+
 export async function staffAudit(req: Page = page({ limit: 25 })): Promise<Paged<AuditEntry>> {
+  /* Both sources are read from the top down to the end of the requested page,
+     because which rows fall on page three depends on how the two interleave. */
+  const deep: Page = { limit: Math.max(1, Math.min(MERGE_WINDOW, req.offset + req.limit)), offset: 0 };
+
   const rows = await query<{
     id: number;
     admin_id: number;
@@ -68,11 +132,20 @@ export async function staffAudit(req: Page = page({ limit: 25 })): Promise<Paged
        FROM admin_updation_log l
        LEFT JOIN ms_user act ON act.user_pid = l.admin_id
        LEFT JOIN ms_user acc ON acc.user_pid = l.upt_id
-      ORDER BY l.date DESC, l.id DESC ${limitClause(req)}`,
+      ORDER BY l.date DESC, l.id DESC ${limitClause(deep)}`,
   );
 
-  return toPaged(
-    rows.map((r) => {
+  /* Pulse's own reassignments, folded in. Degraded rather than fatal: if the
+     store is unreachable the log is MSG91's alone, which is what it was before
+     this existed, and the warning says which half is missing. */
+  let mine: AuditEntry[] = [];
+  try {
+    mine = await ownerAudit(MERGE_WINDOW);
+  } catch (err) {
+    console.warn("[pulse] reassignments missing from the audit log:", (err as Error).message);
+  }
+
+  const theirs = rows.map((r) => {
       const before = (r.before_val ?? "").trim();
       const after = (r.after_val ?? "").trim();
       const acct = accountName({
@@ -101,10 +174,17 @@ export async function staffAudit(req: Page = page({ limit: 25 })): Promise<Paged
               : "no value recorded",
         tag: Number(r.type) === 1 ? "act" : "",
         typeCode: Number(r.type),
+        ts: new Date(r.date).toISOString(),
       };
-    }),
-    req,
+    });
+
+  /* Newest first, and ties broken by id so a page boundary never shows the
+     same row twice or skips one — two events in the same second are common
+     inside one bulk reassignment. */
+  const merged = [...theirs, ...mine].sort(
+    (a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : b.id - a.id),
   );
+  return toPaged(merged.slice(req.offset, req.offset + req.limit + 1), req);
 }
 
 /**
@@ -222,6 +302,7 @@ export async function customerAudit(req: Page = page({ limit: 25 })): Promise<Pa
         detail: prev && curr ? `${prev} → ${curr}` : curr ? `set to ${curr}` : "no value recorded",
         tag: "",
         typeCode: Number(r.type),
+        ts: new Date(r.action_time).toISOString(),
       };
     }),
     req,

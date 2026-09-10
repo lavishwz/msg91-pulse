@@ -1,6 +1,7 @@
 import { query, queryOne } from "@/lib/db";
 import { limitClause, page, toPaged, type Page, type Paged } from "./paginate";
 import { countryOf } from "./country";
+import { ownersFor, overrideCounts, type OwnerOverride } from "./ownership";
 import {
   accountName,
   ago,
@@ -71,6 +72,16 @@ export type Account = {
   motionEvidence: EvidenceLevel;
   industry: string | null;
   owner: { id: number; name: string } | null;
+  /* Where that owner came from. MSG91 records ownership in `user_handled_by`,
+     which Pulse may only read; a reassignment made in Pulse is an override in
+     its own store, layered on here. The page shows the difference, because
+     "Rhea owns this" and "we gave this to Rhea and MSG91 has not caught up"
+     are different things to walk into a meeting believing. */
+  ownerSource: "msg91" | "pulse";
+  /** What MSG91 still says, when Pulse has overridden it. */
+  ownerBefore: { id: number; name: string } | null;
+  /** Why, in the words of whoever reassigned it. */
+  ownerNote: string | null;
   balance: number;
   balanceLabel: string;
   /** L0 status sentence — the only prose that renders without a click. */
@@ -148,6 +159,11 @@ export function mapAccount(r: AccountRow): Account {
     motionEvidence: evidenceLevel,
     industry: r.client_industry ?? null,
     owner: r.admin_id ? { id: Number(r.admin_id), name: accountName({ user_fname: r.owner_name }) } : null,
+    /* Overwritten by `applyOverrides` for the accounts Pulse has reassigned.
+       The default is the truthful one: this row came from MSG91. */
+    ownerSource: "msg91",
+    ownerBefore: null,
+    ownerNote: null,
     balance,
     balanceLabel: currency ? money(balance, currency) : count(balance),
     line: statusSentence({ age, balance, status: r.user_status, currency }),
@@ -181,6 +197,69 @@ export type AccountFilter = {
 };
 
 /**
+ * The ownership predicate, with Pulse's reassignments folded in.
+ *
+ * Filtering on owner is the one place the override cannot be applied after the
+ * fact. "My accounts" and "the unowned ones" *choose* which rows come back, so
+ * an account Pulse handed to you has to be in the SQL or it never reaches the
+ * page — and one Pulse took off you has to be out of it, or it arrives and
+ * then shows somebody else's name.
+ *
+ * So the override table is read first and turned into two id lists: the ones
+ * that now match the filter and did not, and the ones that matched and no
+ * longer do. Both go in as literal IN lists. That is only reasonable because
+ * these are decisions people made by hand — there are tens of them, not tens
+ * of thousands — so the list is bounded by how much reassigning has actually
+ * happened. Past CAP it is dropped rather than sent, and said out loud: a
+ * slightly stale "my accounts" is recoverable, a query with 50,000 literals in
+ * it is not.
+ *
+ * On a store failure this falls back to MSG91's answer alone, like
+ * `applyOverrides`.
+ */
+const CAP = 2000;
+
+async function ownerClause(
+  filter: AccountFilter,
+): Promise<{ sql: string; params: (string | number)[] }> {
+  const base = filter.ownerId ? "h.admin_id = ?" : "h.admin_id IS NULL";
+  const baseParams: (string | number)[] = filter.ownerId ? [filter.ownerId] : [];
+
+  let moved: Map<string, number | null>;
+  try {
+    ({ moved } = await overrideCounts());
+  } catch (err) {
+    console.warn("[pulse] owner overrides unavailable for filter:", (err as Error).message);
+    return { sql: base, params: baseParams };
+  }
+  if (!moved.size) return { sql: base, params: baseParams };
+
+  const target = filter.ownerId ?? null;
+  const claimed: number[] = [];
+  const released: number[] = [];
+  for (const [accountId, ownerId] of moved) {
+    const id = Number(accountId);
+    if (!Number.isFinite(id)) continue;
+    (ownerId === target ? claimed : released).push(id);
+  }
+
+  if (claimed.length + released.length > CAP) {
+    console.warn(
+      `[pulse] ${claimed.length + released.length} owner overrides exceeds the ${CAP} the filter ` +
+        `will inline; owner filters are reading MSG91's ownership only until this is indexed properly.`,
+    );
+    return { sql: base, params: baseParams };
+  }
+
+  const list = (ids: number[]) => ids.join(",");
+  /* Ids are numbers checked by Number.isFinite above, so inlining them is not
+     an injection surface — and it keeps the placeholder count off the wire. */
+  const kept = released.length ? `${base} AND u.user_pid NOT IN (${list(released)})` : base;
+  const sql = claimed.length ? `((${kept}) OR u.user_pid IN (${list(claimed)}))` : `(${kept})`;
+  return { sql, params: baseParams };
+}
+
+/**
  * A page of accounts, newest signup first.
  *
  * Filters that map to a column go into SQL. `entity` and `motion` are derived,
@@ -205,12 +284,9 @@ export async function listAccounts(
 
   if (filter.ownerId || filter.unownedOnly) {
     joins.push("LEFT JOIN user_handled_by h ON h.user_id = u.user_pid");
-    if (filter.ownerId) {
-      where.push("h.admin_id = ?");
-      params.push(filter.ownerId);
-    } else {
-      where.push("h.admin_id IS NULL");
-    }
+    const clause = await ownerClause(filter);
+    where.push(clause.sql);
+    params.push(...clause.params);
   }
 
   if (filter.entity) {
@@ -246,6 +322,45 @@ const CURRENCY_BY_ENTITY: Record<string, string> = {
 };
 
 /**
+ * Lay Pulse's reassignments over MSG91's answer.
+ *
+ * `user_handled_by` is read-only to Pulse, so a reassignment made here is a row
+ * in `pulse_account_owner` (migrations/009) and this is where the two meet.
+ * The override wins where it exists, MSG91's answer stands everywhere else, and
+ * the row records which of the two you are looking at.
+ *
+ * Degraded rather than fatal on a store failure: if Pulse's own database is
+ * unreachable, an account list showing MSG91's ownership is worth far more than
+ * an error page, and the alternative is that a blip in the store takes down
+ * every surface that lists an account. It is logged, not swallowed silently.
+ */
+async function applyOverrides(accounts: Account[]): Promise<Account[]> {
+  if (!accounts.length) return accounts;
+  let overrides: Map<string, OwnerOverride>;
+  try {
+    overrides = await ownersFor(accounts.map((a) => a.id));
+  } catch (err) {
+    console.warn("[pulse] owner overrides unavailable:", (err as Error).message);
+    return accounts;
+  }
+  if (!overrides.size) return accounts;
+
+  return accounts.map((a) => {
+    const o = overrides.get(String(a.id));
+    if (!o) return a;
+    return {
+      ...a,
+      owner: o.ownerId === null ? null : { id: o.ownerId, name: o.ownerName ?? `Rep ${o.ownerId}` },
+      ownerSource: "pulse" as const,
+      /* Only interesting when the two disagree. An override that restates what
+         MSG91 already says is not a handover and should not read as one. */
+      ownerBefore: a.owner && a.owner.id !== o.ownerId ? a.owner : null,
+      ownerNote: o.note,
+    };
+  });
+}
+
+/**
  * Fetch the full account shape for a known set of ids, preserving their order.
  * Every list path funnels through here so the expensive joins only ever run for
  * one page of rows.
@@ -258,7 +373,8 @@ async function hydrate(ids: number[]): Promise<Account[]> {
     list,
   );
   const byId = new Map(rows.map((r) => [Number(r.user_pid), mapAccount(r)]));
-  return list.map((id) => byId.get(id)).filter((a): a is Account => Boolean(a));
+  const ordered = list.map((id) => byId.get(id)).filter((a): a is Account => Boolean(a));
+  return applyOverrides(ordered);
 }
 
 /**
@@ -290,7 +406,8 @@ export async function getAccount(id: number): Promise<Account | null> {
     `${SELECT_ACCOUNT} WHERE u.user_pid = ? AND u.user_type = ${USER_TYPE.CUSTOMER} LIMIT 1`,
     [id],
   );
-  return row ? mapAccount(row) : null;
+  if (!row) return null;
+  return (await applyOverrides([mapAccount(row)]))[0] ?? null;
 }
 
 /**
@@ -343,7 +460,76 @@ export type Commercial = {
   lastPayment: { amount: string; when: string; mode: string } | null;
   walletCredit: string;
   recent: { amount: string; when: string; via: string }[];
+  /** What this account actually pays per message, per route. */
+  rates: Rate[];
 };
+
+export type Rate = {
+  route: number;
+  /** `ms_route.route_name` where the database has one, "Route N" where not. */
+  routeName: string;
+  /** `text` or `voice` — MSG91's own word. */
+  kind: string;
+  /** The number, unformatted, for anything that wants to compute on it. */
+  price: number;
+  /** The number as money, in the account's own currency. */
+  priceLabel: string;
+};
+
+/**
+ * The rate card for one account.
+ *
+ * `ms_user_pricing` is the negotiated per-account price: one row per (user,
+ * route, type), five decimal places, and 489 rows in total — so most accounts
+ * are on list price and have none, and an empty list is the honest answer
+ * rather than a gap.
+ *
+ * This is the half of "payments and rates" that was never built. The reveal
+ * has always shown three payment tiles and the prototype's own sample data put
+ * "₹0.128 current SMS rate" beside them, which was a number somebody typed
+ * into a mockup. A rep quoting that in a renewal call is the exact failure
+ * this table prevents.
+ *
+ * Deliberately *not* `message_pricing`: that is the public volume-slab list,
+ * the same for everybody, and showing it on an account page would read as
+ * "this is what they pay" when it is "this is what they would pay if nobody
+ * had negotiated". `country_base_pricing` has the same problem.
+ *
+ * Formatted at five decimals rather than two: an SMS rate is ₹0.09200, and
+ * rounding it to ₹0.09 loses the digit the whole conversation is about.
+ */
+export async function accountRates(id: number, currency: string): Promise<Rate[]> {
+  const rows = await query<{
+    route: string | null;
+    route_name: string | null;
+    type: string | null;
+    pricing: string | null;
+  }>(
+    `SELECT p.route, r.route_name, p.type, p.pricing
+       FROM ms_user_pricing p
+       LEFT JOIN ms_route r ON r.route_pid = p.route
+      WHERE p.user_pid = ?
+      ORDER BY p.type, CAST(p.route AS UNSIGNED)
+      LIMIT 24`,
+    [id],
+  );
+
+  const symbol = currencySymbol(currency);
+  return rows
+    .filter((r) => (r.route ?? "").trim() !== "")
+    .map((r) => {
+      const route = Number(r.route);
+      const price = Number(r.pricing ?? 0);
+      const named = (r.route_name ?? "").trim();
+      return {
+        route,
+        routeName: named || `Route ${route}`,
+        kind: (r.type ?? "").trim() || "text",
+        price,
+        priceLabel: `${symbol}${price.toFixed(5)}`,
+      };
+    });
+}
 
 export async function accountCommercial(id: number, currency: string): Promise<Commercial> {
   const totals = await queryOne<{ amt: string | null; n: number; last: Date | null }>(
@@ -377,9 +563,12 @@ export async function accountCommercial(id: number, currency: string): Promise<C
     return m ? m[1].toLowerCase() : "gateway";
   };
 
+  const rates = await accountRates(id, currency);
+
   return {
     provisional: true,
     currency,
+    rates,
     received: {
       amount: money(totals?.amt ?? 0, currency),
       count: Number(totals?.n ?? 0),
@@ -470,11 +659,11 @@ export async function accountActivity(
 export async function countAccounts(filter: AccountFilter = {}): Promise<number> {
   const where: string[] = [`u.user_type = ${USER_TYPE.CUSTOMER}`];
   const params: (string | number)[] = [];
-  if (filter.ownerId) {
-    where.push("h.admin_id = ?");
-    params.push(filter.ownerId);
+  if (filter.ownerId || filter.unownedOnly) {
+    const clause = await ownerClause(filter);
+    where.push(clause.sql);
+    params.push(...clause.params);
   }
-  if (filter.unownedOnly) where.push("h.admin_id IS NULL");
 
   const row = await queryOne<{ n: number }>(
     `SELECT COUNT(*) n FROM ms_user u
@@ -498,7 +687,15 @@ export async function accountPeople(
   id: number,
   req: Page = page({ limit: 8 }),
 ): Promise<Paged<{ name: string; email: string; role: string | null }>> {
-  const rows = await query<{ member_name: string | null; member_email: string | null; member_role: string | null }>(
+  const rows = await query<{
+    member_name: string | null;
+    member_email: string | null;
+    // int(11) in this schema, not the string this code once assumed — calling
+    // .trim() on it threw, and because accountPeople is inside the account
+    // page's Promise.all that took the whole page down with a 503 for every
+    // company that had ever invited anybody.
+    member_role: number | string | null;
+  }>(
     `SELECT member_name, member_email, member_role
        FROM ms_invite_member
       WHERE member_company_id = ?
@@ -511,10 +708,26 @@ export async function accountPeople(
       .map((r) => ({
         name: (r.member_name ?? "").trim() || (r.member_email ?? "").split("@")[0],
         email: r.member_email ?? "",
-        role: (r.member_role ?? "").trim() || null,
+        role: memberRole(r.member_role),
       })),
     req,
   );
+}
+
+/**
+ * `ms_invite_member.member_role` is a numeric code and this database carries no
+ * lookup table for it — the five values in use (0 to 4) all sit against the
+ * same `member_access` list, so there is nothing to infer a meaning from.
+ *
+ * Reported as a code rather than guessed at, the same way `admin_updation_log`
+ * types are in lib/pulse/audit.ts. "role 3" is unhelpful; "owner" would be a
+ * fabrication on somebody's account page, and that is worse.
+ */
+function memberRole(raw: number | string | null): string | null {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const n = Number(raw);
+  if (Number.isFinite(n)) return n === 0 ? null : `role ${n}`;
+  return String(raw).trim() || null;
 }
 
 /**

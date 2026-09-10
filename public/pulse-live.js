@@ -12,7 +12,7 @@
  * real and which are still the prototype's sample data.
  */
 window.PulseLive = (function () {
-  const state = { loaded: false, error: null, real: [], mock: [], me: null, ids: {}, cardsLoaded: false, boardLoaded: false, autopilot: null, drafts: [], policy: null, manifest: null, motionRules: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null };
+  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, boardLoaded: false, autopilot: null, drafts: [], policy: null, manifest: null, motionRules: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null };
 
   /** How many rows of an answer are on screen at once. Matches lib/pulse/ask.ts. */
   const PAGE_ROWS = 50;
@@ -30,6 +30,18 @@ window.PulseLive = (function () {
       method: "POST",
       headers: { "Content-Type": "application/json", accept: "application/json" },
       body: JSON.stringify(payload),
+    });
+    const body = await res.json().catch(() => ({ ok: false, error: "bad JSON" }));
+    if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
+    return body;
+  };
+
+  /** Same again for PUT and DELETE, which reassignment needs. */
+  const send = async (method, path, payload) => {
+    const res = await fetch(path, {
+      method: method,
+      headers: { "Content-Type": "application/json", accept: "application/json" },
+      body: payload === undefined ? undefined : JSON.stringify(payload),
     });
     const body = await res.json().catch(() => ({ ok: false, error: "bad JSON" }));
     if (!res.ok || body.ok === false) throw new Error(body.error || `HTTP ${res.status}`);
@@ -74,7 +86,14 @@ window.PulseLive = (function () {
       .filter(Boolean)
       .join(" · ") + ".",
     owner: a.owner ? a.owner.name : null,
+    /* The id as well as the name. The reassign sheet pre-selects whoever holds
+       the account, and reading that from the detail payload alone meant the
+       sheet opened from a card — where the account has never been opened, so
+       the detail has never been fetched — showed nobody picked and offered
+       "Take it off everybody →" on an account that had an owner. */
+    ownerId: a.owner ? a.owner.id : null,
     pe: [],
+    no: [],
     la: [],
     ev: [],
     money: [],
@@ -87,6 +106,44 @@ window.PulseLive = (function () {
    * Apply the bootstrap payload onto the renderer's data objects.
    * Each block is independent, so one empty source cannot blank a surface.
    */
+  /**
+   * The team, as the standings and the reassign picker both read it.
+   *
+   * Two lists off one payload, and refetchable on their own: a reassignment
+   * changes the book size beside every name, and both surfaces show it.
+   */
+  function applyStandings(standings, bag) {
+    if (!standings.length) return;
+    if (bag.REPS) {
+      /* Two admins can share a display name — ms_user.user_fname is not
+         unique — so the email goes on the second line. Without it the list
+         shows the same name twice and there is no way to tell which person
+         you are handing an account to. */
+      const seenName = new Map();
+      standings.forEach((r) => seenName.set(r.name, (seenName.get(r.name) || 0) + 1));
+      bag.REPS = standings.map((r) => [
+        r.name,
+        r.initials,
+        [
+          `${r.accounts.toLocaleString("en-IN")} account${r.accounts === 1 ? "" : "s"}`,
+          r.email || (seenName.get(r.name) > 1 ? `id ${r.id}` : ""),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        r.isMe ? 1 : 0,
+        /* The rep's MSG91 id. The reassign sheet selects by this rather than
+           by list position: the list is ordered by book size and re-sorts the
+           moment a reassignment lands, so an index picked before a save names
+           a different person after it. */
+        r.id,
+      ]);
+    }
+    bag.STANDINGS.length = 0;
+    standings.forEach((r) => {
+      bag.STANDINGS.push([r.name, r.initials, r.accounts, "", "up", r.isMe ? 1 : 0]);
+    });
+  }
+
   /** Cards arrive on their own request; see the note in the bootstrap route. */
   function applyCards(cards, bag) {
     if (!cards || !cards.length) {
@@ -110,19 +167,33 @@ window.PulseLive = (function () {
        the board: the board scores one page and most of it has no country. */
     state.countries = data.countries || null;
     state.can = data.can || {};
+    /* Two different questions, and they used to be answered by one value.
+       `signedInAs` is the person holding the session — that is the identity the
+       header and the profile page are about. `me` is the MSG91 rep whose book
+       is on screen (PULSE_ME_USER_PID, or the largest book when unpinned),
+       which is where the account count comes from. They are usually the same
+       person and are not guaranteed to be, so the profile no longer shows the
+       rep's name and address to whoever happens to be logged in. */
+    state.signedInAs = data.signedInAs || null;
+    if (bag.ME && data.signedInAs) {
+      bag.ME.name = data.signedInAs.name;
+      bag.ME.email_addr = data.signedInAs.email || null;
+      real.push("who you are signed in as (" + data.signedInAs.email + ")");
+    }
+    /* Google connect state, kept on Pulse's own side (pulse_connection,
+       migrations/012) rather than only in this tab's memory — so it reads the
+       same after a reload and on another device. Only overwritten when the
+       server actually answered the question, so a bootstrap with no session
+       doesn't stomp what a just-finished connect already set locally. */
+    if (bag.ME && data.connections) {
+      bag.ME.gmail = data.connections.gmail ? 1 : 0;
+      bag.ME.cal = data.connections.cal ? 1 : 0;
+      bag.ME.slackapp = data.connections.slack ? 1 : 0;
+      real.push("connection state (" + JSON.stringify(data.connections) + ")");
+    }
     if (data.me) {
-      /* The header is NOT written here any more. It carries the person who
-         signed in — server-rendered from the session in app/page.tsx — and
-         `data.me` is a different thing: the MSG91 rep whose book Pulse is
-         showing (PULSE_ME_USER_PID). The two are usually the same person and
-         will not always be, and the header has to say who you are signed in
-         as. The profile page still reads the rep from ME below. */
-      if (bag.ME) {
-        bag.ME.name = data.me.name;
-        bag.ME.email_addr = data.me.email || null;
-        bag.ME.accounts = data.me.accounts;
-      }
-      real.push("who you are (" + data.me.name + ", " + data.me.accounts + " accounts)");
+      if (bag.ME) bag.ME.accounts = data.me.accounts;
+      real.push("the book on screen (" + data.me.name + ", " + data.me.accounts + " accounts)");
     }
 
     const wall = (data.wall || []).concat(data.myAccounts || []);
@@ -156,39 +227,9 @@ window.PulseLive = (function () {
     // Carry the owner name onto every stub so the company header can show it.
     // The reassign sheet listed five invented people. These are the real reps,
     // with the number of accounts each actually owns.
-    if (data.standings && data.standings.length && bag.REPS) {
-      /* Two admins can share a display name — ms_user.user_fname is not
-         unique — so the email goes on the second line. Without it the list
-         shows the same name twice and there is no way to tell which person
-         you are handing an account to. */
-      const seenName = new Map();
-      data.standings.forEach((r) => seenName.set(r.name, (seenName.get(r.name) || 0) + 1));
-      bag.REPS = data.standings.map((r) => [
-        r.name,
-        r.initials,
-        [
-          `${r.accounts.toLocaleString("en-IN")} account${r.accounts === 1 ? "" : "s"}`,
-          r.email || (seenName.get(r.name) > 1 ? `id ${r.id}` : ""),
-        ]
-          .filter(Boolean)
-          .join(" · "),
-        r.isMe ? 1 : 0,
-      ]);
-      real.push(`${data.standings.length} real reps in the reassign list`);
-    }
-
     if (data.standings && data.standings.length) {
-      bag.STANDINGS.length = 0;
-      data.standings.forEach((s) => {
-        bag.STANDINGS.push([
-          s.name,
-          s.initials,
-          s.accounts,
-          "",
-          "up",
-          s.isMe ? 1 : 0,
-        ]);
-      });
+      applyStandings(data.standings, bag);
+      real.push(`${data.standings.length} real reps in the reassign list`);
       real.push(data.standings.length + " reps in standings, ranked by accounts owned");
     }
 
@@ -743,6 +784,41 @@ window.PulseLive = (function () {
   }
   const retireMotionRule = (key, then) => ruleAction({ action: "retire", key }, then);
 
+  /**
+   * Build a live automation from a sentence: plan it, provision its own agent
+   * on GTWY, subscribe it on cron-job.org if it needs a schedule, save it.
+   * Unlike compileRule, this one writes something real — a running automation
+   * — so it is only offered from the same screen, one button over.
+   */
+  async function buildAutomation(motion, english, cb) {
+    try {
+      const res = await fetch("/api/pulse/autopilot/build", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ motion, english }),
+      });
+      const out = await res.json();
+      cb(out);
+    } catch (err) {
+      cb({ ok: false, error: err.message });
+    }
+  }
+
+  /** Turn a built automation off — retires the row and tears down its cron job and agent. */
+  async function retireAutomation(key, then) {
+    try {
+      const res = await fetch("/api/pulse/autopilot/automations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "retire", key }),
+      });
+      const out = await res.json();
+      if (then) then(out);
+    } catch (err) {
+      if (then) then({ ok: false, error: err.message });
+    }
+  }
+
   /** Replay a rule against decisions already made. Nothing is sent. */
   async function testMotionRule(key, cb) {
     try {
@@ -872,22 +948,33 @@ window.PulseLive = (function () {
       c.__stub = false;
       /* Who works at the company, from the members it invited. An empty list is
          the honest answer for a young account — and is itself a signal, since an
-         account where you know one person churns at roughly twice the rate. */
-      if (Array.isArray(d.people) && d.people.length) {
-        c.pe = d.people.map((p) => [p.name, p.email, p.role || "member"]);
-      }
+         account where you know one person churns at roughly twice the rate.
+
+         This used to be assigned and then immediately overwritten by the notes
+         four lines further down, so the section headed "People" showed
+         somebody's call notes and the real people — the ones the page exists to
+         let you pick from — were fetched from MSG91 and thrown away. They are
+         two lists now, under two headings, and only the notes page. */
+      c.pe = (d.people || []).map((p) => [p.name, p.email, p.role || "member"]);
       /* Autopilot's own record of this company: what it decided, what it wrote
          and is holding, and what it intends to do next. */
       c.autopilot = d.autopilot || null;
-      c.la = (d.routes || []).map((r) => [
-        r.product,
-        r.balance > 0 ? "active" : "stopped",
-        r.balance > 0 ? Math.round(r.balance).toLocaleString("en-IN") + " credits" : "no balance",
-      ]);
+      /* Products, from lib/pulse/products.ts — entitlement in
+         ms_user_services plus one evidence table per product. `routes` is still
+         on the response and is still SMS plumbing; it is no longer pretending
+         to be the product list. */
+      c.la = (d.products || []).map((p) => [p.product, p.state, p.detail]);
       c.ev = (d.activity || []).map((a) => [a.when, a.what]);
-      c.pe = (d.comments || []).map((m) => [m.by, m.text.slice(0, 90), "noted " + m.when]);
+      c.no = (d.comments || []).map((m) => [m.by, m.text.slice(0, 90), "noted " + m.when]);
+      /* Who Pulse says owns this, and whether that is MSG91's answer or ours. */
+      c.ownerSource = d.account ? d.account.ownerSource : "msg91";
+      c.ownerBefore = d.account ? d.account.ownerBefore : null;
+      c.ownerNote = d.account ? d.account.ownerNote : null;
+      if (d.account && d.account.owner) c.owner = d.account.owner.name;
+      else if (d.account) c.owner = "";
+      c.ownerId = d.account && d.account.owner ? d.account.owner.id : null;
       c.__evNext = d.activityNext ?? null;
-      c.__peNext = d.commentsNext ?? null;
+      c.__noNext = d.commentsNext ?? null;
       /* Tags arrive with the page, so they are on screen at the first paint
          rather than one request later. */
       if (Array.isArray(d.tags)) applyTags(name, d.tags, bag);
@@ -1006,6 +1093,21 @@ window.PulseLive = (function () {
             [String(m.received.count), "payments", m.provisional ? "provisional" : ""],
           ]
         : [["—", "no payments on record", ""]];
+      /* The rates half of "payments and rates". Never built until now — the
+         page showed three payment tiles and the prototype's invented
+         "₹0.128 current SMS rate" beside them. This is ms_user_pricing: what
+         this account actually negotiated, per route. */
+      c.rates = m && m.rates ? m.rates : [];
+      /* Already fetched and thrown away before: accountCommercial returns the
+         last five payments and nothing rendered them. */
+      c.recent = m && m.recent ? m.recent : [];
+      /* Who else has opened this section. The button has always said the
+         reveal is recorded; now that it is, the record is worth showing to the
+         person about to add themselves to it. */
+      c.reveals = d.reveals || [];
+      /* False when the audit row could not be written. The section says so
+         rather than letting the button's promise stand unearned. */
+      c.revealLogged = d.revealLogged !== false;
       render();
     } catch (err) {
       console.warn("[pulse] reveal " + id + " failed:", err.message);
@@ -1143,6 +1245,10 @@ window.PulseLive = (function () {
         : {}),
     };
     render();
+    // The question just answered is now stored (qcache), but the Asked tab's
+    // count and list come from state.asked, loaded once at bootstrap. Without
+    // this it only appeared there after a full page reload.
+    loadAsked(render);
   }
 
   /**
@@ -1205,21 +1311,24 @@ window.PulseLive = (function () {
 
   /**
    * Load more of one of the two per-account feeds — notes or recent activity.
-   * `which` is "people" or "recently".
+   * `which` is "notes" or "recently".
+   *
+   * People are not here: `ms_invite_member` returns everybody a company has
+   * invited and that is a handful, so the whole list comes with the page.
    */
   async function loadMoreAccountFeed(which, bag, render) {
     const name = bag.S.cust;
     const c = name && bag.CUST[name];
     const id = state.ids[name];
     if (!c || !id) return;
-    const cursor = which === "people" ? c.__peNext : c.__evNext;
+    const cursor = which === "notes" ? c.__noNext : c.__evNext;
     if (cursor == null) return;
-    const param = which === "people" ? "commentsFrom" : "activityFrom";
+    const param = which === "notes" ? "commentsFrom" : "activityFrom";
     try {
       const d = await get(`/api/pulse/accounts/${id}?${param}=${cursor}`);
-      if (which === "people") {
-        c.pe = c.pe.concat((d.comments || []).map((m) => [m.by, m.text.slice(0, 90), "noted " + m.when]));
-        c.__peNext = d.commentsNext ?? null;
+      if (which === "notes") {
+        c.no = (c.no || []).concat((d.comments || []).map((m) => [m.by, m.text.slice(0, 90), "noted " + m.when]));
+        c.__noNext = d.commentsNext ?? null;
       } else {
         c.ev = c.ev.concat((d.activity || []).map((a) => [a.when, a.what]));
         c.__evNext = d.activityNext ?? null;
@@ -1254,6 +1363,288 @@ window.PulseLive = (function () {
    * forth must not re-run it. Fetched after the first paint: Now is readable
    * without it, and the sample board is what shows until it lands.
    */
+  /* ── how you write ────────────────────────────────────────────────────────
+     Onboarding step 3 and the profile page both draw this. It was a hardcoded
+     array of five, the same for everybody and reset by a reload; it is one
+     row per trait per person now (pulse_user_voice, migrations/010). */
+  state.voice = { traits: [], edited: false, loaded: false, error: null };
+
+  function applyVoice(d, bag) {
+    state.voice.traits = (d.traits || []).map((t) => t.trait);
+    state.voice.edited = Boolean(d.edited);
+    state.voice.loaded = true;
+    state.voice.error = null;
+    /* The renderer reads ONBSTATE.traits directly in a couple of places, so
+       it is kept pointing at the same list rather than left to drift. */
+    if (bag && bag.setVoice) bag.setVoice(state.voice.traits);
+  }
+
+  async function loadVoice(bag, render) {
+    if (state.voice.loaded) return;
+    try {
+      applyVoice(await get("/api/pulse/voice"), bag);
+    } catch (err) {
+      /* Not fatal to onboarding: the step still renders, with the defaults and
+         a line saying they are not being saved. */
+      state.voice.error = err.message;
+      state.voice.loaded = true;
+      console.warn("[pulse] voice failed:", err.message);
+    }
+    render();
+  }
+
+  async function addVoiceTrait(trait, bag, render) {
+    const value = (trait || "").trim();
+    if (value.length < 2) return;
+    try {
+      applyVoice(await post("/api/pulse/voice", { trait: value }), bag);
+    } catch (err) {
+      state.voice.error = err.message;
+      console.warn("[pulse] adding a trait failed:", err.message);
+    }
+    render();
+  }
+
+  async function removeVoiceTrait(trait, bag, render) {
+    try {
+      applyVoice(await send("DELETE", "/api/pulse/voice?trait=" + encodeURIComponent(trait)), bag);
+    } catch (err) {
+      state.voice.error = err.message;
+      console.warn("[pulse] removing a trait failed:", err.message);
+    }
+    render();
+  }
+
+  /* ── reassignment ─────────────────────────────────────────────────────────
+     Ownership lives in MSG91's `user_handled_by`, which Pulse may only read, so
+     a reassignment is recorded on Pulse's side (pulse_account_owner) and laid
+     over MSG91's answer when an account is read. See migrations/009.
+
+     `state.reassign` is what the sheet draws itself from: the unowned pile and
+     the suggested split when it opens on "Unassigned", the outcome of the last
+     save either way. It is kept here rather than in the renderer because the
+     sheet is rebuilt on every render and would otherwise forget what it was
+     told the moment anything else on the page changed. */
+  state.reassign = { open: null, single: false, pick: null, loading: false, error: null, saved: null, pile: null, reps: null };
+
+  /** Open the sheet. `name` is a company, or "Unassigned" for the whole pile. */
+  function openReassign(name, single, bag, render) {
+    const r = state.reassign;
+    r.open = name;
+    r.single = Boolean(single) && name !== "Unassigned";
+    r.error = null;
+    r.saved = null;
+    /* Pre-selected to whoever holds it now, so "Reassign" on an account that
+       already has an owner does not start from nothing and make you hunt for
+       the name you are replacing. */
+    const c = bag.CUST[name];
+    r.pick = r.single && c && c.ownerId ? c.ownerId : null;
+    render();
+    if (!r.single && !r.pile) loadPile(bag, render);
+    if (!r.reps) loadAssignable(render);
+  }
+
+  /**
+   * Everyone this account may be handed to.
+   *
+   * The sheet used to draw the standings, which are built from who already owns
+   * something — so a rep with no accounts was not in the list and there was no
+   * way to give them their first one. Fetched once per session and kept, since
+   * it changes only when somebody joins the team.
+   */
+  /**
+   * Re-read the standings after a reassignment.
+   *
+   * Every rep in them carries a book size, and a reassignment has just changed
+   * two of those numbers. The bulk path re-boots, which covers this among much
+   * else; one account is not worth ten requests, so this is the one that moved.
+   */
+  async function loadStandings(bag, render) {
+    try {
+      const d = await get("/api/pulse/team?view=standings");
+      applyStandings(d.standings || [], bag);
+    } catch (err) {
+      console.warn("[pulse] standings refresh failed:", err.message);
+    }
+    render();
+  }
+
+  async function loadAssignable(render) {
+    try {
+      const d = await get("/api/pulse/team?view=assignable&limit=200");
+      state.reassign.reps = (d.rows || []).map((r) => [
+        r.name,
+        r.initials,
+        [
+          `${r.accounts.toLocaleString("en-IN")} account${r.accounts === 1 ? "" : "s"}`,
+          r.email,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        r.isMe ? 1 : 0,
+        r.id,
+      ]);
+    } catch (err) {
+      /* Not fatal: the sheet falls back to the standings, which is the list it
+         drew before this existed. Short by whoever owns nothing, and said so. */
+      console.warn("[pulse] assignable reps failed:", err.message);
+    }
+    render();
+  }
+
+  function closeReassign(render) {
+    state.reassign.open = null;
+    state.reassign.error = null;
+    state.reassign.saved = null;
+    render();
+  }
+
+  /** Choose a rep in the sheet. Ids, not list positions — the list re-sorts. */
+  function pickRep(id, render) {
+    const r = state.reassign;
+    /* Clicking the selected rep again clears it, which is how you say "take
+       this off everybody" without a separate button for it. */
+    r.pick = r.pick === id ? null : id;
+    r.error = null;
+    render();
+  }
+
+  /** The unowned pile and the split Pulse suggests for it. */
+  async function loadPile(bag, render) {
+    const r = state.reassign;
+    r.loading = true;
+    render();
+    try {
+      r.pile = await get("/api/pulse/reassign?limit=200");
+    } catch (err) {
+      r.error = err.message;
+      console.warn("[pulse] unowned pile failed:", err.message);
+    }
+    r.loading = false;
+    render();
+  }
+
+  /**
+   * Save one account's new owner.
+   *
+   * `pick` of null is a real answer — the account is taken off everybody — so
+   * this never refuses on an empty selection. The account page is reloaded
+   * from the server afterwards rather than patched here: the owner shown has
+   * to be the one the database will give the next person to open it.
+   */
+  async function saveReassign(bag, render) {
+    const r = state.reassign;
+    const name = r.open;
+    const id = state.ids[name];
+    if (!id) {
+      r.error = name + " is one of the prototype's sample companies, so there is no account to reassign.";
+      render();
+      return;
+    }
+    r.loading = true;
+    r.error = null;
+    render();
+    try {
+      const d = await send("PUT", "/api/pulse/accounts/" + id + "/owner", { ownerId: r.pick });
+      const c = bag.CUST[name];
+      if (c) {
+        c.owner = d.owner ? d.owner.name : "";
+        c.ownerId = d.owner ? d.owner.id : null;
+        c.ownerSource = d.source || "pulse";
+        c.ownerBefore = d.before || null;
+      }
+      /* The wall row carries "no owner" as its hot flag, so it has to move too
+         or the company stays lit on Now after being given to somebody. */
+      const row = bag.BOOK.find((b) => b[1] === name);
+      if (row) row[5] = d.owner ? 0 : 1;
+      /* Left open, showing what happened. Closing on success put the outcome
+         nowhere: the message was drawn only on a company page, so reassigning
+         from a card on Now reported nothing at all, and the page it *was* drawn
+         on did not check which account it belonged to — reassign one company,
+         open another, and the second claimed the first one's new owner. */
+      r.saved = d.owner
+        ? name + " is now owned by " + d.owner.name + "."
+        : name + " is now owned by nobody.";
+      /* Every name in the picker carries a book size, and one of them just
+         changed. Dropped rather than patched, so the next open reads it. */
+      r.reps = null;
+      loadStandings(bag, render);
+    } catch (err) {
+      r.error = err.message;
+      console.warn("[pulse] reassign failed:", err.message);
+    }
+    r.loading = false;
+    render();
+  }
+
+  /**
+   * Apply the whole suggested split — every country group to its incumbent.
+   *
+   * Groups with no incumbent are skipped rather than dealt out to fill the
+   * gap, and how many were skipped is said out loud: silently reassigning
+   * two hundred accounts and eight hundred not is the kind of half-success
+   * that costs a week to unpick.
+   */
+  async function applySplit(bag, render) {
+    const r = state.reassign;
+    if (!r.pile) return;
+    const assignments = [];
+    let skipped = 0;
+    for (const g of r.pile.groups || []) {
+      if (!g.suggested) { skipped += g.accounts; continue; }
+      for (const accountId of g.accountIds) assignments.push({ accountId: accountId, ownerId: g.suggested.id });
+    }
+    if (!assignments.length) {
+      r.error = "None of these countries has a rep already working it, so there is nothing to suggest.";
+      render();
+      return;
+    }
+    await applyAssignments(assignments, skipped, bag, render);
+  }
+
+  /** Give every account in the pile to one rep. */
+  async function applyPileToOne(bag, render) {
+    const r = state.reassign;
+    if (!r.pile || r.pick == null) {
+      r.error = "Pick who gets them first.";
+      render();
+      return;
+    }
+    const assignments = (r.pile.accounts || []).map((a) => ({
+      accountId: a.id,
+      accountName: a.name,
+      ownerId: r.pick,
+    }));
+    await applyAssignments(assignments, 0, bag, render);
+  }
+
+  async function applyAssignments(assignments, skipped, bag, render) {
+    const r = state.reassign;
+    r.loading = true;
+    r.error = null;
+    render();
+    try {
+      const d = await post("/api/pulse/reassign", { assignments: assignments });
+      r.saved =
+        d.moved +
+        " account" + (d.moved === 1 ? "" : "s") + " reassigned" +
+        (skipped ? ", " + skipped + " left alone — no rep already works those countries" : "") +
+        ".";
+      r.pile = null;
+      r.reps = null;
+      r.pick = null;
+      /* The wall, the counts and the standings all read ownership, and all
+         three are now wrong. Refetching is cheaper than patching each. */
+      /* `boot` is a method on the returned object, not a binding in here. */
+      window.PulseLive.boot(bag, render).catch(() => {});
+    } catch (err) {
+      r.error = err.message;
+      console.warn("[pulse] bulk reassign failed:", err.message);
+    }
+    r.loading = false;
+    render();
+  }
+
   const boards = {};
   async function loadBoard(scope, bag, render) {
     if (boards[scope] !== undefined) {
@@ -1295,6 +1686,8 @@ window.PulseLive = (function () {
     loadAsked,
     searchQuestions,
     compileRule,
+    buildAutomation,
+    retireAutomation,
     loadMotionRules,
     saveMotionRule,
     addMotionRule,
@@ -1317,6 +1710,23 @@ window.PulseLive = (function () {
     loadMoreAccounts,
     loadMoreAudit,
     loadMoreAccountFeed,
+    /* Tags. These three were written but never put on the object, so every
+       "Add a tag" click died on `PulseLive.addTags is not a function` and the
+       ✕ on a tag did nothing at all. */
+    loadTags,
+    addTags,
+    removeTag,
+    /* Reassignment. Real now: it writes to pulse_account_owner and the page
+       reads its own write back. */
+    loadVoice,
+    addVoiceTrait,
+    removeVoiceTrait,
+    openReassign,
+    closeReassign,
+    pickRep,
+    saveReassign,
+    applySplit,
+    applyPileToOne,
     askCustom,
     searchCompanies,
     /**
@@ -1349,7 +1759,11 @@ window.PulseLive = (function () {
       /* Before anything else: neither light may sit on "checking" if the very
          first request is the one that fails. */
       checkConnections();
-      setInterval(checkConnections, 60_000);
+      /* Once. `boot` is called again after a bulk reassignment to re-read the
+         wall and the standings, and every one of those calls used to start
+         another 60-second poller that nothing ever cleared — two health
+         requests a minute became four, then six. */
+      if (!state.connectionPoll) state.connectionPoll = setInterval(checkConnections, 60_000);
       try {
         const data = await get("/api/pulse/bootstrap");
         apply(data, bag);

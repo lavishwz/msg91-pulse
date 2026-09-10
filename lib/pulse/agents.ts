@@ -56,6 +56,23 @@ export const AGENTS = {
     env: "GTWY_AGENT_RULE_WORKER",
     fallback: "6aa1ad3d48d38ff06b16dcf1",
   },
+  /* Turns an English rule into a full execution plan: a schedule, a query, a
+     prompt for its own dynamically-created executor agent. See build.ts. */
+  automationPlanner: {
+    slug: "automation-planner",
+    env: "GTWY_AGENT_AUTOMATION_PLANNER",
+    fallback: "6aa25c73d03482378797b8ea",
+  },
+  /* Decides the health band. The weighted formula in health.ts still runs —
+     its four components are what this agent is *given* — but the band an
+     account lands in, and the sentence explaining it, are this agent's call.
+     No fallback id: until somebody creates the agent on GTWY and sets the
+     env, health.ts keeps its own arithmetic rather than calling a stranger. */
+  accountHealth: {
+    slug: "account-health",
+    env: "GTWY_AGENT_ACCOUNT_HEALTH",
+    fallback: "",
+  },
 } as const;
 
 export type AgentKey = keyof typeof AGENTS;
@@ -113,6 +130,28 @@ export const AccountReviewSchema = z.object({
   confidence: z.number().min(0).max(1),
 });
 
+/**
+ * One account's health, as the agent decides it.
+ *
+ * `score_now` / `score_prior` are 0–100 on the same axis the formula uses, so
+ * the two are comparable and the caller can clamp a wild answer back toward
+ * the arithmetic. `band` is deliberately *not* asked for: it is derived from
+ * the score by `bandOf`, so a reply cannot claim a score of 80 and a band of
+ * "risk" and leave the surface contradicting itself.
+ */
+export const HealthVerdictSchema = z.object({
+  id: z.number(),
+  score_now: z.number().min(0).max(100),
+  score_prior: z.number().min(0).max(100),
+  /** One sentence, in a rep's words, naming the evidence that decided it. */
+  reason: z.string().min(1),
+  confidence: z.number().min(0).max(1),
+});
+
+export const HealthSchema = z.object({ verdicts: z.array(HealthVerdictSchema) });
+
+export type HealthVerdict = z.infer<typeof HealthVerdictSchema>;
+
 export const PortfolioDigestSchema = z.object({
   narrative: z.string(),
   plays: z.array(
@@ -146,6 +185,19 @@ export const CompiledRuleSchema = z.object({
 });
 
 export type CompiledRule = z.infer<typeof CompiledRuleSchema>;
+
+/** What the planner returns for one English rule: a full, runnable build plan. */
+export const AutomationPlanSchema = z.object({
+  mode: z.enum(["cron", "event"]),
+  cron_schedule: z.string(),
+  find_sql: z.string(),
+  subject_col: z.string(),
+  watermark_col: z.string(),
+  max_rows: z.number().int().positive(),
+  executor_prompt: z.string(),
+  optimized_rule_prompt: z.string(),
+});
+export type AutomationPlan = z.infer<typeof AutomationPlanSchema>;
 
 /** What the worker says about one row an automation found. */
 export const RuleWorkerSchema = z.object({
@@ -343,6 +395,37 @@ export async function reviewAccount(
   });
 }
 
+/* ── Agent 10 · account-health ───────────────────────────────────────────── */
+
+/** True only when the gateway *and* an account-health agent id are both set. */
+export function healthAgentConfigured(): boolean {
+  return gatewayConfigured() && Boolean(agentId("accountHealth"));
+}
+
+/**
+ * Score a batch of accounts.
+ *
+ * The signals go in as JSON — one object per account, carrying the same four
+ * components the formula weighs plus the raw spend windows behind them. The
+ * agent is asked to judge, not to fetch: it has no database access, exactly
+ * like every other agent here.
+ */
+export async function judgeHealth(
+  signals: Record<string, unknown>[],
+): Promise<AgentCall<z.infer<typeof HealthSchema>>> {
+  return callAgent(
+    "accountHealth",
+    HealthSchema,
+    "Decide the health of each account.",
+    {
+      today: today(),
+      accounts_json: JSON.stringify(signals),
+    },
+    // A batch of 25 accounts is a bigger answer than a single draft, so the
+    // default 120s is left alone rather than tightened.
+  );
+}
+
 /* ── Agent 5 · portfolio-digest ──────────────────────────────────────────── */
 
 export async function digestPortfolio(
@@ -438,4 +521,97 @@ export async function judgeRow(
     agent_task: agentTask,
     row_json: JSON.stringify(row),
   });
+}
+
+/* ── Agent 9 · automation-planner ────────────────────────────────────────── */
+
+/**
+ * The real schema, hand-verified against information_schema — not GTWY's
+ * knowledge-base attachment, which turned out to be inert: `doc_ids` on an
+ * agent is stored but never read by the model-call path (checked the
+ * AI-middleware source directly), so a document uploaded there sits unused
+ * unless a retrieval tool is also wired up, which this agent has none of.
+ * Passed as a plain prompt variable instead — the same mechanism `{{fields}}`
+ * already uses successfully on every call.
+ *
+ * Keep this in sync with reality, not with what would be convenient: the
+ * first three automations built without it guessed `accounts`/`signups`/
+ * `leads`, none of which exist.
+ */
+const SCHEMA_GLOSSARY = `
+Real, queryable MySQL tables (read-only) — use ONLY these tables and columns,
+never invent one:
+
+ms_user — one row per account (customer or admin)
+  user_pid (id, the account/subject id), user_email, user_mobno (mobile
+  number — presence test: user_mobno IS NOT NULL AND user_mobno <> ''),
+  user_fname, user_lname, user_bal (wallet balance), user_date (signup
+  timestamp), user_type (1=admin/rep, 3=customer), user_status,
+  user_country_code (an INTEGER code, NOT a country name string — do not
+  write entity = 'India' against this column)
+  There is NO company-name column anywhere in this schema. A rule that needs
+  "company name" cannot be answered literally — either find the closest
+  honest proxy and say so in executor_prompt, or mark the plan accordingly.
+
+ms_trans — one row per transaction/payment
+  trans_pid, trans_fuserid, trans_tuserid (both reference ms_user.user_pid),
+  trans_amt, trans_date, trans_type, currency (ISO code: INR, AED, USD, SGD,
+  GBP, EUR), cost, account_manager
+
+"Entity" (India/UAE/US/Singapore/UK/EU) is NOT a column on any table — it is
+derived from ms_trans.currency: INR→India, AED→UAE, USD→US, SGD→Singapore,
+GBP→UK, EUR→EU. To filter by entity, join to ms_trans and check currency,
+or accept that an account with no transactions has no known entity yet.
+
+ms_signup_log — email, numbers, count, created_at (signup attempts, not accounts)
+ms_sender — sender_pid, sender_userid, sender_senderid (SMS sender IDs)
+ms_domain — subsite_userid, subsite_dname, signup_enabled (branded sub-sites)
+`.trim();
+
+/**
+ * Compile one English rule into a full build plan: schedule, query, and a
+ * standalone prompt for a dedicated executor agent (created afterwards via
+ * gtwyAdmin.createExecutorAgent, not here — this call only plans).
+ */
+export async function planAutomation(
+  english: string,
+  motion: string,
+): Promise<AgentCall<AutomationPlan>> {
+  return callAgent("automationPlanner", AutomationPlanSchema, "Translate this rule.", {
+    today: today(),
+    motion,
+    english,
+    schema: SCHEMA_GLOSSARY,
+    fields: Object.entries(RULE_FIELDS)
+      .map(([k, v]) => `- ${k} — ${v}`)
+      .join("\n"),
+  });
+}
+
+/* ── the dynamic (per-automation) worker ─────────────────────────────────── */
+
+/**
+ * Judge one row using an automation's own executor agent instead of the
+ * shared ruleWorker. Same reply shape, different agent id — so runOne() can
+ * take either as a drop-in.
+ */
+export async function judgeRowWithAgent(
+  agentId: string,
+  ruleEnglish: string,
+  row: Record<string, unknown>,
+): Promise<AgentCall<RuleWorkerResult>> {
+  const reply = await chat({
+    user: "Judge this row.",
+    agentId,
+    variables: { today: today(), rule_english: ruleEnglish, row_json: JSON.stringify(row) },
+  });
+  const parsed = RuleWorkerSchema.safeParse(extractJson(reply.content));
+  if (!parsed.success) {
+    throw new GtwyError(
+      `Executor agent ${agentId}'s reply did not match the expected shape: ` +
+        parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"} ${i.message}`).join("; "),
+      "BAD_AGENT_REPLY",
+    );
+  }
+  return { data: parsed.data, agent: "dynamic-executor", agentId, model: reply.model, usage: reply.usage as Record<string, unknown> };
 }

@@ -8,9 +8,13 @@ import {
   accountActivity,
   accountPeople,
 } from "@/lib/pulse/accounts";
+import { accountProducts } from "@/lib/pulse/products";
+import { ownerHistory } from "@/lib/pulse/ownership";
 import { page } from "@/lib/pulse/paginate";
 import { listTags } from "@/lib/pulse/tags";
 import { healthFor } from "@/lib/pulse/health";
+import { recordReveal, revealsFor } from "@/lib/pulse/reveals";
+import { gate } from "@/lib/pulse/guard";
 
 /**
  * GET /api/pulse/accounts/:id            — L0/L1: the account and its context
@@ -32,13 +36,36 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
     const params = new URL(req.url).searchParams;
     const reveal = params.get("reveal") === "1";
+    let revealLogged = reveal;
+
+    /* The reveal is the one read on this route that is itself an event. The
+       button promises "opening them writes an audit event against your name",
+       and until now nothing was written — see lib/pulse/reveals.ts. Recorded
+       before the figures are fetched, so a reveal cannot succeed unrecorded;
+       recordReveal never throws, so the reverse cannot happen either. */
+    if (reveal) {
+      try {
+        const seat = await gate(false);
+        const who = seat.state === "ok" || seat.state === "unavailable" ? seat.session.user.email : null;
+        if (who) await recordReveal(accountId, account.name, who);
+        else console.warn(`[pulse] commercial reveal of ${accountId} by an unidentified caller`);
+      } catch (err) {
+        /* Loud, but not fatal. Refusing to show a rep figures they are
+           entitled to because the audit database blinked would be the wrong
+           trade; an unrecorded reveal is worth an error in the log and a
+           `revealLogged: false` on the response so the page can say so. */
+        console.error("[pulse] REVEAL AUDIT FAILED:", err);
+        revealLogged = false;
+      }
+    }
 
     // The two per-account feeds page independently, so "more notes" does not
     // also refetch the activity list.
     const commentPage = page({ limit: 10, offset: params.get("commentsFrom") });
     const activityPage = page({ limit: 10, offset: params.get("activityFrom") });
 
-    const [routes, comments, activity, people, autopilot, commercial, health, tags] = await Promise.all([
+    const [routes, comments, activity, people, autopilot, commercial, health, tags, products, owners, reveals] =
+      await Promise.all([
       accountRoutes(accountId),
       accountComments(accountId, commentPage),
       accountActivity(accountId, activityPage),
@@ -56,12 +83,34 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
          degraded to an empty list on failure, like autopilot above, because a
          store blip should not cost you the account. */
       listTags(accountId).catch(() => []),
+      /* Which products this company is actually on. Reads MSG91's entitlement
+         table and one evidence table per product — see lib/pulse/products.ts.
+         Degraded to an empty list on failure like the two above: a product
+         list is worth a lot, and not worth the whole page. */
+      accountProducts(accountId).catch((err) => {
+        console.warn("[pulse] products for " + accountId + " failed:", (err as Error).message);
+        return [];
+      }),
+      /* Every time somebody reassigned this account in Pulse. Pulse's own
+         store, so the same treatment. */
+      ownerHistory(accountId).catch(() => []),
+      /* Who else has looked at this company's commercials. Only sent on the
+         reveal itself: it is the answer to "who has seen this", and that is
+         not a question the page asks until somebody opens the section. */
+      reveal ? revealsFor(accountId).catch(() => []) : Promise.resolve([]),
     ]);
 
     return NextResponse.json({
       ok: true,
       account,
       routes,
+      /* `routes` is SMS plumbing — one row per ms_text_bal route — and was
+         standing in for the product list until now. Kept, because the wallet
+         page reads it; superseded by `products` on the company page. */
+      products,
+      owners,
+      reveals,
+      revealLogged,
       comments: comments.rows,
       commentsNext: comments.nextCursor,
       people: people.rows,

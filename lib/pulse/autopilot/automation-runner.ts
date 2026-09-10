@@ -192,8 +192,15 @@ async function writeAlert(
   return res.affectedRows === 1;
 }
 
+/** What judges one row: the shared rule-worker by default, a dynamic per-automation agent when the caller supplies one. */
+export type RowJudge = (ruleEnglish: string, agentTask: string, row: Record<string, unknown>) => ReturnType<typeof judgeRow>;
+
 /** Run one automation. Never throws — a bad rule must not stop the pass. */
-export async function runOne(a: Automation, deadline = Date.now() + PASS_BUDGET_MS): Promise<AutomationRun> {
+export async function runOne(
+  a: Automation,
+  deadline = Date.now() + PASS_BUDGET_MS,
+  judge: RowJudge = judgeRow,
+): Promise<AutomationRun> {
   const started = Date.now();
   const out: AutomationRun = {
     key: a.key, rows: 0, judged: 0, alerts: 0, skipped: null, error: null, ms: 0,
@@ -221,8 +228,14 @@ export async function runOne(a: Automation, deadline = Date.now() + PASS_BUDGET_
 
   let rows: Record<string, unknown>[] = [];
   try {
+    // `SET STATEMENT ... FOR ...` is MariaDB syntax and does not exist on this
+    // server (MySQL 5.7 / RDS) — every automation that reached this line threw
+    // a syntax error, seeded ones included. MySQL 5.7.4+'s equivalent is an
+    // optimizer hint inline in the SELECT itself, in milliseconds rather than
+    // seconds. Found by actually running one; nothing about it was caught by
+    // the guard or by TypeScript, since it is a runtime dialect mismatch.
     rows = await query<Record<string, unknown>>(
-      `SET STATEMENT max_statement_time=${STATEMENT_TIMEOUT_MS / 1000} FOR ${g.sql}`,
+      g.sql.replace(/^\s*select\b/i, `SELECT /*+ MAX_EXECUTION_TIME(${STATEMENT_TIMEOUT_MS}) */`),
     );
   } catch (err) {
     out.error = (err as Error).message;
@@ -257,7 +270,7 @@ export async function runOne(a: Automation, deadline = Date.now() + PASS_BUDGET_
     const rowSubject = a.subjectCol ? String(row[a.subjectCol] ?? "") : null;
     const signalKey = `auto:${a.key}:${rowSubject || "portfolio"}`;
     try {
-      const call = await judgeRow(a.english, a.agentTask ?? a.english, row);
+      const call = await judge(a.english, a.agentTask ?? a.english, row);
       const data = call.data;
       out.judged++;
       let acted = "none";

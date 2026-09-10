@@ -1,12 +1,27 @@
 import { NextResponse } from "next/server";
-import { listReps, resolveMe, standings, repActivity, repStandings } from "@/lib/pulse/team";
+import {
+  assignableReps,
+  listReps,
+  resolveMe,
+  standings,
+  repActivity,
+  repStandings,
+} from "@/lib/pulse/team";
 import { pageFromUrl } from "@/lib/pulse/paginate";
 
-/** GET /api/pulse/team?view=reps|standings|health|activity */
+/** GET /api/pulse/team?view=reps|assignable|standings|health|activity */
 export async function GET(req: Request) {
   const view = new URL(req.url).searchParams.get("view") ?? "reps";
   try {
     const me = await resolveMe();
+    /* Who an account may be handed to — everyone, including the reps holding
+       nothing yet. `reps` cannot answer this: see assignableReps. */
+    if (view === "assignable")
+      return NextResponse.json({
+        ok: true,
+        me,
+        ...(await assignableReps(me?.id ?? null)),
+      });
     if (view === "standings")
       return NextResponse.json({ ok: true, me, standings: await standings(me?.id ?? null) });
     // How each rep's book is holding up — a standing, not a movement, because

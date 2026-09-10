@@ -399,31 +399,43 @@ ASK.flight={q:"What is in flight?",big:"7",
  st:["Rhea Menon","today 09:26","your accounts","fresh to 09:24"]};
 
 
+/* Mailboxes/Calendars rows below start as the fixed "22 of 25" copy; the
+   moment the Connections tab is opened, loadTeamConnections() overwrites
+   those two rows in place from pulse_connection (migrations/012) — the real
+   count across everyone's own Profile connect, not a demo number. */
+let teamConnLoaded=false;
+function loadTeamConnections(){
+ if(teamConnLoaded)return;teamConnLoaded=true;
+ fetch("/api/pulse/connections?view=team").then(r=>r.json()).then(d=>{
+  if(!d.ok||!d.team)return;
+  const patch=(row,key,gap)=>{
+   const t=d.team[key];if(!t||!t.total)return;
+   row[1]=t.connected===t.total?"on":t.connected===0?"off":"part";
+   row[2]=`${t.connected} of ${t.total} people connected · each person connects their own in Profile`;
+   row[4]=t.unconnected.length
+    ?`${t.unconnected.slice(0,3).join(", ")}${t.unconnected.length>3?" and others":""} ${
+       t.unconnected.length===1?"has":"have"} not connected. ${gap}`
+    :"";};
+  patch(CONN[0],"gmail","For their accounts, I cannot tell silence from a missed follow-up.");
+  patch(CONN[1],"cal","Same people, so meeting prep and capture are off for their accounts too.");
+  patch(CONN[2],"slack","I cannot DM them an FYI or their daily digest — only the team channel sees it.");
+  if(S.v==="auto"&&S.tab==="connections")render();
+ }).catch(()=>{});
+}
+
+/* Every row here is backed by pulse_connection (migrations/012) and patched
+   with real numbers by loadTeamConnections() the moment the tab opens — see
+   below. There is no seventh row for services Pulse does not actually track
+   a connection state for (SMS, WhatsApp, email sequencing, Hello, DLT desk,
+   a reports/billing feed): inventing one meant a permanently fake number on
+   screen, which is worse than the tab being short. */
 const CONN=[
- ["Mailboxes · everyone's own","part","22 of 25 people connected · each person connects their own in Profile",
-  "Silence detection · promise extraction · reply drafting · who said what",
-  "Arjun Nair, Farhan Ali and Ritu Shah have not connected. For their 134 accounts I cannot tell silence from a missed follow-up.","Nudge them"],
- ["Calendars · everyone's own","part","22 of 25 people connected · each person connects their own in Profile",
-  "Meeting prep 20 minutes before · post-meeting capture · promises made on calls","Same three people.","Nudge them"],
- ["MSG91 SMS","on","Sender IDs MSG91P, MSGIND · India, UAE",
-  "Everything I send by SMS goes through our own product","",""],
- ["MSG91 WhatsApp","on","+91 90000 00000 · verified business account",
-  "Outreach, recovery mails and onboarding nudges on WhatsApp","",""],
- ["MSG91 Email","on","pulse@msg91.com · plus each rep's own mailbox",
-  "Sequences from Pulse, drafts from your address","",""],
- ["Slack","on","msg91.slack.com · #sales, #cs-alerts, and DMs",
-  "FYI when I act on your account · daily digest · anomaly alerts","",""],
- ["Reports microservice","off","not connected",
-  "Usage by product · consumption · delivery health · decline detection",
-  "This is the biggest gap. Right now I can see payments but not usage, so I detect decline late and I cannot see delivery failures at all.","Connect"],
- ["Billing and subscriptions","off","not connected",
-  "Active subscriptions · fees · renewal dates · lifecycle events",
-  "Renewals are invisible to me. I am inferring them from payment dates.","Connect"],
- ["Hello · support","on","read-only · tickets and sentiment",
-  "Support signals feed the owner's cards","",""],
- ["DLT desk","part","manual · no API",
-  "Header and template status for Indian SMS",
-  "A person still updates this. Three startups are stuck behind it right now.",""]];
+ ["Mailboxes · everyone's own","part","loading…",
+  "Silence detection · promise extraction · reply drafting · who said what","",""],
+ ["Calendars · everyone's own","part","loading…",
+  "Meeting prep 20 minutes before · post-meeting capture · promises made on calls","",""],
+ ["Slack · everyone's own","part","loading…",
+  "FYI when I act on your account · daily digest · anomaly alerts","",""]];
 
 const MANIFEST={
  yes:["Score every signup and decide who gets a human",
@@ -445,8 +457,19 @@ const MANIFEST={
   "Escalate a person to their manager before two private prompts"]};
 
 
-const ME={gmail:1,cal:1,slack:1,email:1,push:1,name:null,email_addr:null};
-const VOICE=["Short sentences","Opens with the point, never a greeting","Says sorry plainly, no hedging",
+/* Seeded by the server render (app/pulse-shell.tsx) so the profile page knows
+   who is signed in on the first paint rather than after bootstrap answers.
+   `accounts` still comes from bootstrap — it belongs to the book on screen.
+   gmail/cal start unconnected — pulse-live.js corrects them from
+   pulse_connection (migrations/012) as soon as bootstrap answers, so a real
+   "not connected yet" isn't shown as connected for the first frame. */
+const ME={gmail:0,cal:0,slackapp:0,slack:1,email:1,push:1,
+ name:(window.PULSE_SIGNED_IN_AS&&window.PULSE_SIGNED_IN_AS.name)||null,
+ email_addr:(window.PULSE_SIGNED_IN_AS&&window.PULSE_SIGNED_IN_AS.email)||null};
+/* Replaced by the signed-in person's own list as soon as /api/pulse/voice
+   answers — see PULSE_BAG.setVoice. These five are the same defaults the API
+   seeds a new person with, so the first paint matches what lands. */
+let VOICE=["Short sentences","Opens with the point, never a greeting","Says sorry plainly, no hedging",
  "Signs off with just your first name","Never uses exclamation marks"];
 const ONB=[
  ["Step 1 of 4","Connect your mailbox and calendar.",
@@ -455,8 +478,12 @@ const ONB=[
  ["Step 2 of 4","These 18 accounts are yours.",
   "Pulled from MSG91. Remove anything that should not be yours and add anything I have missed — ownership decides who I bring things to, so it is worth thirty seconds now.",
   "book"],
+ /* The copy used to open "I read your last twenty sent mails." Pulse has no
+    mailbox connection — no OAuth, no IMAP, nothing in the codebase has ever
+    seen a sent message — so that was describing a feature that does not
+    exist, on the one screen whose job is to earn trust. */
  ["Step 3 of 4","This is how you write.",
-  "I read your last twenty sent mails. When I draft something for you to send, it will sound like this. Delete what is wrong and add what I missed — this matters more than you would think.",
+  "These are starting points, not something I worked out about you — I cannot see your mail yet. When I draft something for you to send, it will sound like this, so delete what is wrong and add what is missing. It matters more than you would think.",
   "voice"],
  ["Step 4 of 4","That is everything.",
   "Six things need you this morning. I have already handled forty-seven others, and you can see every one of them in Autopilot whenever you want to check my work.",
@@ -1141,6 +1168,131 @@ function skeleton(){
    <div style="margin-top:30px">${block()}${block()}${block()}</div></div>`;
 }
 
+/**
+ * Where the reader currently is.
+ *
+ * render() rebuilds main.innerHTML from scratch every time, so the browser has
+ * no way of telling "I moved to a different screen" from "the same screen got
+ * ten more rows". This string is that difference. Everything in it is part of
+ * the address — change one and you have gone somewhere new. Filters, page
+ * cursors and expanded rows are deliberately NOT in it: they change what the
+ * screen shows without changing which screen it is.
+ */
+function place(){
+ return [S.v,S.cust,S.ask,S.tab,S.act,S.askTab,S.teamTab,S.partner,S.scope].join("|");
+}
+let LASTPLACE=null;
+
+/* ---------------------------------------------------------------------------
+ * The address bar.
+ *
+ * Every screen used to live at "/". Opening a company, a saved question or the
+ * audit log changed S and redrew #main, and the browser was never told, so Back
+ * left Pulse entirely and a refresh landed you at Now — after however many
+ * clicks it took to get where you were. place() above already says which screen
+ * you are on; this turns that string into a path and back again.
+ *
+ * The mapping is deliberately small. Only what place() counts as *somewhere*
+ * gets into the URL, and the pieces that are a filter rather than a place ride
+ * as a query string. Anything else — an expanded row, a page cursor, what is
+ * selected — stays out, so Back never undoes half a screen.
+ *
+ * app/company/[name]/, app/ask/, app/autopilot/ and app/profile/ exist so these
+ * paths resolve on the server too; each renders the same shell this file draws
+ * into.
+ */
+
+const AUTOTABS=["activity","rules","connections","audit"];
+const SCOPES=["me","team","company"];
+
+/** Where the current state lives, as a path. */
+function routePath(){
+ const q=new URLSearchParams();
+ let p="/";
+ if(S.v==="cust"&&S.cust) p="/company/"+encodeURIComponent(S.cust);
+ else if(S.v==="ask"){p="/ask/"+encodeURIComponent(S.ask||"mine");
+  if(S.askTab&&S.askTab!=="ask")q.set("tab",S.askTab);}
+ else if(S.v==="auto"){p="/autopilot/"+encodeURIComponent(S.tab||"activity");
+  if(S.act&&S.act!=="all")q.set("filter",S.act);}
+ else if(S.v==="profile") p="/profile";
+ else{if(S.scope&&S.scope!=="me")q.set("scope",S.scope);
+  if(S.teamTab&&S.teamTab!=="won")q.set("team",S.teamTab);}
+ const s=q.toString();
+ return p+(s?"?"+s:"");
+}
+
+/** What the current path asks for. Nothing here is trusted; apply() checks. */
+function routeRead(){
+ const seg=location.pathname.split("/").filter(Boolean).map(x=>{
+  try{return decodeURIComponent(x);}catch(e){return x;}});
+ const q=new URLSearchParams(location.search);
+ if(seg[0]==="company"&&seg.length>1) return {v:"cust",cust:seg.slice(1).join("/")};
+ if(seg[0]==="ask") return {v:"ask",ask:seg[1]||S.ask||"mine",askTab:q.get("tab")||"ask"};
+ if(seg[0]==="autopilot") return {v:"auto",tab:seg[1]||"activity",act:q.get("filter")||"all"};
+ if(seg[0]==="profile") return {v:"profile"};
+ return {v:"now",scope:q.get("scope")||"me",teamTab:q.get("team")||"won"};
+}
+
+/* True while a URL is being turned back into state: render() must not write a
+   new history entry for a move the browser has already made. */
+let ROUTING=false;
+
+/**
+ * Tell the browser where we are.
+ *
+ * Called from render() with whether this is the same screen as last time.
+ * Redrawing Now because forty more accounts arrived replaces the entry;
+ * arriving somewhere new adds one, which is what Back walks.
+ */
+function routeSync(samePlace){
+ if(ROUTING)return;
+ const url=routePath();
+ if(url===location.pathname+location.search)return;
+ history[samePlace?"replaceState":"pushState"]({pulse:1},"",url);
+}
+
+/**
+ * A screen the URL names, but the data layer has not fetched yet.
+ *
+ * Clicking a company or a question triggers its own fetch (see the click
+ * handler at the foot of this file). Arriving by URL — a refresh, a pasted
+ * link, Back — has no click to hang that on, so it is asked for here instead.
+ * Assigned once PulseLive is known to exist.
+ */
+let routeFetch=()=>{};
+
+/**
+ * Put the state where the URL says, and draw it.
+ *
+ * A name that is not on the logo wall is still a real account — the wall is the
+ * first forty of thousands — so it is looked up through search before the link
+ * is given up on. A question or a tab that does not exist is not: those are
+ * closed sets, and an unknown one falls back rather than rendering nothing.
+ */
+async function routeGo(){
+ const r=routeRead();
+ if(r.v==="cust"){
+  if(!CUST[r.cust]&&window.PulseLive&&PulseLive.searchCompanies){
+   try{await PulseLive.searchCompanies(r.cust,PULSE_BAG,8);}catch(e){}
+  }
+  /* Still nothing: the link is stale or misspelt. Show Now rather than a page
+     about a company we cannot name. */
+  if(!CUST[r.cust]){S.v="now";S.cust=null;
+   ROUTING=true;try{history.replaceState({pulse:1},"","/");render();}finally{ROUTING=false;}
+   return;}
+  S.cust=r.cust;S.from=null;
+ }
+ if(r.v==="ask") {S.ask=(typeof ASK==="object"&&ASK[r.ask])?r.ask:S.ask;S.askTab=r.askTab==="asked"?"asked":"ask";S.sel=new Set();}
+ if(r.v==="auto"){S.tab=AUTOTABS.includes(r.tab)?r.tab:"activity";S.act=r.act;}
+ if(r.v==="now"){S.scope=SCOPES.includes(r.scope)?r.scope:"me";S.teamTab=r.teamTab;}
+ S.v=r.v;
+ ROUTING=true;
+ try{render();}finally{ROUTING=false;}
+ routeFetch();
+}
+
+window.addEventListener("popstate",()=>{routeGo();});
+
 function render(){
  main.className="wrap"+(S.v==="auto"||S.v==="ask"?" wide":"");
  $("#amenu").hidden=true;
@@ -1148,8 +1300,26 @@ function render(){
     prototype's sample rows. A screen that contradicts itself two seconds later
     costs more trust than a screen that admits it is still loading. */
  if(window.PulseLive&&!PulseLive.state.loaded&&!PulseLive.state.error){skeleton();return;}
+ /* Read before the rebuild: replacing innerHTML can collapse the document to a
+    height shorter than the current offset, and the browser clamps the scroll
+    position on the spot. */
+ const here=place(), y=window.scrollY;
  ({now:vNow,ask:vAsk,auto:vAuto,cust:vCust,profile:vProfile})[S.v]();
- window.scrollTo({top:0});
+ /* Going somewhere new starts at the top. Staying put — loading forty more
+    accounts, applying a lens, clearing one — holds the reader where they were.
+    The old code scrolled to the top on every render, so pressing "Load 40
+    more" at the bottom of the wall threw you back to the header and you had to
+    scroll past everything you had already read to reach the new rows.
+    Restoring the offset rather than leaving it alone is what makes it work
+    both ways: the browser has already clamped by now, and this puts it back. */
+ /* The reassign sheet is an overlay: it survives a re-render of the page
+    underneath it, so it is redrawn from its own state rather than being
+    rebuilt only when it is opened. */
+ drawReassign();
+ window.scrollTo({top:here===LASTPLACE?y:0});
+ /* And the address bar, which is the same question asked of the browser. */
+ routeSync(LASTPLACE===null||here===LASTPLACE);
+ LASTPLACE=here;
 }
 
 function cardHTML(c,i){
@@ -1196,12 +1366,17 @@ function vNow(){
    <span class="lensw"><button class="lensb" id="lensb" data-on="${lensLab()!=="All"}">
      <span>${lensLab()}</span><span class="car">▼</span></button>
     <div class="lens" id="lensm" hidden>
-     <h4>Country</h4>${lensCountries().map(c=>
+     <h4>Country</h4>
+     <label><span>All countries</span><input type="radio" name="lensco" data-c="" ${
+      S.C.size?"":"checked"}><span class="bx"></span></label>${lensCountries().map(c=>
       `<label${lensTotal(c)===0?' style="opacity:.45"':""}><span>${lensFlag(c)} ${esc(c)} <em style="font-style:normal;color:var(--faint)">${
-       (t=>t==null?"":t)(lensTotal(c))}</em></span><input type="checkbox" data-c="${esc(c)}" ${
+       (t=>t==null?"":t)(lensTotal(c))}</em></span><input type="radio" name="lensco" data-c="${esc(c)}" ${
        S.C.has(c)?"checked":""}><span class="bx"></span></label>`).join("")}
-     <h4>Motion</h4>${["Inbound","Outbound","Startup","Partner"].map(m=>
-      `<label><span>${m}</span><input type="checkbox" data-m="${m}" ${S.M.has(m)?"checked":""}><span class="bx"></span></label>`).join("")}
+     <h4>Motion</h4>
+     <label><span>All motions</span><input type="radio" name="lensmo" data-m="" ${
+      S.M.size?"":"checked"}><span class="bx"></span></label>${["Inbound","Outbound","Startup","Partner"].map(m=>
+      `<label><span>${m}</span><input type="radio" name="lensmo" data-m="${m}" ${
+       S.M.has(m)?"checked":""}><span class="bx"></span></label>`).join("")}
      <button class="clr" id="lensc">Clear all</button></div></span></div>`;
 
  /* 1.5 · system exceptions.
@@ -1311,7 +1486,13 @@ function vNow(){
    ${bandOf(k).map(a=>`<button class="bcard" data-cust="${a}">${LOGO(a,17)}
     <span class="bn">${a}</span>${scoreOf(a)!=null?`<span class="bv">${scoreOf(a)}</span>`:""}</button>`).join("")}</div>`).join("")}</div>
   <p class="boardnote">${BOARD
-   ?`${BOARD.formula}${BOARD.tooNew?` ${BOARD.tooNew} more on this page signed up inside thirty days and have not paid yet — too new to score.`:""}`
+   /* Who decided is stated before how, and it is read off the board rather
+      than assumed: an agent that answered for some of the accounts must not
+      let this line claim it answered for all of them. */
+   ?`${(d=>d==="ai"?"Scored by the account-health agent. "
+      :d==="mixed"?`Scored by the account-health agent for ${BOARD.aiScored} of ${BOARD.total} accounts; the rest by formula. `
+      :"Scored by formula — the account-health agent is not configured. ")(BOARD.decidedBy)}${
+     BOARD.formula}${BOARD.tooNew?` ${BOARD.tooNew} more on this page signed up inside thirty days and have not paid yet — too new to score.`:""}`
    :"Pulse moves these from evidence. Open any account to see which part moved."}</p></section>`;
 
  /* 5 · where to grow.
@@ -1596,6 +1777,7 @@ function vAuto(){
   (S.act==="learned"&&r.agent==="policy-critic");
 
  if(S.tab==="connections"){
+  loadTeamConnections();
   body=`<p style="margin:26px 0 0;color:var(--ink2);max-width:62ch">Everything AI can do depends on this list.
    Where a dot is amber, something is switched off and I have said what it costs you.</p>
    <div style="margin-top:20px">${CONN.map(([n,st,who,unlocks,breaks,act])=>`<div class="conn" data-st="${st}">
@@ -1726,32 +1908,39 @@ function vAuto(){
 function vProfile(){
  const g=ME.gmail, c=ME.cal;
  main.innerHTML=`<button class="back" data-nav="now" style="font-size:13.5px;color:var(--muted);margin:26px 0 0;display:inline-block">← Back</button>
- <div class="phead2">${AVI(ME.name||"Rhea Menon",56)}
-  <div><h1>${ME.name||"Rhea Menon"}</h1><span class="m2">${
-   ME.name?[ME.email_addr,ME.accounts!=null?`${ME.accounts.toLocaleString("en-IN")} accounts`:""].filter(Boolean).join(" · ")
-    :"Sales · India, Singapore · 18 companies · joined Mar 2024"}</span></div></div>
+ <div class="phead2">${AVI(ME.name,56)}
+  <div><h1>${ME.name}</h1><span class="m2">${
+   [ME.email_addr,ME.accounts!=null?`${ME.accounts.toLocaleString("en-IN")} accounts`:""].filter(Boolean).join(" · ")}</span></div></div>
  <div class="sec"><h5>Your connections</h5>
   <div class="cxn" data-on="${g}"><span class="ico">M</span><div class="cx">
    <b>Your mailbox ${g?'<span class="ok2">CONNECTED</span>':'<span class="no2">NOT CONNECTED</span>'}</b>
-   <p>${g?`${ME.email_addr||"rhea@msg91.com"} · connected 12 Mar 2024`:"Pulse cannot see your conversations. Silence detection, promise extraction and drafting in your voice are all switched off for your 18 companies."}</p>
+   <p>${g?`${ME.email_addr} · connected`:"Pulse cannot see your conversations. Silence detection, promise extraction and drafting in your voice are all switched off for your accounts."}</p>
    <div class="sc3">READ ONLY · CUSTOMER THREADS ONLY · NEVER PERSONAL MAIL<br>YOU CAN DISCONNECT AT ANY TIME AND I FORGET WITHIN 24 HOURS</div></div>
    <button class="go ${g?"":"solid"} cta" data-toggle="gmail">${g?"Disconnect":"Connect Google"}</button></div>
   <div class="cxn" data-on="${c}"><span class="ico">C</span><div class="cx">
    <b>Your calendar ${c?'<span class="ok2">CONNECTED</span>':'<span class="no2">NOT CONNECTED</span>'}</b>
-   <p>${c?`${ME.email_addr||"rhea@msg91.com"} · meeting prep and post-meeting capture are on`:"No meeting prep, no post-meeting capture."}</p>
+   <p>${c?`${ME.email_addr} · meeting prep and post-meeting capture are on`:"No meeting prep, no post-meeting capture."}</p>
    <div class="sc3">TITLES, TIMES AND ATTENDEES OF CUSTOMER MEETINGS ONLY</div></div>
    <button class="go ${c?"":"solid"} cta" data-toggle="cal">${c?"Disconnect":"Connect Google"}</button></div>
+  <div class="cxn" data-on="${ME.slackapp}"><span class="ico">S</span><div class="cx">
+   <b>Your Slack ${ME.slackapp?'<span class="ok2">CONNECTED</span>':'<span class="no2">NOT CONNECTED</span>'}</b>
+   <p>${ME.slackapp?"Connected · Pulse can post to your DMs and the channels you pick":"Connect it so Pulse can message you directly instead of only the team channel."}</p>
+   <div class="sc3">DMS AND THE CHANNELS YOU APPROVE ONLY</div></div>
+   <button class="go ${ME.slackapp?"":"solid"} cta" data-toggle="slackapp">${ME.slackapp?"Disconnect":"Connect Slack"}</button></div>
   <div class="cxn" data-on="1"><span class="ico">W</span><div class="cx">
    <b>Your WhatsApp Business number <span class="ok2">+91 90000 00012</span></b>
    <p>Yours alone, provisioned by MSG91. Customers reply to you on it and every thread is visible to Pulse, which is why silence detection works on WhatsApp at all. Use this instead of your personal number.</p>
    <div class="sc3">SENDER IDS MSG91P AND MSGIND ARE SHARED ACROSS THE COMPANY AND MANAGED BY AN ADMIN</div></div>
    <button class="go cta" data-nav="auto" data-tab2="connections">See it</button></div></div>
  <div class="sec"><h5>How you write</h5>
-  <div class="voice"><p style="margin:0;font-size:13.5px;color:var(--ink2)">Learned from your last 20 sent mails on 12 Mar, refreshed weekly.</p>
-   <div class="vt">${VOICE.map(v=>`<span>${v}</span>`).join("")}</div>
+  <div class="voice"><p style="margin:0;font-size:13.5px;color:var(--ink2)">${
+    ((V)=>V&&V.edited?"Yours. Kept against your sign-in and visible only to you."
+     :"The defaults everybody starts with. Change any of them in first-run setup and the list becomes yours.")(
+      window.PulseLive&&PulseLive.state.voice)}</p>
+   <div class="vt">${VOICE.map(v=>`<span>${esc(v)}</span>`).join("")}</div>
    <blockquote>“Rashid — yesterday was on us. The Etisalat route failed at 3:02 and we moved you across twelve minutes later. Here is what we are changing so it does not happen again.”</blockquote>
-   <div class="row" style="margin-top:14px"><button class="go">Relearn from recent mail</button>
-    <button class="go">Something is wrong here</button></div></div></div>
+   <p style="font-size:12.5px;color:var(--faint);margin:12px 0 0">Edited in first-run setup. Nothing reads it yet: Pulse has no mailbox connection, so this is not learned from your mail and no draft is shaped by it — both are wired to this list the day either lands.</p>
+   <div class="row" style="margin-top:14px"><button class="go" id="startonb2">Edit how you write</button></div></div></div>
  <div class="sec"><h5>Where I tell you things</h5>
   <div class="tog"><div><b style="font-weight:500">Slack DM</b><i>When I act on one of your accounts, and your daily digest</i></div>
    <span class="sw" data-on="${ME.slack}" data-toggle="slack"></span></div>
@@ -1768,8 +1957,10 @@ function vCust(){
  main.innerHTML=`<div class="cpg"><button class="crumb" data-crumb>← ${fr.label}</button>
   <div class="chead">${LOGO(n,52)}
    <div><h1>${n}</h1><span class="m">${b[2]} <span class="motionchip" style="margin:0 6px">${b[3].toUpperCase()}</span>
-    ${d.owner?`<span class="ownerchip">${AVI(d.owner,20)} ${d.owner}</span>`
-     :`<span class="ownerchip" style="color:var(--watch)">No owner</span>`}</span></div></div>
+    ${d.owner?`<span class="ownerchip">${AVI(d.owner,20)} ${esc(d.owner)}</span>`
+     :`<span class="ownerchip" style="color:var(--watch)">No owner</span>`}
+    ${d.ownerSource==="pulse"?`<span class="motionchip" style="margin-left:6px" data-tip="Reassigned in Pulse||MSG91's own record still says ${
+      d.ownerBefore?esc(d.ownerBefore.name):"nobody"}. Pulse cannot write to user_handled_by, so this is an override kept on our side and laid over MSG91's answer wherever the account is read.">REASSIGNED HERE</span>`:""}</span></div></div>
   ${(av=>av?`<p class="verdict">${av.headline}</p><p class="why">${av.why}</p>
    <div class="hblock" style="margin-top:14px"><div class="hh" style="align-items:flex-start">
     <div style="flex:1"><span class="lab">What to do</span>
@@ -1788,12 +1979,21 @@ function vCust(){
     ${d.health.delta?`<em data-d="${d.health.delta<0?"down":"up"}">${
       d.health.delta>0?"+"+d.health.delta:d.health.delta} this month${
       d.health.moved?" · "+(d.health.moved==="up"?"climbed a band":"slipped a band"):""}</em>`:""}</div>
+   ${/* The agent's own sentence, above the evidence it read. Shown only when an
+        agent actually decided this account — decidedBy is per account, so a
+        formula-scored row in an otherwise AI-scored board says so. */
+     d.health.decidedBy==="ai"&&d.health.reason?`<p class="hwhy" style="border:none;margin:0 0 10px;padding:0">
+    <b>The account-health agent decided this.</b> ${esc(d.health.reason)}${
+      d.health.confidence!=null?` · confidence ${d.health.confidence.toFixed(2)}`:""}</p>`:""}
    ${d.health.components.map(c=>`<div class="hcomp"><span class="cl2">${c.label}</span>
     <span class="cbar"><i style="width:${c.value}%" data-low="${c.value<40?1:0}"></i></span>
     <span class="cv2">${c.value}</span></div>
     <p class="hwhy" style="border:none;margin:0 0 4px;padding:0;font-size:12px">${c.evidence} · ${
       Math.round(c.weight*100)}% of the score</p>`).join("")}
-   <p class="hwhy">Derived on read from ms_trans and ms_text_bal — MSG91's schema stores no health score.
+   <p class="hwhy">${d.health.decidedBy==="ai"
+     ?`The four components above are the evidence, derived on read from ms_trans and ms_text_bal — MSG91's schema stores no health score. They weigh to ${d.health.formulaScore}; the agent set ${d.health.score}.${
+        d.health.clamped?" Its first answer was further out and was pulled back to within 20 points of the evidence.":""}`
+     :`Derived on read from ms_trans and ms_text_bal — MSG91's schema stores no health score. Scored by formula: the account-health agent did not answer for this account.`}
     Ownership and product breadth have no history here, so the monthly movement holds them at today's value.</p></div>`:""}
   <div class="row"><button class="go solid" data-sheet="log">Log what happened →</button>
    <button class="go">Open the thread</button>
@@ -1811,10 +2011,16 @@ function vCust(){
    ${((e)=>e?`<p class="tagerr" role="alert">That did not save: ${esc(e)}</p>`:"")(window.PulseLive&&PulseLive.state.tagError)}
    <p style="font-size:12.5px;color:var(--faint);margin-top:11px">Dashed tags were added by Pulse from evidence, solid ones are yours, and both are filterable in Ask. Motion is not a tag — it is the single field above that decides which rules run, and an account has exactly one.</p></div>
 
-  <div class="sec"><h5>People</h5>${d.pe.map(([a,r,rl])=>
-   `<div class="pr" data-person="${a}" style="cursor:pointer"><b class="mkrow">${AVI(a,24)}${a}</b><span class="rl">${rl}</span><i>${r}</i></div>`).join("")}
-   ${d.__peNext!=null?`<div class="row" style="margin-top:12px"><button class="go" id="morepeople">Load 10 more →</button></div>`:""}
+  <div class="sec"><h5>People · ${d.pe.length}</h5>${
+   d.pe.length
+    ?d.pe.map(([a,r,rl])=>
+      `<div class="pr" data-person="${esc(a)}" style="cursor:pointer"><b class="mkrow">${AVI(a,24)}${esc(a)}</b><span class="rl">${esc(rl)}</span><i>${esc(r)}</i></div>`).join("")
+    :`<p style="font-size:13px;color:var(--muted);margin:0">Nobody. MSG91 records the people at a company from the members it has invited, and this one has invited none — which is itself worth knowing, because an account where you know one person churns at roughly twice the rate of one where you know three.</p>`}
    <button class="addtag" style="margin-top:12px;border-color:var(--line2);color:var(--br)" data-sheet="log">＋ Add a person</button></div>
+
+  ${(d.no&&d.no.length)||d.__noNext!=null?`<div class="sec"><h5>Notes</h5>${(d.no||[]).map(([who,text,when])=>
+   `<div class="pr"><b class="mkrow">${AVI(who,24)}${esc(who)}</b><span class="rl">${esc(when)}</span><i>${esc(text)}</i></div>`).join("")}
+   ${d.__noNext!=null?`<div class="row" style="margin-top:12px"><button class="go" id="morenotes">Load 10 more →</button></div>`:""}</div>`:""}
   ${(ap=>!ap||(!ap.decisions.length&&!ap.drafts.length&&!ap.next.length)?"":`
   <div class="sec"><h5>What Autopilot did here</h5>
    ${ap.next.length?`<p style="font-size:13px;color:var(--ink);margin:0 0 12px">
@@ -1840,14 +2046,36 @@ function vCust(){
     </div>`).join("")}
   </div>`)(d.autopilot)}
 
-  <div class="sec"><h5>Products</h5>${d.la.map(([pp,st,x])=>
-   `<div class="ln"><span class="cp">${pp}</span><span class="st" data-s="${st}">${st}</span><i>${x}</i></div>`).join("")}</div>
+  <div class="sec"><h5>Products · ${d.la.length}</h5>${
+   d.la.length
+    ?d.la.map(([pp,st,x])=>
+      `<div class="ln"><span class="cp">${esc(pp)}</span><span class="st" data-s="${esc(st)}">${esc(st)}</span><i>${esc(x)}</i></div>`).join("")
+    :`<p style="font-size:13px;color:var(--muted);margin:0">None that Pulse can see. This account is not switched on for any product in ms_user_services and has nothing built on one either.</p>`}
+   <p style="font-size:12.5px;color:var(--faint);margin-top:11px">Read from what the account is switched on for (ms_user_services × microservice_names) and from one table per product for evidence of use — OTP widgets, WhatsApp approval, email and campaign flags, voice templates, Hello teams, SMS route credit. <b>Active</b> means Pulse found use; <b>setting up</b> means switched on with nothing built on it yet. RCS and OneAPI have no per-account table here, so Pulse never claims to know whether they are being used.</p></div>
   <div class="sec"><h5>Recently</h5>${d.ev.map(([t,e])=>`<div class="ev"><time>${t}</time><span>${e}</span></div>`).join("")}
    ${d.__evNext!=null?`<div class="row" style="margin-top:12px"><button class="go" id="morerecent">Load 10 more →</button></div>`:""}</div>
   <div class="sec"><h5>Commercial</h5>
-   <div class="hid"><button class="hb" id="revm" data-tip="Level 2||Payments, wallet and rates are hidden by default. Opening them writes an audit event against your name.">Show payments and rates</button></div>
+   <div class="hid"><button class="hb" id="revm" data-tip="Level 2||Payments, wallet and rates are hidden by default. Opening them writes a row against your name in pulse_commercial_reveal — who looked, at which company, and when.">Show payments and rates</button></div>
    <div class="money" id="moneyb" hidden>${d.money.map(([b2,s2,x])=>
-    `<div><b>${b2}</b><span>${s2}${x?" · "+x:""}</span></div>`).join("")}</div></div></div>`;
+    `<div><b>${esc(b2)}</b><span>${esc(s2)}${x?" · "+esc(x):""}</span></div>`).join("")}</div>
+
+   ${/* Rates. The other half of the button's own label, and never built until
+        now — ms_user_pricing, the price this account actually negotiated. */""}
+   <div id="ratesb" hidden>
+    <div class="lab" style="margin:18px 0 6px">Rates · what this account pays</div>
+    ${(d.rates&&d.rates.length)
+      ?d.rates.map(r=>`<div class="ln"><span class="cp">${esc(r.routeName)}</span>
+        <span class="st">${esc(r.kind)}</span><i>${esc(r.priceLabel)} per message</i></div>`).join("")
+      :`<p style="font-size:13px;color:var(--muted);margin:0">No negotiated rate on this account — it is on list price. MSG91 records a per-account price in ms_user_pricing only where somebody agreed one, and most accounts have no row.</p>`}
+
+    ${(d.recent&&d.recent.length)?`<div class="lab" style="margin:18px 0 6px">Last ${d.recent.length} payment${d.recent.length===1?"":"s"}</div>
+     ${d.recent.map(x=>`<div class="ev"><time>${esc(x.when)}</time><span>${esc(x.amount)} · ${esc(x.via)}</span></div>`).join("")}`:""}
+
+    ${(d.reveals&&d.reveals.length)?`<div class="lab" style="margin:18px 0 6px">Who has opened this · ${d.reveals.length}</div>
+     ${d.reveals.slice(0,8).map(x=>`<div class="ev"><time>${esc(new Date(x.at).toLocaleString())}</time><span>${esc(x.member)}</span></div>`).join("")}`:""}
+    ${d.revealLogged===false?`<p class="tagerr" role="alert">This opening was not recorded — Pulse's own database did not accept the audit row. The figures above are real; the log of who read them is one entry short.</p>`:""}
+    <p style="font-size:12.5px;color:var(--faint);margin-top:12px">Payments and wallet come from ms_trans, rates from ms_user_pricing joined to ms_route. Your own opening of this section is in the list above.</p>
+   </div></div></div>`;
 }
 
 function vPartner(){
@@ -2070,7 +2298,14 @@ document.addEventListener("click",e=>{
  if(t===$("#pal")){pC();return;}
  if(t.closest("[data-crumb]")){const f=S.from;if(f){S.v=f.v;S.scope=f.scope;S.ask=f.ask;S.tab=f.tab;}
   else S.v="now";render();return;}
- const nv=t.closest("[data-nav]");if(nv){S.v=nv.dataset.nav;render();return;}
+ /* The account menu's Autopilot entries name a surface and a tab on the same
+    button. The tab has its own handler further down the file, but it runs after
+    this one has already drawn — so "Rules" and "Connections" both opened on
+    Activity. Read it here, before the render, and the later handler sets it a
+    second time to the value it already has. */
+ const nv=t.closest("[data-nav]");if(nv){S.v=nv.dataset.nav;
+  if(nv.dataset.tab2)S.tab=nv.dataset.tab2;
+  render();return;}
  const sc=t.closest("[data-sc]");if(sc){S.scope=sc.dataset.sc;
   /* Each scope scores a different set of accounts, so the board is per scope.
      It is cached in the data layer; this is a no-op the second time. */
@@ -2194,6 +2429,22 @@ document.addEventListener("click",e=>{
    if(c)showCompiled(rcp.dataset.ruleCompile,ta.value.trim(),c);
    else if(box)box.innerHTML=`<p style="color:var(--watch);font-size:13px">Could not read that back. Try again, or save it without running it.</p>`;});
   return;}
+ const rbld=t.closest("[data-rule-build]");
+ if(rbld&&window.PulseLive&&PulseLive.buildAutomation){
+  const ta=$("#rule-en");
+  if(!ta||!ta.value.trim())return;
+  rbld.disabled=true;rbld.textContent="building…";
+  const box=$("#rule-compiled");
+  if(box)box.innerHTML=`<p style="color:var(--muted);font-size:13px">Planning it, then provisioning its agent and its schedule…</p>`;
+  PulseLive.buildAutomation(rbld.dataset.ruleBuild,ta.value.trim(),plan=>{
+   rbld.disabled=false;rbld.textContent="Build it as a live automation →";
+   showBuilt(rbld.dataset.ruleBuild,ta.value.trim(),plan);});
+  return;}
+ const aret=t.closest("[data-automation-retire]");
+ if(aret&&window.PulseLive&&PulseLive.retireAutomation){
+  aret.disabled=true;aret.textContent="…";
+  PulseLive.retireAutomation(aret.dataset.automationRetire,()=>{$("#ov").hidden=true;render();});
+  return;}
  const rsn=t.closest("[data-rule-save-new]");
  if(rsn&&window.PulseLive&&PulseLive.addMotionRule){
   const cm=window.__compiled;
@@ -2286,10 +2537,22 @@ document.addEventListener("click",e=>{
 
  const ra=t.closest("[data-reassign]");if(ra){$$(".menu").forEach(x=>x.hidden=true);
   openReassign(CARDS[+ra.dataset.reassign].cust,1);return;}
- if(t.closest("#ovx")||t===$("#ov")){$("#ov").hidden=true;return;}
- const rpick=t.closest("[data-rep]");if(rpick){$$("[data-rep]").forEach(x=>
-   x.setAttribute("aria-selected",String(x===rpick)));return;}
- if(t.closest("#ovdo")){$("#ov").hidden=true;return;}
+ if(t.closest("#ovx")||t===$("#ov")){
+  /* The reassign sheet owns its own open/closed state — closing it by hiding
+     the element would leave PulseLive still thinking it is open, and the next
+     render would put it straight back. */
+  if(window.PulseLive&&PulseLive.state.reassign.open){PulseLive.closeReassign(render);return;}
+  $("#ov").hidden=true;return;}
+ const rpick=t.closest("[data-rep]");if(rpick){
+  if(window.PulseLive&&PulseLive.state.reassign.open){
+   PulseLive.pickRep(Number(rpick.dataset.rep),render);return;}
+  $$("[data-rep]").forEach(x=>x.setAttribute("aria-selected",String(x===rpick)));return;}
+ if(t.closest("#ovdo")){
+  if(window.PulseLive&&PulseLive.state.reassign.open){
+   PulseLive.saveReassign(PULSE_BAG,render);return;}
+  $("#ov").hidden=true;return;}
+ if(t.closest("#ovsplit")){if(window.PulseLive)PulseLive.applySplit(PULSE_BAG,render);return;}
+ if(t.closest("#ovone")){if(window.PulseLive)PulseLive.applyPileToOne(PULSE_BAG,render);return;}
  const q2=t.closest("[data-q2]");if(q2){openPanel("answer",q2.dataset.q2);return;}
  const lg=t.closest("[data-log]");if(lg){openPanel("decision",lg.dataset.log);return;}
  const rd=t.closest("[data-row-detail]");
@@ -2298,8 +2561,8 @@ document.addEventListener("click",e=>{
  const hq=t.closest(".hrow");if(hq){S.ask=hq.dataset.q;S.sel=new Set();render();return;}
  if(t.closest("#morewall")){
   if(window.PulseLive)window.PulseLive.loadMoreAccounts(PULSE_BAG,render);return;}
- if(t.closest("#morepeople")){
-  if(window.PulseLive)window.PulseLive.loadMoreAccountFeed("people",PULSE_BAG,render);return;}
+ if(t.closest("#morenotes")){
+  if(window.PulseLive)window.PulseLive.loadMoreAccountFeed("notes",PULSE_BAG,render);return;}
  if(t.closest("#morerecent")){
   if(window.PulseLive)window.PulseLive.loadMoreAccountFeed("recently",PULSE_BAG,render);return;}
  if(t.closest("#moreaudit")){
@@ -2318,7 +2581,8 @@ document.addEventListener("click",e=>{
   S.ask=qid;S.sel=new Set();S.askTab="ask";S.v="ask";render();return;}
  const tt2=t.closest("[data-tt]");if(tt2){S.teamTab=tt2.dataset.tt;render();return;}
  const tb=t.closest("[data-tab]");if(tb){S.tab=tb.dataset.tab;render();return;}
- if(t.closest("#revm")){const m=$("#moneyb");m.hidden=!m.hidden;
+ if(t.closest("#revm")){const m=$("#moneyb"),r=$("#ratesb");m.hidden=!m.hidden;
+  if(r)r.hidden=m.hidden;
   $("#revm").textContent=m.hidden?"Show payments and rates":"Hide payments and rates";return;}
  if(!t.closest(".lensw")){const m=$("#lensm");if(m)m.hidden=true;}
 });
@@ -2326,15 +2590,64 @@ document.addEventListener("change",e=>{
  const rw=e.target.closest("[data-row]");
  if(rw){const n=+rw.dataset.row;rw.checked?S.sel.add(n):S.sel.delete(n);render();return;}
  const i=e.target.closest("#lensm input");if(!i)return;
- /* One country and one motion. Picking a second replaces the first rather than
-    adding to it — S.C and S.M stay Sets so every existing filter reads the
-    same, they just never hold more than one value. Clicking the one already
-    chosen clears that half, which is the only way back to All from a radio. */
- const set=i.dataset.c?S.C:S.M,v=i.dataset.c||i.dataset.m;
- const was=set.has(v);set.clear();if(!was)set.add(v);
+ /* One country and one motion, or All of either — which is what the empty
+    value on the first radio in each group means. S.C and S.M stay Sets so every
+    filter downstream reads the same; they just never hold more than one value,
+    and an empty one means "not filtering on this".
+
+    These were checkboxes, and the mismatch was the bug: a square box invites
+    you to tick three countries, and ticking the second silently unticked the
+    first. Getting back to All meant clicking the chosen one again — an
+    interaction nothing hinted at, and one a radio does not even fire a change
+    event for, so as radios it would have been a dead end. Hence a real All
+    option in each group rather than a gesture people had to guess at.
+
+    "Clear all" stays: it resets both halves at once, which the two All options
+    can only do in two clicks. */
+ const set="c" in i.dataset?S.C:S.M,v=i.dataset.c||i.dataset.m;
+ set.clear();if(v)set.add(v);
  render();
  const m=$("#lensm");if(m)m.hidden=false;});
 $("#pq").addEventListener("input",e=>pF(e.target.value));
+
+/**
+ * Escape closes the topmost thing that is open, and nothing else.
+ *
+ * It used to be three handlers that did not know about each other. The one
+ * registered first said "Escape on a company page means go back to Now", so
+ * pressing it with a sheet open left the sheet on screen and navigated the
+ * page out from under it — and once the URL router landed, that was a real
+ * history entry, which is why it read as the browser going back.
+ *
+ * One resolver instead, in z-order, because that is the order they stack in:
+ *
+ *   onb   150   first-run setup, a full-screen takeover
+ *   pal   120   the ⌘K palette
+ *   pk    115   the right-hand drawer
+ *   ov    110   sheets — reassign, members, log, tag, rules
+ *   menus  80   the account menu, row menus, the lens
+ *
+ * Returns true when it consumed the key, so the caller knows to stop rather
+ * than fall through to backing out of the page.
+ */
+function escClose(){
+ if(!$("#onb").hidden){$("#onb").hidden=true;return true;}
+ if(!$("#pal").hidden){pC();return true;}
+ if(!$("#pk").hidden){$("#pk").hidden=true;return true;}
+ if(!$("#ov").hidden){
+  /* The reassign sheet keeps its own open/closed state in PulseLive, so
+     hiding the element behind its back would have the next render put it
+     straight back up. */
+  if(window.PulseLive&&PulseLive.state.reassign&&PulseLive.state.reassign.open){
+   PulseLive.closeReassign(render);return true;}
+  $("#ov").hidden=true;return true;}
+ /* Menus last: they are the least modal thing on screen, and closing one
+    should never be what Escape does while a sheet is up. */
+ const menus=[$("#amenu"),$("#lensm"),...$$(".menu")].filter(m=>m&&!m.hidden);
+ if(menus.length){menus.forEach(m=>{m.hidden=true;});return true;}
+ return false;
+}
+
 document.addEventListener("keydown",e=>{
  const open=!$("#pal").hidden;
  /* The header search bar is focusable, so ↵ and space open it too. */
@@ -2342,18 +2655,29 @@ document.addEventListener("keydown",e=>{
   &&document.activeElement.closest&&document.activeElement.closest("[data-pal]")){
   e.preventDefault();pO();return;}
  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="k"){e.preventDefault();open?pC():pO();return;}
- if(open){if(e.key==="Escape")pC();
+ if(open){if(e.key==="Escape"){e.preventDefault();pC();return;}
   if(e.key==="ArrowDown"){e.preventDefault();pS=Math.min(pS+1,pR.length-1);pD();}
   if(e.key==="ArrowUp"){e.preventDefault();pS=Math.max(pS-1,0);pD();}
   if(e.key==="Enter"){e.preventDefault();pRun();}return;}
- if(e.key==="Escape"&&S.v==="cust"){S.v="now";render();}});
+ if(e.key!=="Escape")return;
+ /* Something open? Close it and stop — Escape dismisses one layer at a time,
+    and leaving the page is not a dismissal. */
+ if(escClose()){e.preventDefault();return;}
+ /* Nothing open, and you are on a company page: Escape is "back to where I
+    came from", the same as the crumb. Going through the crumb's own state
+    rather than hardcoding "now" is what makes Escape return you to the board
+    or the answer you opened the company from, instead of dumping you on Now. */
+ if(S.v==="cust"){
+  const f=S.from;
+  if(f){S.v=f.v;S.scope=f.scope;S.ask=f.ask;S.tab=f.tab;}else S.v="now";
+  render();}});
 
 function drawOnb(){
  const i=S.ostep,[st,h,p2,kind]=ONB[i];
  $("#osteps").innerHTML=ONB.map((_,n)=>`<i data-on="${n===i?1:0}" data-done="${n<i?1:0}"></i>`).join("");
  let extra="",cta="Continue",skip=1;
  if(kind==="connect"){extra=`<div class="cxn" data-on="0"><span class="ico">G</span><div class="cx">
-   <b>Google · mail and calendar</b><p>rhea@msg91.com</p>
+   <b>Google · mail and calendar</b><p>${ME.email_addr||"your email"}</p>
    <div class="sc3">READ ONLY · CUSTOMER THREADS ONLY · NEVER PERSONAL MAIL<br>
     I NEVER SEND FROM YOUR ADDRESS WITHOUT YOU PRESSING SEND<br>
     DISCONNECT WHENEVER YOU LIKE — I FORGET WITHIN 24 HOURS</div></div></div>
@@ -2371,12 +2695,24 @@ function drawOnb(){
     <span style="font-size:13px;color:var(--faint)">${keep.length} of 18 · nine came across when Vikram left${
      ONBSTATE.dropped.size?` · ${ONBSTATE.dropped.size} removed`:""}</span></div>`;
   cta="Save and continue →";skip=0;}
- if(kind==="voice"){extra=`<div class="voice">
-   <div class="vt">${ONBSTATE.traits.map(v=>`<span>${v} <button data-untrait="${v}" style="color:var(--faint);margin-left:4px">✕</button></span>`).join("")}
+ if(kind==="voice"){
+  const V=window.PulseLive&&PulseLive.state.voice;
+  extra=`<div class="voice">
+   <div class="vt">${ONBSTATE.traits.map(v=>`<span>${esc(v)} <button data-untrait="${esc(v)}" style="color:var(--faint);margin-left:4px">✕</button></span>`).join("")}
     <button class="chip" data-addtrait>＋ Add how you write</button></div>
+   <div id="traitadd" hidden style="margin-top:10px">
+    <input class="logbox" id="traitin" maxlength="120" placeholder="e.g. Never promises a date without checking"
+     style="width:100%;font:inherit;font-size:13.5px;padding:10px 12px;border:1px solid var(--line2);
+     border-radius:8px;background:var(--raise);color:var(--ink)">
+    <div class="row" style="margin-top:9px"><button class="go solid" id="traitsave">Add it →</button>
+     <button class="go" id="traitx">Cancel</button></div></div>
    <blockquote>“Rashid — yesterday was on us. The Etisalat route failed at 3:02 and we moved you across twelve minutes later.”</blockquote>
-   <div class="row" style="margin-top:14px"><button class="go">Show me another example</button>
-    <button class="go">Learn again from more mail</button></div></div>`;
+   <p style="font-size:12.5px;color:var(--faint);margin:12px 0 0">${
+     V&&V.error?`Not saving: ${esc(V.error)} — changes here will be lost.`
+     :V&&V.edited?"Yours, saved against your sign-in. Only you can see or change this list."
+     :"The five defaults everybody starts with. Change any of them and the list becomes yours."}</p>
+   <p style="font-size:12.5px;color:var(--faint);margin:6px 0 0">The example above is a sample of the house style, not something of yours — Pulse has no mailbox connection yet.</p>
+   </div>`;
   cta="That is me →";skip=0;}
  if(kind==="done"){skip=0;cta="Show me →";}
  $("#oc").innerHTML=`<div class="st2">${st}</div><h2>${h}</h2><p class="lead">${p2}</p>${extra}
@@ -2384,27 +2720,132 @@ function drawOnb(){
    ${i>0?`<button class="skip" id="oback">Back</button>`:""}
    ${skip?`<button class="skip" id="oskip">I will do this later</button>`:""}</div>`;
 }
-function openOnb(){S.ostep=0;$("#onb").hidden=false;drawOnb();}
+function openOnb(){S.ostep=0;$("#onb").hidden=false;drawOnb();
+ /* Fetched when the flow opens rather than at boot: most sessions never see
+    onboarding, and this is one more round trip on the first paint otherwise. */
+ if(window.PulseLive)PulseLive.loadVoice(PULSE_BAG,drawOnb);}
+
+/* Gmail, Google Calendar and Slack, via ViaSocket. Three distinct apps, three
+   distinct ViaSocket plugin ids (from plug-service.viasocket.com/plugins/search),
+   so unlike an early version of this, connecting one no longer marks another —
+   each is its own popup and its own OAuth. ME's toggle key, the pulse_connection
+   "service" value and ViaSocket's own plugin id can all differ per app, so
+   they are looked up together here rather than assumed equal.
+   Each open asks the server for a fresh token (never signed in the browser,
+   see /api/pulse/viasocket/token) and passes it straight to ViaSocket's own
+   script (loaded globally in app/layout.tsx), never storing it. Success and
+   disconnect are both saved server-side too (/api/pulse/connections,
+   pulse_connection — migrations/012), so the state is Pulse's, not just this
+   tab's memory. */
+const VIASOCKET_APPS={
+ gmail:{service:"gmail",pluginId:"rowo0bqrhj5g",label:"Gmail"},
+ cal:{service:"cal",pluginId:"rowkhibv5efp",label:"Google Calendar"},
+ slackapp:{service:"slack",pluginId:"rowbu58rc",label:"Slack"}};
+let onViasocketDone=null;
+let pendingConnectKey=null;
+
+/* react-hot-toast's own function, handed over by app/toast-bridge.tsx (a
+   React island — this file is plain script and has no other way to reach a
+   component tree). Falls back to alert() for the rare case this fires before
+   that bridge has mounted, so a failure is never silent. */
+function toastLoading(msg){return window.pulseToast?window.pulseToast.loading(msg):null;}
+function toastDone(id,ok,msg){
+ if(window.pulseToast){if(id)window.pulseToast.dismiss(id);window.pulseToast[ok?"success":"error"](msg);}
+ else if(!ok)alert(msg);
+}
+
+function saveConnection(service,action,viasocketId){
+ fetch("/api/pulse/connections",{method:"POST",headers:{"content-type":"application/json"},
+  body:JSON.stringify({service,action,viasocketId})}).catch(()=>{});
+}
+/* key: "gmail" | "cal" | "slackapp" — one popup, one app. The onboarding step
+   chains connectApp("gmail",()=>connectApp("cal",onDone)) to cover both. */
+function connectApp(key,onDone){
+ const app=VIASOCKET_APPS[key];
+ if(!app){onDone&&onDone();return;}
+ const loadingId=toastLoading(`Opening ${app.label}…`);
+ fetch("/api/pulse/viasocket/token").then(r=>r.json()).then(d=>{
+  if(!d.ok){toastDone(loadingId,false,d.error||"Could not start the connection.");return;}
+  if(!window.openViasocketConnection){toastDone(loadingId,false,"Connect isn't ready yet — reload and try again.");return;}
+  onViasocketDone=onDone;
+  pendingConnectKey=key;
+  pendingConnectToast=loadingId;
+  window.openViasocketConnection(d.token,app.pluginId);
+ }).catch(()=>toastDone(loadingId,false,"Could not start the connection."));
+}
+let pendingConnectToast=null;
+window.addEventListener("message",e=>{
+ if(!e.data||!e.data.type)return;
+ if(e.data.type==="viasocket_connection_success"){
+  const key=pendingConnectKey,app=key&&VIASOCKET_APPS[key],toastId=pendingConnectToast;
+  pendingConnectKey=null;pendingConnectToast=null;
+  if(app){
+   ME[key]=1;
+   const vid=e.data.data&&e.data.data.id?e.data.data.id:null;
+   saveConnection(app.service,"connected",vid);
+   toastDone(toastId,true,`${app.label} connected.`);
+  }
+  const fn=onViasocketDone;onViasocketDone=null;
+  if(fn)fn();else if(S.v==="profile")render();
+ }else if(e.data.type==="viasocket_connection_error"){
+  const key=pendingConnectKey,app=key&&VIASOCKET_APPS[key],toastId=pendingConnectToast;
+  onViasocketDone=null;pendingConnectKey=null;pendingConnectToast=null;
+  toastDone(toastId,false,`Connecting ${app?app.label:"the app"} failed`+
+   (e.data.error&&e.data.error.message?`: ${e.data.error.message}`:"."));
+ }else if(e.data.type==="viasocket_connection_closed"){
+  /* Popup dismissed with nothing decided — no success, no error. Just clear
+     the loading toast rather than leave it spinning forever; not a failure
+     worth alarming over. */
+  if(pendingConnectToast&&window.pulseToast)window.pulseToast.dismiss(pendingConnectToast);
+  onViasocketDone=null;pendingConnectKey=null;pendingConnectToast=null;
+ }
+});
 
 document.addEventListener("click",e=>{
  const t=e.target;
  if(t.closest("#abtn")){const m=$("#amenu");m.hidden=!m.hidden;return;}
  if(!t.closest(".whow"))$("#amenu").hidden=true;
  if(t.closest("#startonb")){$("#amenu").hidden=true;openOnb();return;}
+ /* The profile page's own way into the traits editor — the step that owns it. */
+ if(t.closest("#startonb2")){openOnb();S.ostep=2;drawOnb();return;}
  if(t.closest("#onbx")){$("#onb").hidden=true;return;}
  if(t.closest("#oskip")){ME.gmail=0;ME.cal=0;S.ostep++;drawOnb();return;}
  if(t.closest("#oback")){S.ostep=Math.max(0,S.ostep-1);drawOnb();return;}
  const dp=t.closest("[data-drop]");if(dp){ONBSTATE.dropped.add(dp.dataset.drop);drawOnb();return;}
  const ut=t.closest("[data-untrait]");if(ut){
-  ONBSTATE.traits=ONBSTATE.traits.filter(x=>x!==ut.dataset.untrait);drawOnb();return;}
- if(t.closest("[data-addtrait]")){ONBSTATE.traits.push("Uses the customer's first name only");drawOnb();return;}
+  const gone=ut.dataset.untrait;
+  /* Optimistic, then corrected by whatever the server says the list is —
+     the same shape as removing a tag. */
+  ONBSTATE.traits=ONBSTATE.traits.filter(x=>x!==gone);drawOnb();
+  if(window.PulseLive)PulseLive.removeVoiceTrait(gone,PULSE_BAG,drawOnb);
+  return;}
+ /* Adding one used to push a fixed string — "Uses the customer's first name
+    only" — whatever you meant to say. It asks now. */
+ if(t.closest("[data-addtrait]")){
+  const box=$("#traitadd");if(box){box.hidden=false;const i=$("#traitin");if(i)i.focus();}
+  return;}
+ if(t.closest("#traitx")){const box=$("#traitadd");if(box)box.hidden=true;return;}
+ if(t.closest("#traitsave")){
+  const i=$("#traitin"),v=i?i.value.trim():"";
+  if(v.length<2){if(i)i.focus();return;}
+  if(window.PulseLive)PulseLive.addVoiceTrait(v,PULSE_BAG,drawOnb);
+  else{ONBSTATE.traits.push(v);drawOnb();}
+  return;}
  if(t.closest("#onext")){
-  if(ONB[S.ostep][3]==="connect"){ME.gmail=1;ME.cal=1;}
+  if(ONB[S.ostep][3]==="connect"){
+   connectApp("gmail",()=>connectApp("cal",()=>{
+    S.ostep++;
+    if(S.ostep>=ONB.length){$("#onb").hidden=true;S.v="now";render();return;}
+    drawOnb();}));
+   return;}
   S.ostep++;
   if(S.ostep>=ONB.length){$("#onb").hidden=true;S.v="now";render();return;}
   drawOnb();return;}
  const tg=t.closest("[data-toggle]");
- if(tg){const k=tg.dataset.toggle;ME[k]=ME[k]?0:1;
+ if(tg){const k=tg.dataset.toggle;
+  if(VIASOCKET_APPS[k]&&!ME[k]){connectApp(k,()=>render());return;}
+  ME[k]=ME[k]?0:1;
+  if(VIASOCKET_APPS[k]&&!ME[k])saveConnection(VIASOCKET_APPS[k].service,"disconnected",null);
   if(S.v==="profile")render();else if(tg.classList.contains("sw"))tg.dataset.on=ME[k];return;}
  const t2=t.closest("[data-tab2]");if(t2){S.tab=t2.dataset.tab2;}
  if(t.closest("[data-admin]")){$("#amenu").hidden=true;
@@ -2465,10 +2906,39 @@ function openNewRule(motion){
    border-radius:8px;background:var(--raise);color:var(--ink);resize:vertical"></textarea>
   <div class="row" style="margin-top:16px">
    <button class="go solid" data-rule-compile="${motion}">Read it back to me →</button>
+   <button class="go" data-rule-build="${motion}">Build it as a live automation →</button>
    <button class="go" id="ovx">Cancel</button></div>
   <div id="rule-compiled" style="margin-top:18px"></div>
   <div class="ver">NOTHING RUNS UNTIL YOU CONFIRM IT.</div></div>`;
  $("#ov").hidden=false;
+}
+
+/**
+ * Show what the automation planner built: its own agent, its own schedule,
+ * running the moment this appears — unlike the sentence-rule path above,
+ * there is no separate confirm step, because the plan already ran through the
+ * SQL guard before anything was provisioned.
+ */
+function showBuilt(motion,english,plan){
+ const box=$("#rule-compiled"); if(!box) return;
+ if(!plan||!plan.ok){
+  box.innerHTML=`<div class="cl2" style="display:block;padding:14px 16px;background:var(--sink);border-radius:8px">
+    <b style="color:var(--watch)">Could not build that.</b>
+    <p style="margin:8px 0 0;color:var(--ink2);font-size:13.5px">${(plan&&plan.error)||"Unknown error"}${
+     plan&&plan.step?` (at the ${plan.step} step)`:""}</p></div>
+   <div class="row" style="margin-top:14px"><button class="go" onclick="document.getElementById('rule-en').focus()">Rewrite it</button></div>`;
+  return;}
+ box.innerHTML=`<div class="cl2" style="display:block;padding:14px 16px;background:var(--sink);border-radius:8px">
+   <div class="lab">Now running</div>
+   <div style="font-size:14px;color:var(--ink);line-height:1.7;margin-top:8px">${plan.optimizedPrompt}</div>
+   <p style="margin:10px 0 0;color:var(--muted);font-size:12.5px">
+    ${plan.mode==="cron"?`Checked on schedule <code>${plan.cronSchedule}</code>.`:"Runs on an event, not a schedule."}
+    Its own agent judges each row it finds.</p>
+  </div>
+  <div class="row" style="margin-top:14px">
+   <button class="go" data-automation-retire="${plan.key}">Turn it off</button>
+   <button class="go" id="ovx">Done</button></div>`;
+ window.__built={motion,english,plan};
 }
 
 /**
@@ -2772,7 +3242,9 @@ document.addEventListener("click",e=>{
  if(oa){$("#pk").hidden=true;S.ask=oa.dataset.openask;S.sel=new Set();S.askTab="ask";S.v="ask";render();return;}
  const pp=t.closest("[data-person]");if(pp){openPanel("person",pp.dataset.person);return;}
 });
-document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("#pk").hidden){$("#pk").hidden=true;}});
+/* The drawer's Escape used to live here, in a second listener registered after
+   the one above — so the company-page handler always won and this never ran
+   when it mattered. escClose owns every layer now. */
 
 function openSheet(kind,arg){
  const B=$("#ovb");
@@ -2859,31 +3331,136 @@ document.addEventListener("click",e=>{
 
 /* The current owner comes from the account itself. It used to be hardcoded to
    one sample name, which read as fact and was wrong on every real account. */
+/**
+ * Who holds this account, for the line the reassign sheet opens with.
+ *
+ * The three branches this used to end in all returned "unassigned", which is
+ * the same as having no branches — and it read as deliberate, so nobody looked
+ * at it. The wall row is the second source worth having: it carries "no owner"
+ * as its hot flag and is present for every account on Now, including ones whose
+ * detail has never been fetched.
+ */
 function ownerOf(name){
  const c=CUST[name];
  if(c&&c.owner)return c.owner;
  const row=BOOK.find(b=>b[1]===name);
- if(row&&row[5]===1)return "unassigned";
- return c&&c.__stub===false?"unassigned":"unassigned";}
+ /* Known to have nobody: the stub was built from the wall, or the row says so. */
+ if((c&&"owner"in c)||row)return "unassigned";
+ return "not known yet";}
 
+/**
+ * The reassign sheet.
+ *
+ * Everything in it used to be typed by hand: "Reassign 46 accounts", "unowned
+ * since Vikram left, 14 days ago", a three-line split across India, UAE and
+ * Singapore, and a SUGGESTED badge pinned to whoever happened to be third in
+ * the list. Clicking a rep moved an aria-selected attribute and nothing else,
+ * and "Reassign →" closed the sheet and threw the answer away.
+ *
+ * It is read from the database now, and saving writes. The state — which rep
+ * is picked, what the pile looks like, what the last save said — lives in
+ * PulseLive.state.reassign rather than in the DOM, because this sheet is
+ * rebuilt from scratch on every render and would otherwise forget the
+ * selection whenever anything else on the page moved.
+ *
+ * REPS carries the rep's MSG91 id in position 4 (see pulse-live.js): the
+ * selection is by id, never by index, because the list re-sorts as soon as a
+ * reassignment changes anybody's book.
+ */
 function openReassign(name,single){
- const bulk=!single||name==="Unassigned";
- $("#ovb").innerHTML=`<h3>${bulk?"Reassign 46 accounts":"Reassign "+name}</h3>
-  <p class="sub">${bulk?"Unowned since Vikram left, 14 days ago. Anyone can do this — it writes an audit event either way.":
-   "Currently "+ownerOf(name)+". The new owner picks up every open mission and promise on this account."}</p>
-  ${bulk?`<div class="lab" style="margin-bottom:6px">What Pulse suggests</div>
-   <div class="splitb"><div><span>India · 28 accounts</span><b>Rhea, Sana</b></div>
-    <div><span>UAE · 11 accounts</span><b>Arjun Nair</b></div>
-    <div><span>Singapore · 7 accounts</span><b>Priya Sundaram</b></div></div>
-   <div class="lab" style="margin-bottom:6px">Or give all 46 to one person</div>`:
-   `<div class="lab" style="margin-bottom:6px">Hand it to</div>`}
-  ${REPS.map(([n,i,m,me],ix)=>`<button class="rp" data-rep="${ix}" aria-selected="${ix===1&&!bulk?"true":"false"}">
-   ${AVI(n,30)}<span class="tx2"><b>${n}${me?" · you":""}</b><span>${m}</span></span>
-   ${ix===2&&bulk?'<span class="sug">SUGGESTED</span>':""}</button>`).join("")}
-  <div class="row" style="margin-top:20px"><button class="go solid" id="ovdo">${bulk?"Apply the suggested split →":"Reassign →"}</button>
-   <button class="go" id="ovx">Cancel</button></div>`;
- $("#ov").hidden=false;
+ if(!window.PulseLive){$("#ov").hidden=false;return;}
+ PulseLive.openReassign(name,single,PULSE_BAG,render);
 }
+
+/* Drawn on every render while the sheet is open, so it always reflects the
+   live state rather than whatever it was built with. */
+/* Whether the reassign sheet is the thing currently in the overlay. The
+   overlay is shared with every other sheet on the page, so this must not close
+   one it did not open. */
+let RAOWNS=false;
+function drawReassign(){
+ const ov=$("#ov"); if(!ov) return;
+ const R=window.PulseLive&&PulseLive.state.reassign;
+ if(!R||!R.open){if(RAOWNS){ov.hidden=true;RAOWNS=false;}return;}
+ RAOWNS=true;
+ const name=R.open, bulk=!R.single;
+ const pile=R.pile;
+
+ /* The pile's real size, and how much of it this sheet can act on. They differ
+    by thousands here, and saying only one of them is what made the prototype's
+    "46 accounts" a lie. */
+ /* Saved. The sheet stays up and says so — this is the only place the outcome
+    is ever shown, and a sheet that closes on success leaves the reader guessing
+    whether the press registered. */
+ if(R.saved){
+  $("#ovb").innerHTML=`<h3>Done</h3><p class="sub">${esc(R.saved)}</p>
+   <p class="why">Recorded on Pulse's side and written to the audit log. MSG91's own
+    <span class="mono">user_handled_by</span> still says what it said — Pulse may only read it,
+    so this is an override laid over their answer wherever the account is read.</p>
+   <div class="row" style="margin-top:20px">
+    <button class="go solid" id="ovx">Close</button></div>`;
+  ov.hidden=false;return;}
+
+ const head=bulk
+  ?(pile?`Reassign ${NUM(pile.total)} unowned account${pile.total===1?"":"s"}`:"Reassign the unowned accounts")
+  :"Reassign "+esc(name);
+ const sub=bulk
+  ?(pile
+    ?`${NUM(pile.total)} customer${pile.total===1?"":"s"} have nobody on them. This sheet works on the ${
+       NUM(pile.showing)} most recent. Anyone can do this — it writes an audit event either way.`
+    :(R.loading?"Reading the unowned accounts…":"Anyone can do this — it writes an audit event either way."))
+  /* What this actually does, which is not what it used to say. There are no
+     mission or promise tables in Pulse's store — migration 009 was written to
+     stop the sheet claiming things it does not do, and "the new owner picks up
+     every open mission and promise on this account" was the last one left. */
+  :`Currently ${esc(ownerOf(name))}. Changing it moves the account everywhere Pulse shows an owner —
+     the wall, the standings, and who it counts as belonging to. MSG91's own record is left as it is;
+     Pulse may only read that.`;
+
+ const split=bulk&&pile&&pile.groups&&pile.groups.length
+  ?`<div class="lab" style="margin-bottom:6px">What Pulse suggests · by who already works each country</div>
+    <div class="splitb">${pile.groups.slice(0,6).map(g=>
+      `<div><span>${esc(g.country)} · ${NUM(g.accounts)} account${g.accounts===1?"":"s"}</span>
+       <b>${g.suggested?esc(g.suggested.name)+" · owns "+NUM(g.suggested.owns)+" there"
+         :"<span style=\"color:var(--muted)\">nobody works this country yet</span>"}</b></div>`).join("")}
+     ${pile.groups.length>6?`<div><span>and ${pile.groups.length-6} more countries</span><b></b></div>`:""}</div>
+    <div class="lab" style="margin-bottom:6px">Or give all ${NUM(pile.showing)} to one person</div>`
+  :bulk?"":`<div class="lab" style="margin-bottom:6px">Hand it to</div>`;
+
+ /* Who may be handed this account. R.reps is the real answer — every rep,
+    including the ones holding nothing yet — and REPS is the standings, which
+    can only name people who already own something. The standings are the
+    fallback for the moment before the list lands, and for the session where
+    the request failed: short by whoever is on zero, but not empty.
+
+    An empty both ways means nothing has landed. Say so rather than drawing an
+    empty list that looks like "there is nobody to pick". */
+ const people=(R.reps&&R.reps.length)?R.reps:REPS;
+ const list=people.length
+  ?people.map(([n,i,m,me,id])=>`<button class="rp" data-rep="${id}" aria-selected="${R.pick===id?"true":"false"}">
+     ${AVI(n,30)}<span class="tx2"><b>${esc(n)}${me?" · you":""}</b><span>${esc(m)}</span></span>
+     ${R.pick===id?'<span class="sug">PICKED</span>':""}</button>`).join("")
+  :`<p class="why">The team list has not loaded yet.</p>`;
+
+ const act=bulk
+  ?`<button class="go solid" id="ovsplit" ${R.loading||!pile?"disabled":""}>Apply the suggested split →</button>
+    <button class="go" id="ovone" ${R.loading||!pile||R.pick==null?"disabled":""}>Give them all to the picked rep →</button>`
+  :`<button class="go solid" id="ovdo" ${R.loading?"disabled":""}>${
+     R.pick==null?"Take it off everybody →":"Reassign →"}</button>`;
+
+ $("#ovb").innerHTML=`<h3>${head}</h3><p class="sub">${sub}</p>
+  ${split}${list}
+  ${R.pick!=null&&!bulk?"":`<p style="font-size:12.5px;color:var(--faint);margin:10px 0 0">${
+    bulk?"Picking nobody leaves the split to Pulse's suggestion.":
+    "Nobody is picked, so saving takes this account off its current owner."}</p>`}
+  ${R.error?`<p class="tagerr" role="alert">That did not save: ${esc(R.error)}</p>`:""}
+  <div class="row" style="margin-top:20px">${act}
+   <button class="go" id="ovx">${R.loading?"Close":"Cancel"}</button></div>`;
+ ov.hidden=false;
+}
+
+/* Thousands separators, the same way every other number on the page gets them. */
+function NUM(n){return Number(n||0).toLocaleString("en-IN");}
 document.addEventListener("click",e=>{
  if(!e.target.closest(".mw"))$$(".menu").forEach(x=>x.hidden=true);},true);
 /* ── live data ─────────────────────────────────────────────────────────────
@@ -2917,6 +3494,10 @@ const PULSE_BAG = {
   rebuildPal: (counts) => rebuildPal(counts),
   get REPS() { return REPS; },
   set REPS(v) { REPS = v; },
+  /* How the signed-in person writes, from pulse_user_voice. Two surfaces read
+     it — onboarding step 3 and the profile page — so the live layer pushes it
+     into both places the renderer looks. */
+  setVoice: (traits) => { VOICE = traits.slice(); ONBSTATE.traits = traits.slice(); },
   get ME() { return ME; },
   /* The live score band and board. Null keeps the sample board on screen. */
   setBoard: (b) => { BOARD = b; },
@@ -2927,24 +3508,46 @@ if (window.PulseLive) {
   /* Ask answers and account pages are fetched on demand rather than up front:
      each is a separate query and most are never opened in a session. */
   const askSeen = new Set(), custSeen = new Set();
+
+  /** Ask for whatever the screen we are on needs, if it has not been asked for. */
+  const need = {
+    ask(id) {
+      if (!id || id.startsWith("__typed:") || askSeen.has(id)) return;
+      askSeen.add(id);
+      window.PulseLive.loadAnswer(id, PULSE_BAG, render);
+    },
+    cust(name) {
+      if (!name || custSeen.has(name)) return;
+      custSeen.add(name);
+      window.PulseLive.loadAccount(name, PULSE_BAG, render);
+    },
+  };
+
+  /* Arriving by URL rather than by click — a refresh, a pasted link, Back —
+     fetches the same thing the click would have. */
+  routeFetch = () => {
+    if (S.v === "cust") need.cust(S.cust);
+    if (S.v === "ask") need.ask(S.ask);
+  };
+
   document.addEventListener("click", (e) => {
     const q = e.target.closest("[data-q]");
     /* A pinned typed question has no catalogue entry, so there is nothing here
        to fetch — the renderer re-asks it through askCustom instead. Without
        this it fired ?q=__typed:0 and got the "cannot answer that" placeholder
        back, cached under an id nothing should ever read. */
-    if (q && !q.dataset.q.startsWith("__typed:") && !askSeen.has(q.dataset.q)) {
-      askSeen.add(q.dataset.q);
-      window.PulseLive.loadAnswer(q.dataset.q, PULSE_BAG, render);
-    }
+    if (q) need.ask(q.dataset.q);
     const cu = e.target.closest("[data-cust]");
-    if (cu && !custSeen.has(cu.dataset.cust)) {
-      custSeen.add(cu.dataset.cust);
-      window.PulseLive.loadAccount(cu.dataset.cust, PULSE_BAG, render);
-    }
+    if (cu) need.cust(cu.dataset.cust);
     /* Payments and rates are L2: fetched only on the deliberate reveal. */
     if (e.target.closest("#revm") && S.cust) {
       window.PulseLive.revealCommercial(S.cust, PULSE_BAG, render);
+    }
+    /* The profile page shows how you write, so it needs the list. Cheap and
+       cached after the first answer. */
+    const nav = e.target.closest("[data-nav]");
+    if (nav && nav.dataset.nav === "profile") {
+      window.PulseLive.loadVoice(PULSE_BAG, render);
     }
   });
 
@@ -2953,7 +3556,10 @@ if (window.PulseLive) {
      however long the database takes — and the host is 200ms away on a good
      day. */
   render();
-  window.PulseLive.boot(PULSE_BAG, render);
+  /* The path is read once the accounts are in hand, not before: /company/<name>
+     cannot be checked against anything until there is something to check it
+     against, and until then the screen is a skeleton anyway. */
+  window.PulseLive.boot(PULSE_BAG, render).then(routeGo, routeGo);
 } else {
-  render();
+  routeGo();
 }
