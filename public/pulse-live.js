@@ -106,6 +106,9 @@ window.PulseLive = (function () {
     /* The caller's Pulse role and what it lets them do. Advisory: the server
        checks the role again on every rule write. */
     state.role = data.role || null;
+    /* Every country the customer base is in, for the lens. Not derived from
+       the board: the board scores one page and most of it has no country. */
+    state.countries = data.countries || null;
     state.can = data.can || {};
     if (data.me) {
       /* The header is NOT written here any more. It carries the person who

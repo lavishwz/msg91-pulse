@@ -516,3 +516,55 @@ export async function accountPeople(
     req,
   );
 }
+
+/**
+ * Every country the customer base is in, with how many accounts are in each.
+ *
+ * The lens used to build its list from whatever the board had scored, which
+ * is one page of 200 — and 190 of those carry no country at all, so the menu
+ * collapsed to India and Unknown while the book spans 65 countries. This
+ * reads the whole base instead.
+ *
+ * Cheap: default_destination_country is 4,218 rows and the group is on an
+ * indexed-enough column. Accounts with no row there are real and are counted
+ * under a null country rather than dropped — there are more of them than
+ * there are of any single country.
+ */
+export type CountryCount = {
+  code: string | null;
+  name: string | null;
+  flag: string | null;
+  accounts: number;
+};
+
+export async function countryCounts(): Promise<CountryCount[]> {
+  const rows = await query<{ code: string | null; currency: string | null; n: number }>(
+    `SELECT NULLIF(TRIM(d.billing_country), '') AS code,
+            NULLIF(TRIM(d.currency), '')        AS currency,
+            COUNT(*)                            AS n
+       FROM ms_user u
+       LEFT JOIN default_destination_country d ON d.u_id = u.user_pid
+      WHERE u.user_type = 3
+      GROUP BY code, currency`,
+  );
+
+  /* Two rows can name the same country — one by dialling code, one only by
+     currency — so they are summed rather than listed twice. */
+  const by = new Map<string, CountryCount>();
+  for (const r of rows) {
+    const place = countryOf(r.code, r.currency);
+    const key = place ? place.name : "";
+    const at = by.get(key) ?? {
+      code: r.code ?? null,
+      name: place ? place.name : null,
+      flag: place ? place.flag : null,
+      accounts: 0,
+    };
+    at.accounts += Number(r.n);
+    by.set(key, at);
+  }
+
+  return [...by.values()].sort((a, b) =>
+    a.name === null ? 1 : b.name === null ? -1 : b.accounts - a.accounts,
+  );
+}

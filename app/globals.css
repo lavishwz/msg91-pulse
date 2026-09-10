@@ -47,9 +47,14 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;pad
  border:1px solid var(--line2);border-radius:999px;background:var(--raise)}
 .lensb[data-on="true"]{border-color:var(--br);color:var(--br);background:var(--br-s)}
 .car{font-size:8px;opacity:.6}
-.lens{position:absolute;right:0;top:calc(100% + 8px);z-index:50;width:230px;background:var(--raise);
- border:1px solid var(--line2);border-radius:12px;box-shadow:var(--sh);padding:8px}
-.lens h4{margin:10px 10px 4px;font-family:var(--m);font-size:9.5px;letter-spacing:.14em;
+/* The country list is every country the customer base is in — 65 of them, not
+   the four the prototype hardcoded — so the menu scrolls rather than running
+   off the bottom of the screen. Motion stays pinned below it. */
+.lens{position:absolute;right:0;top:calc(100% + 8px);z-index:50;width:250px;background:var(--raise);
+ border:1px solid var(--line2);border-radius:12px;box-shadow:var(--sh);padding:8px;
+ max-height:min(62vh,520px);overflow-y:auto;overscroll-behavior:contain}
+.lens h4{position:sticky;top:-8px;z-index:1;background:var(--raise);
+ margin:10px 10px 4px;padding:2px 0;font-family:var(--m);font-size:9.5px;letter-spacing:.14em;
  text-transform:uppercase;color:var(--faint);font-weight:400}
 .lens label{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 10px;
  border-radius:7px;font-size:14px;cursor:pointer}

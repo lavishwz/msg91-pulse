@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { resolveMe, standings } from "@/lib/pulse/team";
-import { listAccounts, countAccounts } from "@/lib/pulse/accounts";
+import { listAccounts, countAccounts, countryCounts } from "@/lib/pulse/accounts";
 import { growth, ASK_CATALOGUE } from "@/lib/pulse/ask";
 import { auditAnomaly } from "@/lib/pulse/audit";
 import { page } from "@/lib/pulse/paginate";
@@ -54,6 +54,9 @@ export async function GET() {
       standings: ranks,
       anomaly,
       counts: { accounts: totals[0], unowned: totals[1] },
+      /* Every country the base is in, so the lens lists them all rather than
+         only the ones that happen to be on the scored page of the board. */
+      countries: await countryCounts(),
       askCatalogue: ASK_CATALOGUE,
       generatedAt: new Date().toISOString(),
     });

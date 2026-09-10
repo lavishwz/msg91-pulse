@@ -1006,31 +1006,31 @@ const GEO={
 const CUR2GEO={};Object.keys(GEO).forEach(k=>{CUR2GEO[GEO[k].cur]=k;});
 
 /* Which countries the lens offers.
-   Every country the board actually returned, commonest first, however many
-   that is — the account's own billing_country, not a guess from its currency.
-   Accounts whose country the database does not record are grouped under
-   Unknown rather than being filed under India, which is what the old
-   currency-only reading did to two thirds of the book. */
+   Every country the customer base is actually in, commonest first, from
+   /api/pulse/bootstrap. Deriving it from the board was wrong twice over: the
+   board scores one page of 200, and 190 of those carry no country at all, so
+   the menu showed India and Unknown while the book spans 65 countries. */
 const GEO_UNKNOWN="Unknown";
 function lensCountries(){
- if(!BOARD||!BOARD.bands)return [...GEO_ALL];
- const n=new Map();
- BOARD.bands.forEach(b=>b.accounts.forEach(a=>{
-  const k=a.country||GEO_UNKNOWN;n.set(k,(n.get(k)||0)+1);}));
- S.C.forEach(c=>{if(!n.has(c))n.set(c,0);});
- return [...n.keys()].sort((x,y)=>
-  x===GEO_UNKNOWN?1:y===GEO_UNKNOWN?-1:(n.get(y)-n.get(x))||x.localeCompare(y));}
+ const live=window.PulseLive&&PulseLive.state.countries;
+ if(!live||!live.length)return [...GEO_ALL];
+ const names=live.filter(c=>c.name).map(c=>c.name);
+ if(live.some(c=>!c.name))names.push(GEO_UNKNOWN);
+ S.C.forEach(c=>{if(names.indexOf(c)<0)names.push(c);});
+ return names;}
 
-/* How many accounts on the board are in that country. */
-function lensCount(c){
- if(!BOARD||!BOARD.bands)return null;
- let n=0;BOARD.bands.forEach(b=>b.accounts.forEach(a=>{
-  if((a.country||GEO_UNKNOWN)===c)n++;}));
- return n;}
+/* How many accounts are in that country, across the whole base. */
+function lensTotal(c){
+ const live=window.PulseLive&&PulseLive.state.countries;
+ if(!live)return null;
+ const hit=live.find(x=>(x.name||GEO_UNKNOWN)===c);
+ return hit?hit.accounts:0;}
 
 /* Its flag, from whichever account carries one. */
 function lensFlag(c){
  if(c===GEO_UNKNOWN)return "🏳";
+ const live=window.PulseLive&&PulseLive.state.countries;
+ if(live){const hit=live.find(x=>x.name===c);if(hit&&hit.flag)return hit.flag;}
  if(BOARD&&BOARD.bands)for(const b of BOARD.bands)for(const a of b.accounts)
   if(a.country===c&&a.countryFlag)return a.countryFlag;
  return (GEO[c]&&GEO[c].flag)||"";}
@@ -1197,8 +1197,8 @@ function vNow(){
      <span>${lensLab()}</span><span class="car">▼</span></button>
     <div class="lens" id="lensm" hidden>
      <h4>Country</h4>${lensCountries().map(c=>
-      `<label${lensCount(c)===0?' style="opacity:.45"':""}><span>${lensFlag(c)} ${esc(c)} <em style="font-style:normal;color:var(--faint)">${
-       lensCount(c)!=null?lensCount(c):""}</em></span><input type="checkbox" data-c="${esc(c)}" ${
+      `<label${lensTotal(c)===0?' style="opacity:.45"':""}><span>${lensFlag(c)} ${esc(c)} <em style="font-style:normal;color:var(--faint)">${
+       (t=>t==null?"":t)(lensTotal(c))}</em></span><input type="checkbox" data-c="${esc(c)}" ${
        S.C.has(c)?"checked":""}><span class="bx"></span></label>`).join("")}
      <h4>Motion</h4>${["Inbound","Outbound","Startup","Partner"].map(m=>
       `<label><span>${m}</span><input type="checkbox" data-m="${m}" ${S.M.has(m)?"checked":""}><span class="bx"></span></label>`).join("")}
