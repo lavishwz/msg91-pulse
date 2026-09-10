@@ -169,5 +169,28 @@ export async function systemAlerts(): Promise<SystemAlert[]> {
     });
   }
 
+  // 6b. Cards raised by the rules people wrote themselves. These land in
+  //     pulse_signal like everything else, but nothing was looking for them —
+  //     the automations ran, wrote their cards, and appeared on no surface.
+  const auto = await read<{ n: number; oldest: Date | null }>(
+    `SELECT COUNT(*) n, MIN(s.created_at) oldest
+       FROM pulse_signal s
+      WHERE s.state = 'open' AND s.kind = 'automation'`,
+  );
+  const autoCount = Number(auto[0]?.n ?? 0);
+  if (autoCount > 0) {
+    out.push({
+      key: "automations",
+      audience: "work",
+      severity: "act",
+      eyebrow: "Your rules",
+      headline: `${autoCount} account${autoCount === 1 ? "" : "s"} matched a rule you wrote.`,
+      detail:
+        "Found by the rules on the Autopilot tab, not by Pulse's own scanners. " +
+        "Each one names the rule that raised it and the evidence behind it.",
+      count: autoCount,
+    });
+  }
+
   return out;
 }

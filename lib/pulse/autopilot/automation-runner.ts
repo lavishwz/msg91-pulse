@@ -22,7 +22,7 @@
  *   first time it ran.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { query } from "@/lib/db";
 import { read, write, acquireLock, releaseLock } from "@/lib/store";
 import { guard } from "@/lib/pulse/sqlguard";
@@ -101,6 +101,60 @@ async function advanceMark(key: string, position: string, count: number): Promis
 function markOf(v: unknown): string {
   if (v instanceof Date) return v.toISOString();
   return String(v ?? "");
+}
+
+/**
+ * Record the decision, alert or no alert.
+ *
+ * pulse_decision is the Log tab, and 001_store is explicit that every branch
+ * writes one — "including suppressions and failures: a gateway timeout is a
+ * decision row with held = 1 and an error code, never a silent skip". This
+ * runner did not, so its first four cards appeared on no surface at all: the
+ * Log reads pulse_decision, and there was nothing there to read.
+ *
+ * A row the worker declined to alert on is the interesting case. It is the
+ * only evidence that a rule ran, looked, and chose to stay quiet.
+ */
+async function writeDecision(
+  a: Automation,
+  signalKey: string,
+  agentId: string,
+  model: string | null,
+  input: Record<string, unknown>,
+  output: unknown,
+  verdict: string,
+  confidence: number | null,
+  action: string,
+  errorCode: string | null,
+  usage: Record<string, unknown>,
+): Promise<void> {
+  await write(
+    `INSERT INTO pulse_decision
+        (signal_key, agent, agent_id, model, policy_version, input_digest, input_json,
+         output_json, verdict, confidence, action_taken, held, hold_reason, error_code, usage_json)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     ON DUPLICATE KEY UPDATE
+        output_json = VALUES(output_json), verdict = VALUES(verdict),
+        confidence = VALUES(confidence), action_taken = VALUES(action_taken),
+        error_code = VALUES(error_code), usage_json = VALUES(usage_json)`,
+    [
+      signalKey,
+      "rule-worker",
+      agentId,
+      model,
+      a.key,
+      createHash("sha256").update(JSON.stringify(input)).digest("hex"),
+      JSON.stringify({ rule: a.english, automation: a.key, ...input }),
+      JSON.stringify(output ?? null),
+      verdict,
+      confidence,
+      action,
+      errorCode ? 1 : 0,
+      errorCode ? "the worker could not judge this row" : null,
+      errorCode,
+      JSON.stringify(usage ?? {}),
+    ],
+  );
 }
 
 /** Write what the worker decided, as a card a person will see. */
@@ -200,15 +254,29 @@ export async function runOne(a: Automation, deadline = Date.now() + PASS_BUDGET_
       const v = markOf(row[a.watermarkCol]);
       if (v > highest) highest = v;
     }
+    const rowSubject = a.subjectCol ? String(row[a.subjectCol] ?? "") : null;
+    const signalKey = `auto:${a.key}:${rowSubject || "portfolio"}`;
     try {
-      const { data } = await judgeRow(a.english, a.agentTask ?? a.english, row);
+      const call = await judgeRow(a.english, a.agentTask ?? a.english, row);
+      const data = call.data;
       out.judged++;
+      let acted = "none";
       if (data.should_alert && data.headline) {
-        const subject = data.subject_id ?? (a.subjectCol ? String(row[a.subjectCol] ?? "") : null);
+        const subject = data.subject_id ?? rowSubject;
         if (await writeAlert(a, subject || null, data.headline, data.detail ?? "", data.reasons, data.confidence))
           out.alerts++;
+        acted = "alerted";
       }
+      await writeDecision(
+        a, signalKey, call.agentId, call.model, row, data,
+        data.should_alert ? "alert" : "quiet",
+        data.confidence, acted, null, call.usage,
+      );
     } catch (err) {
+      await writeDecision(
+        a, signalKey, "", null, row, null, "failed", null, "none",
+        (err as Error).message.slice(0, 40), {},
+      ).catch(() => {});
       /* One row failing is not the automation failing. Record it and carry on
          — the alternative is that a single malformed account silences a rule
          for everybody. */

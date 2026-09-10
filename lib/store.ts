@@ -101,6 +101,16 @@ export function storePool(): mysql.Pool {
       ...(env.ssl ? { ssl: { rejectUnauthorized: true } } : {}),
       waitForConnections: true,
       connectionLimit: env.poolLimit,
+      /* The store is a remote MySQL that closes idle connections, and mysql2
+         will hand a closed one straight back out of the pool — every call then
+         fails with ECONNRESET until the process restarts. That happened twice
+         while this was being built, and looked each time like the store being
+         down when it was reachable from the command line throughout.
+         Keepalive holds them open; idleTimeout retires them before the server
+         does. */
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 10_000,
+      idleTimeout: 60_000,
       // Decisions carry JSON columns; letting the driver hand back parsed
       // objects keeps every caller from JSON.parse-ing defensively.
       typeCast: true,
