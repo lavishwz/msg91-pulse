@@ -1,20 +1,22 @@
 /**
  * Building a dynamic automation.
  *
- * The path the person who asked for this feature described: give the
- * planner agent an English rule, get back a plan (schedule, query, a prompt
- * for a brand-new executor agent), validate the query with the same guard
- * every automation's find_sql goes through, provision the executor agent on
- * GTWY, subscribe a cron-job.org job if the plan calls for one, then save
- * the row. Nothing here is a stub: every step that can be exercised without
- * a live cron-job.org key runs for real; the cron-job.org call is the only
- * one that needs a key this environment does not have yet.
+ * Plan the English rule, validate the query with the same guard every
+ * automation's find_sql goes through, dry-run it against the real database,
+ * subscribe a cron-job.org job if the plan calls for one, then save the row.
+ *
+ * No agent is created here. An earlier version of this minted a new GTWY
+ * agent per automation — unnecessary: the shared `ruleWorker` agent already
+ * takes a rule's own words as a variable per call (see agents.ts, and how
+ * the four built-in automations have always worked). `executor_prompt` is
+ * stored as the automation's `agent_task` and passed to that one shared
+ * agent at run time — one call reaching an agent that already exists, not a
+ * new agent minted for every rule somebody writes.
  */
 
 import { planAutomation } from "@/lib/pulse/agents";
 import { guard } from "@/lib/pulse/sqlguard";
 import { query } from "@/lib/db";
-import { createExecutorAgent } from "@/lib/pulse/gtwyAdmin";
 import { createCronJob } from "@/lib/pulse/cronjob";
 import { saveAutomation, type Motion, type Scope } from "./automations";
 
@@ -26,12 +28,11 @@ export type BuildResult =
       optimizedPrompt: string;
       findSql: string;
       executorPrompt: string;
-      gtwyAgentId: string;
       cronJobId: string | null;
       webhookUrl: string | null;
       cronSchedule: string | null;
     }
-  | { ok: false; error: string; step: "plan" | "guard" | "dry_run" | "agent" | "cron" | "save" };
+  | { ok: false; error: string; step: "plan" | "guard" | "dry_run" | "cron" | "save" };
 
 /**
  * Actually run the plan's query, LIMIT 0, before anything else is built.
@@ -101,14 +102,6 @@ export async function buildAutomation(
 
   const key = `dyn-${slugify(english)}-${Date.now().toString(36)}`;
 
-  let gtwyAgentId: string;
-  try {
-    const agent = await createExecutorAgent(`pulse-auto-${key}`, plan.executor_prompt);
-    gtwyAgentId = agent.agentId;
-  } catch (err) {
-    return { ok: false, error: (err as Error).message, step: "agent" };
-  }
-
   let cronJobId: string | null = null;
   let webhookUrl: string | null = null;
   if (plan.mode === "cron") {
@@ -146,7 +139,6 @@ export async function buildAutomation(
     agentTask: plan.executor_prompt,
     executorPrompt: plan.executor_prompt,
     optimizedPrompt: plan.optimized_rule_prompt,
-    gtwyAgentId,
     cronJobId,
     maxRows: plan.max_rows || 50,
     capability: "ready",
@@ -163,7 +155,6 @@ export async function buildAutomation(
     optimizedPrompt: plan.optimized_rule_prompt,
     findSql: plan.find_sql,
     executorPrompt: plan.executor_prompt,
-    gtwyAgentId,
     cronJobId,
     webhookUrl,
     cronSchedule: plan.mode === "cron" ? plan.cron_schedule : null,

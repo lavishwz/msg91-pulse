@@ -19,3 +19,10 @@ next-env.d.ts
 .env.local.bak*
 *.env.local.bak*
 .env.*.bak
+
+# production secrets consolidated by hand — never committed
+.env.production.final
+.env.*.final
+
+# leftover from the pulse-next/ -> repo-root flatten; no source here anymore
+pulse-next/

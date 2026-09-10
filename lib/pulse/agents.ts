@@ -588,30 +588,3 @@ export async function planAutomation(
   });
 }
 
-/* ── the dynamic (per-automation) worker ─────────────────────────────────── */
-
-/**
- * Judge one row using an automation's own executor agent instead of the
- * shared ruleWorker. Same reply shape, different agent id — so runOne() can
- * take either as a drop-in.
- */
-export async function judgeRowWithAgent(
-  agentId: string,
-  ruleEnglish: string,
-  row: Record<string, unknown>,
-): Promise<AgentCall<RuleWorkerResult>> {
-  const reply = await chat({
-    user: "Judge this row.",
-    agentId,
-    variables: { today: today(), rule_english: ruleEnglish, row_json: JSON.stringify(row) },
-  });
-  const parsed = RuleWorkerSchema.safeParse(extractJson(reply.content));
-  if (!parsed.success) {
-    throw new GtwyError(
-      `Executor agent ${agentId}'s reply did not match the expected shape: ` +
-        parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"} ${i.message}`).join("; "),
-      "BAD_AGENT_REPLY",
-    );
-  }
-  return { data: parsed.data, agent: "dynamic-executor", agentId, model: reply.model, usage: reply.usage as Record<string, unknown> };
-}
