@@ -335,6 +335,32 @@ export async function runOne(
   if (a.watermarkCol && mark) {
     fresh = rows.filter((r) => markOf(r[a.watermarkCol!]) > mark);
   }
+
+  /* A rule with no watermark column still has to make progress.
+
+     Without one there is nothing to filter on, so every pass took the same
+     ordered result from the top. The limit that bites is not maxRows — the
+     guard already caps the query's own LIMIT at that, so the fetch never
+     exceeds it — it is PASS_BUDGET_MS. The worker costs 15-25 seconds a row,
+     so a pass judges about five of whatever it fetched. A rule allowed fifty
+     rows fetched fifty and judged the same five every time; the other
+     forty-five were fetched and thrown away, in every pass, forever. Seen
+     live: "find accounts whose balance has dropped close to zero" matched 50
+     and judged 5, and would have kept judging those same 5 every day.
+
+     A watermark is still the better answer and the planner is still asked for
+     one. This is what happens when it cannot find one: remember how far the
+     last pass reached and start the next one there, wrapping at the end. The
+     result set shifts between passes, so the offset is approximate — but
+     approximate rotation reaches every row eventually, and starting from zero
+     reaches 10% of them and never the rest. */
+  let rotatedFrom = 0;
+  const rotating = !a.watermarkCol && rows.length > 0;
+  if (rotating) {
+    rotatedFrom = Number(await loadMark(a.key + ":offset")) || 0;
+    if (!Number.isFinite(rotatedFrom) || rotatedFrom < 0 || rotatedFrom >= rows.length) rotatedFrom = 0;
+    fresh = rows.slice(rotatedFrom).concat(rows.slice(0, rotatedFrom));
+  }
   /* Cap the pass — but never mid-group.
 
      The filter above is a strict `>`, so a row whose watermark equals the
@@ -368,7 +394,9 @@ export async function runOne(
     if (Date.now() > deadline) {
       /* Out of time. Everything judged so far is kept and the watermark below
          records it, so the next pass starts at the next unjudged row. */
-      out.skipped = `budget spent after ${out.judged} of ${fresh.length} rows`;
+      out.skipped = rotating
+        ? `budget spent after ${out.judged} of ${fresh.length} rows — the next pass resumes at row ${(rotatedFrom + out.judged) % rows.length}`
+        : `budget spent after ${out.judged} of ${fresh.length} rows`;
       break;
     }
     const rowSubject = a.subjectCol ? String(row[a.subjectCol] ?? "") : null;
@@ -440,6 +468,12 @@ export async function runOne(
 
   if (a.watermarkCol && highest && highest !== mark)
     await advanceMark(a.key, highest, fresh.length);
+
+  /* Where the next pass should pick up, for a rule with no watermark. Counts
+     rows actually judged, not rows offered, so a pass that ran out of budget
+     resumes on the first row it did not get to rather than skipping it. */
+  if (rotating && out.judged > 0)
+    await advanceMark(a.key + ":offset", String((rotatedFrom + out.judged) % rows.length), out.judged);
 
   await recordRun(a.key, { alerts: out.alerts, error: out.error, everyMinutes: a.everyMinutes });
   out.ms = Date.now() - started;

@@ -149,7 +149,7 @@ for (const [eventName, english] of EVENT_CASES) {
 if (WITH_SCHEDULE) {
   say("\n═══ SCHEDULED AUTOMATIONS ═══\n");
   for (const english of SCHEDULE_CASES) {
-    if (ONLY) break;
+
     const r = { kind: "schedule", english, step: null, key: null, ok: false, notes: [] };
     say(`── ${english.slice(0, 70)}…`);
     const t0 = Date.now();
@@ -182,6 +182,17 @@ if (WITH_SCHEDULE) {
     if (!row.findSql) r.notes.push("a scheduled automation with no find_sql cannot find anything");
     if (!row.live) r.notes.push("saved but not live");
     if (!built.cronJobId) r.notes.push("no cron-job.org job was provisioned, so nothing will ever call its webhook");
+
+    /* The cadence has to be stored, not just registered externally — it is
+       what sets next_run_at and therefore what the internal tick honours. */
+    const { cronIntervalMinutes } = await import("../lib/pulse/cronjob.ts");
+    const want = cronIntervalMinutes(built.cronSchedule || "0 * * * *");
+    say(`   every_minutes: ${row.everyMinutes} (schedule "${built.cronSchedule}" => ${want})`);
+    if (row.everyMinutes == null) {
+      r.notes.push("every_minutes is NULL, so recordRun will default to 5 minutes and the tick will re-run this far more often than its schedule");
+    } else if (row.everyMinutes !== want) {
+      r.notes.push(`every_minutes is ${row.everyMinutes} but the registered schedule implies ${want}`);
+    }
 
     const t1 = Date.now();
     let run;
