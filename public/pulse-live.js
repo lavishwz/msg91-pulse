@@ -12,7 +12,7 @@
  * real and which are still the prototype's sample data.
  */
 window.PulseLive = (function () {
-  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, boardLoaded: false, flightLoaded: false, autopilot: null, autopilotError: null, drafts: [], policy: null, manifest: null, motionRules: null, automations: [], asked: [], digest: null, verdicts: {}, alerts: [], tagError: null, mockDismissed: false, audit: null, auditError: null, auditLoadingMore: false, gmailRecent: null, gmailRecentError: null, gmailRecentLoaded: false };
+  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, cardsError: null, boardLoaded: false, flightLoaded: false, autopilot: null, autopilotError: null, drafts: [], policy: null, manifest: null, motionRules: null, automations: [], asked: [], digest: null, verdicts: {}, alerts: [], tagError: null, mockDismissed: false, audit: null, auditError: null, auditLoadingMore: false, gmailRecent: null, gmailRecentError: null, gmailRecentLoaded: false };
 
   /**
    * Sample-data notice (static markup in app/pulse-shell.tsx, #mockbar).
@@ -1995,6 +1995,41 @@ window.PulseLive = (function () {
      * Fetch and apply. `bag` carries references to the renderer's data objects;
      * `render` is the renderer's own entry point.
      */
+    /**
+     * The cards on Now. Its own method rather than an inline fetch inside
+     * boot() so the "Try again" the failure state offers can call exactly the
+     * same path, instead of re-running the whole bootstrap to retry one query.
+     */
+    loadCards(bag, render) {
+      state.cardsError = null;
+      state.cardsLoaded = false;
+      render();
+      return get("/api/pulse/cards?per=4")
+        .then((c) => {
+          applyCards(c.cards, bag);
+          state.cardsLoaded = true;
+          render();
+          this.report();
+        })
+        .catch((err) => {
+          console.warn("[pulse] cards failed:", err.message);
+          /* Failed is not pending — but it is not "here are some cards"
+             either. This used to fall through to whatever bag.CARDS still
+             held, which is the prototype's seven sample cards plus the
+             sample duplicate-signup card spliced in after them. A failed
+             request therefore put eight invented accounts on the main
+             screen, captioned as live work, with nothing to tell a reader
+             they were not real.
+
+             Clear them and say what happened. An empty board with an honest
+             error is worth more than a full one that is fiction. */
+          bag.CARDS.length = 0;
+          state.cardsError = err.message;
+          state.cardsLoaded = true;
+          render();
+          this.report();
+        });
+    },
     checkConnections,
     async boot(bag, render) {
       /* Before anything else: neither light may sit on "checking" if the very
@@ -2010,48 +2045,73 @@ window.PulseLive = (function () {
         apply(data, bag);
         render();
 
-        // Cards next: they are the slowest query in the app and Now is useful
-        // without them for the second it takes.
-        get("/api/pulse/cards?per=4")
-          .then((c) => {
-            applyCards(c.cards, bag);
-            state.cardsLoaded = true;
-            render();
-            this.report();
-          })
-          .catch((err) => {
-            console.warn("[pulse] cards failed:", err.message);
-            // Failed is not pending. Fall back to the prototype's cards rather
-            // than leaving a skeleton on screen forever.
-            state.cardsLoaded = true;
-            render();
-            this.report();
-          });
+        /* ── loaded in the order the page is read ────────────────────────
+           These twelve requests used to be fired in one burst, in an order
+           that was very nearly the reverse of the order they appear on
+           screen: loadCards first, and loadMonthly and loadAlerts — which
+           fill the headline and the alert band at the very top — dead last.
+           Whichever request happened to be quickest painted first, so the
+           page filled from the bottom up and the top of it kept arriving
+           after the reader had already scrolled past.
 
-        // The score band and the board for the scope Now opens on.
-        loadBoard(bag.S.scope, bag, render);
+           Now they go in tiers matching the layout of Now, top to bottom:
 
-        // The question Ask opens on, so the first view of the surface is real.
-        if (state.defaultAsk) loadAnswer(state.defaultAsk, bag, render);
-        // Autopilot's logs are only needed once that surface is opened, but they
-        // are cheap and make the first click instant.
-        // Autopilot's own decisions first, then the staff audit log. Both write
-        // to the Filtered tab and the real suppressions must land last.
-        loadAutopilot(bag, render).then(() => loadAudit(bag, render));
-        loadDrafts(bag, render);
-        loadManifest(bag, render);
-        loadMotionRules(render);
-        loadAutomations(render);
-        loadAsked(render);
-        loadFlight(bag, render);
-        loadMonthly(bag, render);
-        loadAlerts(render);
+             1  the headline, the alert band, the score band, the cards
+                — everything above the fold
+             2  in-flight and held drafts — the sections just below it
+             3  the surfaces that are not on this page at all (Ask,
+                Autopilot, the audit log, the manifest, the rules)
+
+           Within a tier they still run concurrently, so this costs no wall
+           clock against the old burst — what changes is which requests get
+           the connection first when they contend. Between tiers it waits,
+           which is what stops a request for a screen nobody is looking at
+           from delaying the screen they are.
+
+           allSettled: a tier that fails must not strand the tiers behind it.
+           Each loader already reports its own failure to its own surface. */
+
+        // 1 · above the fold, in the order it is read.
+        await Promise.allSettled([
+          loadMonthly(bag, render),                 // head — the digest headline
+          loadAlerts(render),                       // sysband — the alert band
+          loadBoard(bag.S.scope, bag, render),      // sband — the score band
+          this.loadCards(bag, render),              // body — the cards
+        ]);
+
+        // 2 · the sections immediately below it.
+        await Promise.allSettled([
+          loadFlight(bag, render),                  // flightSec — in flight
+          loadDrafts(bag, render),                  // roomSec — held drafts
+        ]);
+
+        // 3 · other surfaces. Cheap, and they make the first click instant —
+        // but not at the cost of the screen actually on display.
+        await Promise.allSettled([
+          state.defaultAsk ? loadAnswer(state.defaultAsk, bag, render) : null,
+          loadManifest(bag, render),
+          loadMotionRules(render),
+          loadAutomations(render),
+          loadAsked(render),
+          // Autopilot's own decisions first, then the staff audit log. Both
+          // write to the Filtered tab and the real suppressions must land last.
+          loadAutopilot(bag, render).then(() => loadAudit(bag, render)),
+        ]);
       } catch (err) {
         state.error = err.message;
-        // Bootstrap itself failed, so apply() never ran and nothing is on the
-        // prototype's own list of what fell back — but every surface on
-        // screen is still the sample data it started with. Say so.
-        state.mock = ["the whole screen (bootstrap could not be reached: " + err.message + ")"];
+        /* Bootstrap failed, so apply() never ran and every collection still
+           holds the prototype's sample data: eighteen invented companies in
+           BOOK, their invented health in CUST, seven invented cards. Saying
+           so in a dismissable banner was not enough — the banner is one line
+           above a full screen of fiction, and dismissing it left the fiction.
+
+           Emptied instead. The surfaces already know how to render "nothing
+           here", and the error state below says why there is nothing. */
+        bag.CARDS.length = 0;
+        bag.BOOK.length = 0;
+        Object.keys(bag.CUST).forEach((k) => delete bag.CUST[k]);
+        state.cardsLoaded = true;
+        state.mock = [];
         console.error(
           "[pulse] live data unavailable, showing the prototype's sample data instead:",
           err.message,

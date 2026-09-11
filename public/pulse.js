@@ -900,10 +900,28 @@ function LOGO(n,sz){sz=sz||24;const h=hue(n);
  return `<span class="clogo" style="width:${sz}px;height:${sz}px;font-size:${Math.max(8,Math.round(sz*.38))}px;background:hsl(${h} 38% 87%);color:hsl(${h} 52% 30%)">${ini(n)}</span>`;}
 function AVI(n,sz){sz=sz||24;const h=(hue(n)+140)%360;
  return `<span class="uavi" style="width:${sz}px;height:${sz}px;font-size:${Math.max(8,Math.round(sz*.36))}px;background:hsl(${h} 30% 84%);color:hsl(${h} 45% 26%)">${ini(n)}</span>`;}
-const PEOPLE=["Rhea Menon","Sample Rep 2","Sample Rep 3","Sample Rep 4","Sample Rep 5",
- "Sample Rep 6","Sample Rep 7","Sample Rep 8","Sample Contact P","Sample Rep 9"];
+/**
+ * Is this name a person rather than a company?
+ *
+ * This used to be a fixed list of the prototype's ten sample rep names. Once
+ * the reps became real — STANDINGS and REPS are replaced wholesale out of
+ * ms_user + user_handled_by — no real rep's name was ever in it, so MARK()
+ * fell through to "" and every real person on the team surfaces rendered with
+ * no avatar at all, while the sample names it still held could never appear.
+ * It was a list of exactly the wrong ten names.
+ *
+ * Asked of the live rosters instead, with the signed-in person included:
+ * they are a person on their own profile even before a roster loads.
+ */
+function isPerson(n){
+ if(!n)return false;
+ if(ME&&ME.name===n)return true;
+ if(typeof STANDINGS!=="undefined"&&STANDINGS.some(r=>r[0]===n))return true;
+ if(typeof REPS!=="undefined"&&REPS.some(r=>r[0]===n))return true;
+ return false;
+}
 function MARK(n,sz){if(CUST[n]||BOOK.some(b=>b[1]===n))return LOGO(n,sz);
- if(PEOPLE.includes(n))return AVI(n,sz);return "";}
+ if(isPerson(n))return AVI(n,sz);return "";}
 
 /* ══════════════════════════════════════════════════════════════════
    The score band, the board and the season · ported from pulse-v2-game
@@ -1398,6 +1416,10 @@ function vNow(){
     they get their own loading state. Showing the prototype's sample cards in
     the meantime is what made the page appear to change its mind. */
  const cardsPending=Boolean(window.PulseLive&&!PulseLive.state.cardsLoaded&&!PulseLive.state.error);
+ /* Three states, not two: still coming, came back empty, and did not come
+    back at all. The third used to be rendered as the second — an unanswered
+    question shown as the answer "nothing needs you". */
+ const cardsFailed=Boolean(window.PulseLive&&(PulseLive.state.cardsError||PulseLive.state.error));
  const cards=S.newRep||cardsPending?[]:vis().filter(c=>{const idx=CARDS.indexOf(c);return !S.doneIds.has(idx)&&!S.snoozeIds.has(idx);}), n=cards.filter(c=>!c.w).length;
  const who=S.scope==="me"?"you":S.scope==="team"?"the team":"the company";
  const sl=lensLab()!=="All"?` <span class="sl">· ${lensLab()}</span>`:"";
@@ -1509,6 +1531,16 @@ function vNow(){
  if(S.newRep){
   body=`<h1>Welcome, Sample Contact.</h1>
    <p class="why" style="margin-top:18px;max-width:52ch">Nothing needs you yet — you have no accounts. Four things are worth doing today, and the first one gives you something real to work on.</p>`;
+ } else if(cardsFailed){
+  /* The cards request failed. "Board cleared" would be a lie — nothing was
+     cleared, the question was never answered — and the prototype's sample
+     cards, which is what stood here before, were a bigger one. */
+  body=`<div class="secn"><div class="lab">Could not load</div>
+   <div class="zero">
+   <h2 style="font-weight:600;font-size:26px;letter-spacing:-.024em;margin:0 0 10px">Pulse could not read what needs ${who}.</h2>
+   <p>The scanners did not answer, so this is not "nothing needs you" — it is not known. ${
+     esc((window.PulseLive&&PulseLive.state.cardsError)||"")}</p>
+   <button class="go" id="retrycards" style="margin-top:16px">Try again →</button></div></div>`;
  } else if(!cards.length){
   const el=CARDS.filter(c=>c.s===S.scope&&!c.w).length;
   const filtered=lensLab()!=="All";
@@ -3215,6 +3247,11 @@ document.addEventListener("click",e=>{
  /* The profile page's own way into the traits editor — the step that owns it. */
  if(t.closest("#startonb2")){openOnb();S.ostep=2;drawOnb();return;}
  if(t.closest("#onbx")){$("#onb").hidden=true;return;}
+ if(t.closest("#retrycards")){
+  /* Retry the one query that failed, not the whole bootstrap — the rest of
+     the screen is already real and re-fetching it would throw that away. */
+  if(window.PulseLive&&PulseLive.loadCards)PulseLive.loadCards(PULSE_BAG,render);
+  return;}
  if(t.closest("#mockx")){
   if(window.PulseLive)PulseLive.state.mockDismissed=true;
   const bar=$("#mockbar");if(bar)bar.hidden=true;
