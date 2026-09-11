@@ -18,7 +18,7 @@ import { planAutomation } from "@/lib/pulse/agents";
 import { guard } from "@/lib/pulse/sqlguard";
 import { query } from "@/lib/db";
 import { write } from "@/lib/store";
-import { createCronJob } from "@/lib/pulse/cronjob";
+import { createCronJob, cronIntervalMinutes } from "@/lib/pulse/cronjob";
 import { saveAutomation, type Motion, type Scope } from "./automations";
 import { EVENTS, isEventName, type EventName } from "./events";
 import { publicBaseUrl } from "@/lib/pulse/baseUrl";
@@ -207,6 +207,7 @@ export async function buildAutomation(
 
   let cronJobId: string | null = null;
   let webhookUrl: string | null = null;
+  const cronSchedule = plan.cron_schedule || "0 * * * *";
   {
     const base = publicBaseUrl();
     if (!base) {
@@ -224,7 +225,7 @@ export async function buildAutomation(
     }
     webhookUrl = `${base}/api/pulse/autopilot/webhook/${key}?secret=${encodeURIComponent(secret)}`;
     try {
-      cronJobId = await createCronJob(`pulse: ${english.slice(0, 60)}`, webhookUrl, plan.cron_schedule || "0 * * * *");
+      cronJobId = await createCronJob(`pulse: ${english.slice(0, 60)}`, webhookUrl, cronSchedule);
     } catch (err) {
       return fail(english, motion, ownerEmail, "cron", (err as Error).message);
     }
@@ -242,6 +243,14 @@ export async function buildAutomation(
     summary: plan.optimized_rule_prompt.slice(0, 252) + (plan.optimized_rule_prompt.length > 252 ? "…" : ""),
     triggerKind: "schedule",
     mode: "cron",
+    /* The same cadence the cron job was just registered with.
+       This was never set, so it landed NULL and recordRun fell back to its
+       five-minute default when setting next_run_at — which is what `due()`
+       reads. Every dynamically-built automation was therefore eligible for
+       the internal tick every five minutes no matter what schedule the
+       planner had chosen and actually registered. Storing it keeps the two
+       halves of the automation's cadence agreeing with each other. */
+    everyMinutes: cronIntervalMinutes(cronSchedule),
     findSql: plan.find_sql,
     subjectCol: plan.subject_col || null,
     watermarkCol: plan.watermark_col || null,

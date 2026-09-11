@@ -106,22 +106,20 @@ export type AutomationPass = {
   skipped?: string;
 };
 
-/**
- * The watermark for one automation, kept per automation rather than per
- * stream: two rules reading the same table advance independently, and one
- * being switched off must not hide rows from the other. The map is only a
- * read-through cache for a single pass; the store holds the real value.
- */
-const MARKS = new Map<string, string>();
+/* The watermark for one automation is kept per automation rather than per
+   stream: two rules reading the same table advance independently, and one
+   being switched off must not hide rows from the other. The store holds it;
+   there is no in-process cache. There used to be a `MARKS` Map described as
+   "a read-through cache for a single pass", but nothing ever read from it —
+   loadMark always went to the database — so it was only a second copy of the
+   truth that could disagree with the first. */
 
 async function loadMark(key: string): Promise<string | null> {
   const rows = await read<{ position: string }>(
     "SELECT position FROM pulse_watermark WHERE stream = ? LIMIT 1",
     ["automation:" + key],
   );
-  const pos = rows.length ? String(rows[0].position) : null;
-  if (pos) MARKS.set(key, pos);
-  return pos;
+  return rows.length ? String(rows[0].position) : null;
 }
 
 async function advanceMark(key: string, position: string, count: number): Promise<void> {
@@ -131,7 +129,6 @@ async function advanceMark(key: string, position: string, count: number): Promis
      ON DUPLICATE KEY UPDATE position=VALUES(position), last_run_at=NOW(), last_count=VALUES(last_count)`,
     ["automation:" + key, position, count],
   );
-  MARKS.set(key, position);
 }
 
 /**
@@ -307,7 +304,7 @@ export async function runOne(
   /* Checked again on the way out of the table, not only on the way in. */
   const g = guard(a.findSql, Math.min(a.maxRows, 200));
   if (!g.ok) {
-    out.error = "the stored query is no longer safe to run: " + g.reason;
+    out.error = ("the stored query is no longer safe to run: " + g.reason).slice(0, 480);
     await recordRun(a.key, { alerts: 0, error: out.error, everyMinutes: a.everyMinutes });
     out.ms = Date.now() - started;
     return out;
@@ -323,7 +320,7 @@ export async function runOne(
     // the guard or by TypeScript, since it is a runtime dialect mismatch.
     rows = await query<Record<string, unknown>>(withStatementTimeout(g.sql));
   } catch (err) {
-    out.error = (err as Error).message;
+    out.error = (err as Error).message.slice(0, 480);
     await recordRun(a.key, { alerts: 0, error: out.error, everyMinutes: a.everyMinutes });
     out.ms = Date.now() - started;
     return out;
@@ -338,7 +335,33 @@ export async function runOne(
   if (a.watermarkCol && mark) {
     fresh = rows.filter((r) => markOf(r[a.watermarkCol!]) > mark);
   }
-  fresh = fresh.slice(0, a.maxRows);
+  /* Cap the pass — but never mid-group.
+
+     The filter above is a strict `>`, so a row whose watermark equals the
+     stored mark is treated as already seen. That is correct only if the cut
+     below never lands between two rows carrying the *same* value. A DATETIME
+     watermark at second precision collects ties easily under any write burst,
+     and when the cut fell inside such a tie the excluded rows ended up with a
+     watermark equal to the new mark — excluded by `>` on every pass after
+     that, forever. Trimming back to the start of the straddled group means
+     the mark only ever lands on a boundary where `>` is safe. */
+  if (a.watermarkCol && fresh.length > a.maxRows) {
+    let cut = a.maxRows;
+    const edge = markOf(fresh[cut - 1][a.watermarkCol]);
+    if (markOf(fresh[cut][a.watermarkCol]) === edge) {
+      while (cut > 0 && markOf(fresh[cut - 1][a.watermarkCol]) === edge) cut--;
+    }
+    /* A single group larger than maxRows cannot be split safely at all. Take
+       the whole group rather than none of it: over-running the cap by one
+       group once is recoverable, stalling the automation forever is not. */
+    if (cut === 0) {
+      cut = a.maxRows;
+      while (cut < fresh.length && markOf(fresh[cut][a.watermarkCol]) === edge) cut++;
+    }
+    fresh = fresh.slice(0, cut);
+  } else {
+    fresh = fresh.slice(0, a.maxRows);
+  }
 
   let highest = mark ?? "";
   for (const row of fresh) {
@@ -347,10 +370,6 @@ export async function runOne(
          records it, so the next pass starts at the next unjudged row. */
       out.skipped = `budget spent after ${out.judged} of ${fresh.length} rows`;
       break;
-    }
-    if (a.watermarkCol) {
-      const v = markOf(row[a.watermarkCol]);
-      if (v > highest) highest = v;
     }
     const rowSubject = a.subjectCol ? String(row[a.subjectCol] ?? "") : null;
     const signalKey = `auto:${a.key}:${rowSubject || "portfolio"}`;
@@ -387,6 +406,20 @@ export async function runOne(
         data.should_alert ? "alert" : "quiet",
         data.confidence, acted, null, call.usage,
       );
+      /* Advance past this row only now that it has actually been judged.
+
+         This used to happen before the call, so a row whose judge threw —
+         an agent timeout, a malformed reply — still moved the watermark past
+         itself. The failure was recorded as a decision and then the row was
+         never looked at again, which is a silent permanent loss of exactly
+         the rows that hit a transient problem. The module header claims
+         "nothing is judged twice and nothing is skipped"; this is what makes
+         the second half of that true. A failed row now holds the watermark
+         where it is, so the next pass starts on it again. */
+      if (a.watermarkCol) {
+        const v = markOf(row[a.watermarkCol]);
+        if (v > highest) highest = v;
+      }
     } catch (err) {
       await writeDecision(
         a, signalKey, "", null, row, null, "failed", null, "none",
@@ -395,7 +428,13 @@ export async function runOne(
       /* One row failing is not the automation failing. Record it and carry on
          — the alternative is that a single malformed account silences a rule
          for everybody. */
-      out.error = (err as Error).message;
+      /* Truncated: last_error is VARCHAR(500) (migrations/006) and a MySQL
+         error echoes back part of the offending query, which for a generated
+         find_sql routinely runs past that. Under a strict sql_mode the
+         oversized write raises "Data too long", out of recordRun, out of
+         runOne — turning a recorded row failure into an unrecorded pass
+         failure. */
+      out.error = (err as Error).message.slice(0, 480);
     }
   }
 
@@ -531,7 +570,7 @@ export async function emitEvent(name: EventName, payload: Record<string, unknown
 
 /** One pass over everything due. Called by the tick. */
 export async function runAutomations(limit = 10, budgetMs = PASS_BUDGET_MS): Promise<AutomationPass> {
-  /* One pass at a time.
+  /* One pass at a time, and one run per automation at a time.
      A pass takes up to ninety seconds and the tick is called from outside on a
      schedule, so nothing stops a second call arriving mid-pass. Two passes
      overlapping is not merely wasted spend: each reads the automation rows for
@@ -549,7 +588,47 @@ export async function runAutomations(limit = 10, budgetMs = PASS_BUDGET_MS): Pro
     const runs: AutomationRun[] = [];
     for (const a of list) {
       if (Date.now() > deadline) break;
-      runs.push(await runOne(a, deadline));
+
+      /* The same per-automation lock the webhook takes.
+
+         The pass-wide "automations" lock above stops two *passes* overlapping,
+         and the webhook takes `automation:<key>` to stop two fires of one
+         automation overlapping — but those are different names, so they never
+         excluded each other. A cron-job.org fire and an internal tick could
+         run the same automation at the same moment: both load the same
+         watermark, both fetch the same rows, both judge them, and the row is
+         paid for twice and alerted on twice. Taking the webhook's own lock
+         here is what makes its comment ("the same pattern runAutomations
+         already uses") actually true. */
+      const perHolder = randomUUID();
+      if (!(await acquireLock(`automation:${a.key}`, perHolder, 300))) {
+        runs.push({
+          key: a.key, rows: 0, judged: 0, alerts: 0,
+          skipped: "already running from its own schedule", error: null, ms: 0,
+        });
+        continue;
+      }
+
+      try {
+        runs.push(await runOne(a, deadline));
+      } catch (err) {
+        /* runOne is documented never to throw, and it catches everything it
+           does itself — but it also awaits the store (checkBreaker, loadMark,
+           advanceMark, recordRun) outside any try, so a connection reset or a
+           column overflow surfaces here rather than in the returned run.
+
+           Without this, that one automation took the whole pass down: the
+           loop stopped, and every other automation still due this tick
+           silently got no run at all, with nothing recorded to say why. One
+           bad rule must cost one bad rule. */
+        runs.push({
+          key: a.key, rows: 0, judged: 0, alerts: 0, skipped: null,
+          error: (err as Error).message.slice(0, 480), ms: 0,
+        });
+        console.error(`[pulse] automation ${a.key} threw out of runOne:`, (err as Error).message);
+      } finally {
+        await releaseLock(`automation:${a.key}`, perHolder).catch(() => {});
+      }
     }
     return {
       ran: runs.length,

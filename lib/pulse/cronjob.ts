@@ -162,3 +162,43 @@ export async function listCronJobs(): Promise<CronJobSummary[]> {
 export async function setCronJobUrl(jobId: string, url: string): Promise<void> {
   await call("PATCH", `/jobs/${jobId}`, { job: { url } });
 }
+
+/**
+ * Roughly how many minutes pass between two fires of a cron expression.
+ *
+ * Needed because an automation's cadence is expressed twice: as the cron
+ * expression registered with cron-job.org, and as `every_minutes` on the row,
+ * which is what `recordRun` uses to set `next_run_at` and therefore what the
+ * internal tick's `due()` honours. Dynamically-built automations only ever set
+ * the first, so the second fell to recordRun's default of five minutes — a
+ * rule the planner scheduled daily would be re-run by the tick every five
+ * minutes, ~288 times a day, each one an agent call.
+ *
+ * An approximation is the right shape here: this is a backstop cadence, not
+ * the schedule itself. cron-job.org owns the real timing; this only has to
+ * stop the tick from treating "daily" as "every five minutes".
+ */
+export function cronIntervalMinutes(expr: string): number {
+  let f;
+  try {
+    f = parseCronExpression(expr);
+  } catch {
+    return 60;
+  }
+  const every = (a: number[]) => a.length === 1 && a[0] === -1;
+  const n = (a: number[], whole: number) => (every(a) ? whole : a.length);
+
+  if (every(f.minutes)) return 1;
+
+  /* Fires per period, working outward from the smallest field that is pinned.
+     Whichever field is the first to be restricted sets the period. */
+  const perHour = n(f.minutes, 60);
+  if (every(f.hours)) return Math.max(1, Math.round(60 / perHour));
+
+  const perDay = perHour * n(f.hours, 24);
+  if (every(f.mdays) && every(f.wdays)) return Math.max(1, Math.round(1440 / perDay));
+
+  if (!every(f.wdays)) return Math.max(1, Math.round((7 * 1440) / (perDay * f.wdays.length)));
+
+  return Math.max(1, Math.round((30 * 1440) / (perDay * n(f.mdays, 30))));
+}

@@ -111,6 +111,20 @@ export function storePool(): mysql.Pool {
       enableKeepAlive: true,
       keepAliveInitialDelay: 10_000,
       idleTimeout: 60_000,
+      /* Read DATETIME columns as UTC, which is what they are — lib/db.ts has
+         always set this and this pool never did.
+
+         Without it mysql2 defaults to "local" and labels every returned
+         DATETIME with the *Node process's* timezone before building a Date.
+         The store writes its timestamps with the server's own NOW(), so a row
+         written at 19:15 UTC came back as a Date meaning 19:15 IST — 13:45
+         UTC — and every last_run_at, next_run_at and decision timestamp the
+         product showed was off by the host's offset. It reads as correct on
+         Vercel only because Vercel runs in UTC, where the mislabelling is a
+         no-op; it was five and a half hours wrong on a developer's machine,
+         which is exactly where someone would be looking when trying to work
+         out whether an automation had run. */
+      timezone: "Z",
       // Decisions carry JSON columns; letting the driver hand back parsed
       // objects keeps every caller from JSON.parse-ing defensively.
       typeCast: true,
