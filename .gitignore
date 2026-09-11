@@ -26,3 +26,7 @@ next-env.d.ts
 
 # leftover from the pulse-next/ -> repo-root flatten; no source here anymore
 pulse-next/
+.vercel
+.env*
+env-backup-*/
+.env-backup-dir.txt

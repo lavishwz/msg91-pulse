@@ -507,13 +507,26 @@ export async function emitEvent(name: EventName, payload: Record<string, unknown
     console.error(`[pulse] could not look up automations for event ${name}:`, (err as Error).message);
     return;
   }
-  for (const a of automations) {
-    try {
-      await runEventAutomation(a, payload);
-    } catch (err) {
-      console.error(`[pulse] event automation ${a.key} (${name}) failed:`, (err as Error).message);
+  /* In parallel, not one after another.
+     Each listener is one GTWY judging call at 15-25 seconds. Run in sequence,
+     three automations listening for the same event take over a minute — and
+     this runs inside the invocation of whatever write fired the event, whose
+     maxDuration is the ceiling on all of it (see the note on those routes).
+     Sequential listeners meant the fourth automation anybody wrote for an
+     event silently never got to run. They share no state and their results
+     are written independently, so there is nothing to serialize for.
+
+     allSettled, not all: one listener throwing must not cancel the others,
+     and must not reject the write that fired the event. */
+  const results = await Promise.allSettled(automations.map((a) => runEventAutomation(a, payload)));
+  results.forEach((r, i) => {
+    if (r.status === "rejected") {
+      console.error(
+        `[pulse] event automation ${automations[i].key} (${name}) failed:`,
+        (r.reason as Error)?.message ?? r.reason,
+      );
     }
-  }
+  });
 }
 
 /** One pass over everything due. Called by the tick. */

@@ -21,6 +21,19 @@ import { assignOwner, newBatch } from "@/lib/pulse/ownership";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/**
+ * Long enough for the event automations this route fires to actually finish.
+ *
+ * Every write here announces something through `emitEvent`, and `after()`
+ * keeps the invocation alive for that work — but only up to `maxDuration`.
+ * One event automation is one GTWY judging call, measured at 15-25 seconds
+ * against the shared rule-worker, so the platform default (10-15s) kills the
+ * invocation mid-call. Nothing reports it: the response already went out, so
+ * the caller sees success while the automation never ran, wrote no alert and
+ * wrote no decision row. Matches the 300 the scheduled runners already set
+ * (tick, webhook, run, monthly) for exactly the same reason.
+ */
+export const maxDuration = 300;
 
 const bad = (error: string, status = 400) => NextResponse.json({ ok: false, error }, { status });
 

@@ -21,6 +21,7 @@ import { write } from "@/lib/store";
 import { createCronJob } from "@/lib/pulse/cronjob";
 import { saveAutomation, type Motion, type Scope } from "./automations";
 import { EVENTS, isEventName, type EventName } from "./events";
+import { publicBaseUrl } from "@/lib/pulse/baseUrl";
 
 export type BuildStep = "plan" | "guard" | "dry_run" | "cron" | "save";
 
@@ -95,10 +96,6 @@ async function dryRun(sql: string): Promise<{ ok: true } | { ok: false; error: s
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
-}
-
-function publicBaseUrl(): string {
-  return (process.env.PUBLIC_BASE_URL ?? "").trim().replace(/\/+$/, "");
 }
 
 function slugify(s: string): string {
@@ -215,7 +212,7 @@ export async function buildAutomation(
     if (!base) {
       return fail(
         english, motion, ownerEmail, "cron",
-        "PUBLIC_BASE_URL is not set — cron-job.org needs a public URL to call. Set it in .env.local.",
+        "PUBLIC_BASE_URL is not set and no Vercel production host was detected — cron-job.org needs a public URL to call. Set PUBLIC_BASE_URL in the environment.",
       );
     }
     const secret = (process.env.AUTOPILOT_TICK_SECRET ?? "").trim();

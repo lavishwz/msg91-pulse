@@ -135,3 +135,30 @@ export async function deleteCronJob(jobId: string): Promise<void> {
 export async function setCronJobEnabled(jobId: string, enabled: boolean): Promise<void> {
   await call("PATCH", `/jobs/${jobId}`, { job: { enabled } });
 }
+
+export type CronJobSummary = { jobId: string; title: string; url: string; enabled: boolean };
+
+/**
+ * Every job on the account.
+ *
+ * Needed because a job's URL embeds PUBLIC_BASE_URL at the moment it was
+ * created (see build.ts) — so moving the app to a new address leaves every
+ * existing job calling the old one. cron-job.org keeps firing them and gets
+ * a connection error, which nothing in Pulse ever sees: the automation just
+ * silently stops running. Listing them is the only way to find that out.
+ */
+export async function listCronJobs(): Promise<CronJobSummary[]> {
+  const res = await call("GET", "/jobs");
+  const jobs = Array.isArray(res.jobs) ? res.jobs : [];
+  return (jobs as Record<string, unknown>[]).map((j) => ({
+    jobId: String(j.jobId ?? ""),
+    title: String(j.title ?? ""),
+    url: String(j.url ?? ""),
+    enabled: Boolean(j.enabled),
+  }));
+}
+
+/** Re-point one job at a new URL, leaving its schedule and title alone. */
+export async function setCronJobUrl(jobId: string, url: string): Promise<void> {
+  await call("PATCH", `/jobs/${jobId}`, { job: { url } });
+}
