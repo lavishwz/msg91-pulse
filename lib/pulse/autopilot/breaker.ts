@@ -155,7 +155,37 @@ export async function reset(agent: string, actor: string): Promise<boolean> {
   return res.affectedRows > 0;
 }
 
-/** Every breaker, for the Rules tab and the alerts. */
+/**
+ * Every breaker, for the Rules tab and the alerts.
+ *
+ * The four built-in agents are always checked, whether or not they have
+ * tripped yet. Custom automations only get a bucket once one exists — each is
+ * keyed `rule-worker:<automation key>` (see automation-runner.ts) — so those
+ * are found by scanning for policy rows already carrying `tripped: true`
+ * rather than by a fixed list, which would need editing every time somebody
+ * wrote a new rule.
+ */
 export async function all(): Promise<BreakerState[]> {
-  return Promise.all(Object.keys(LIMITS).map((a) => check(a)));
+  const builtIn = await Promise.all(Object.keys(LIMITS).map((a) => check(a)));
+
+  const rows = await read<{ policy_key: string; body: unknown }>(
+    `SELECT policy_key, body FROM pulse_policy
+      WHERE policy_key LIKE 'breaker.rule-worker:%' AND state = 'active'`,
+  );
+  const dynamic: BreakerState[] = [];
+  for (const r of rows) {
+    const body = parse(r.body);
+    if (!body.tripped) continue;
+    const agent = r.policy_key.slice("breaker.".length);
+    dynamic.push({
+      agent,
+      tripped: true,
+      reason: (body.reason as string) ?? "tripped",
+      at: (body.at as string) ?? null,
+      count: Number(body.count ?? 0),
+      limit: LIMITS[agent] ?? DEFAULT_LIMIT,
+    });
+  }
+
+  return [...builtIn, ...dynamic];
 }

@@ -8,6 +8,7 @@
  */
 
 import { Suspense } from "react";
+import Loader from "../loader";
 import LoginForm from "./login-form";
 
 export const metadata = { title: "Sign in · MSG91 Pulse" };
@@ -30,7 +31,7 @@ export default function LoginPage() {
 
         {/* useSearchParams() bails out of prerendering, so the client half sits
             under a boundary of its own. */}
-        <Suspense fallback={<div className="authwait">Loading the sign-in widget…</div>}>
+        <Suspense fallback={<Loader className="auth-loader" label="Loading the sign-in widget" />}>
           <LoginForm referenceId={referenceId} />
         </Suspense>
       </div>

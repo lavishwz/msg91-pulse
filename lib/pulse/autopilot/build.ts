@@ -17,8 +17,12 @@
 import { planAutomation } from "@/lib/pulse/agents";
 import { guard } from "@/lib/pulse/sqlguard";
 import { query } from "@/lib/db";
+import { write } from "@/lib/store";
 import { createCronJob } from "@/lib/pulse/cronjob";
 import { saveAutomation, type Motion, type Scope } from "./automations";
+import { EVENTS, isEventName, type EventName } from "./events";
+
+export type BuildStep = "plan" | "guard" | "dry_run" | "cron" | "save";
 
 export type BuildResult =
   | {
@@ -32,7 +36,45 @@ export type BuildResult =
       webhookUrl: string | null;
       cronSchedule: string | null;
     }
-  | { ok: false; error: string; step: "plan" | "guard" | "dry_run" | "cron" | "save" };
+  | { ok: false; message: string; error: string; step: BuildStep };
+
+/**
+ * What a person sees when a build fails — never the raw error, which is a
+ * database message, a GTWY error body, or a stack-shaped string meant for
+ * whoever fixes this, not for whoever typed a rule. The real error still goes
+ * to `pulse_automation_build_failure` (see logFailure) for that person to
+ * read later; the UI gets a sentence that says what to try next.
+ */
+const FRIENDLY_MESSAGE: Record<BuildStep, string> = {
+  plan: "Pulse couldn't work out a plan for that rule. Try rewording it — shorter, more concrete sentences plan more reliably.",
+  guard: "That rule would need a query Pulse won't run for safety reasons. Try being more specific about what it should check.",
+  dry_run: "The plan referenced data that doesn't actually exist. Try rewording which field or condition the rule depends on.",
+  cron: "This rule needs a schedule, and something's wrong with how Pulse reaches the outside world right now — this isn't about your rule. Try again shortly, or tell whoever manages Pulse.",
+  save: "Everything about the rule checked out, but saving it failed. Try again — if it keeps happening, tell whoever manages Pulse.",
+};
+
+/** Kept for whoever debugs this later — never shown to the person who typed the rule. */
+async function logFailure(english: string, motion: Motion, ownerEmail: string, step: BuildStep, error: string): Promise<void> {
+  try {
+    await write(
+      `INSERT INTO pulse_automation_build_failure (english, motion, owner_email, step, error) VALUES (?,?,?,?,?)`,
+      [english, motion, ownerEmail, step, error.slice(0, 4000)],
+    );
+  } catch {
+    /* Logging the failure must never be the reason the failure isn't reported. */
+  }
+}
+
+async function fail(
+  english: string,
+  motion: Motion,
+  ownerEmail: string,
+  step: BuildStep,
+  error: string,
+): Promise<BuildResult> {
+  await logFailure(english, motion, ownerEmail, step, error);
+  return { ok: false, step, error, message: FRIENDLY_MESSAGE[step] };
+}
 
 /**
  * Actually run the plan's query, LIMIT 0, before anything else is built.
@@ -71,53 +113,123 @@ function slugify(s: string): string {
  * Build one automation end to end. Never throws — every step reports which
  * step it was, so the caller can show exactly where a build failed rather
  * than a bare 500.
+ *
+ * `eventName`, when given, comes from the person explicitly picking an event
+ * off the Rules page's fixed dropdown (see `lib/pulse/autopilot/events.ts`) —
+ * not from the planner's own `mode`/`when_event` guess. Tried relying on the
+ * model to both decide event-vs-cron *and* name the exact event: it dropped
+ * `when_event` from its JSON more often than not, and still wrote a find_sql
+ * for "event" rules despite being told not to (caught by hand, replaying the
+ * planner against a few sample rules before wiring this up). Routing is not
+ * something worth trusting a model for when the caller already knows the
+ * answer — so when `eventName` is set, it is authoritative and the planner's
+ * own mode/when_event/find_sql/cron_schedule are only ever informational.
  */
 export async function buildAutomation(
   english: string,
   motion: Motion,
   ownerEmail: string,
   scope: Scope = "company",
+  eventName?: EventName,
 ): Promise<BuildResult> {
+  const eventInfo = eventName && isEventName(eventName) ? EVENTS[eventName] : null;
+
   let plan;
   try {
-    const call = await planAutomation(english, motion);
+    /* The planner still writes executor_prompt/optimized_rule_prompt for an
+       event automation — it is good at turning "notify me if it looks bad"
+       into a judging prompt — it is only not trusted to pick *which* event or
+       to invent a query for one. Telling it the event and its payload shape
+       up front is what makes the executor_prompt it writes actually reference
+       the right field names. */
+    const forPlanner = eventInfo
+      ? `This automation reacts to the event "${eventName}" (${eventInfo.label}). ` +
+        `Its payload has this shape: ${eventInfo.payload}. There is no database query — ` +
+        `the payload itself is the one row to judge. What to do when it fires: ${english}`
+      : english;
+    const call = await planAutomation(forPlanner, motion);
     plan = call.data;
   } catch (err) {
-    return { ok: false, error: (err as Error).message, step: "plan" };
-  }
-
-  const g = guard(plan.find_sql, Math.min(plan.max_rows || 50, 200));
-  if (!g.ok) {
-    return { ok: false, error: "the planner's query is not safe to run: " + g.reason, step: "guard" };
-  }
-
-  const dry = await dryRun(g.sql);
-  if (!dry.ok) {
-    return {
-      ok: false,
-      error: "the planner's query does not run against the real database: " + dry.error,
-      step: "dry_run",
-    };
+    return fail(english, motion, ownerEmail, "plan", (err as Error).message);
   }
 
   const key = `dyn-${slugify(english)}-${Date.now().toString(36)}`;
 
+  /* ── event automations: no query, no cron job, live the moment it saves ── */
+  if (eventInfo) {
+    const saved = await saveAutomation({
+      key,
+      motion,
+      scope,
+      ownerEmail,
+      english,
+      summary: plan.optimized_rule_prompt.slice(0, 252) + (plan.optimized_rule_prompt.length > 252 ? "…" : ""),
+      triggerKind: "event",
+      whenEvent: eventName,
+      mode: "event",
+      findSql: null,
+      subjectCol: null,
+      watermarkCol: null,
+      agentTask: plan.executor_prompt,
+      executorPrompt: plan.executor_prompt,
+      optimizedPrompt: plan.optimized_rule_prompt,
+      cronJobId: null,
+      maxRows: plan.max_rows || 50,
+      capability: "ready",
+      live: true,
+    });
+    if (!saved.ok) {
+      return fail(english, motion, ownerEmail, "save", saved.error);
+    }
+    return {
+      ok: true,
+      key,
+      mode: "event",
+      optimizedPrompt: plan.optimized_rule_prompt,
+      findSql: "",
+      executorPrompt: plan.executor_prompt,
+      cronJobId: null,
+      webhookUrl: null,
+      cronSchedule: null,
+    };
+  }
+
+  /* ── schedule automations: unchanged from before this feature ── */
+  const g = guard(plan.find_sql, Math.min(plan.max_rows || 50, 200));
+  if (!g.ok) {
+    return fail(english, motion, ownerEmail, "guard", "the planner's query is not safe to run: " + g.reason);
+  }
+
+  const dry = await dryRun(g.sql);
+  if (!dry.ok) {
+    return fail(
+      english, motion, ownerEmail, "dry_run",
+      "the planner's query does not run against the real database: " + dry.error,
+    );
+  }
+
   let cronJobId: string | null = null;
   let webhookUrl: string | null = null;
-  if (plan.mode === "cron") {
+  {
     const base = publicBaseUrl();
     if (!base) {
-      return {
-        ok: false,
-        error: "PUBLIC_BASE_URL is not set — cron-job.org needs a public URL to call. Set it in .env.local.",
-        step: "cron",
-      };
+      return fail(
+        english, motion, ownerEmail, "cron",
+        "PUBLIC_BASE_URL is not set — cron-job.org needs a public URL to call. Set it in .env.local.",
+      );
     }
-    webhookUrl = `${base}/api/pulse/autopilot/webhook/${key}`;
+    const secret = (process.env.AUTOPILOT_TICK_SECRET ?? "").trim();
+    if (!secret) {
+      return fail(
+        english, motion, ownerEmail, "cron",
+        "AUTOPILOT_TICK_SECRET is not set — the webhook refuses to be provisioned unprotected.",
+      );
+    }
+    webhookUrl = `${base}/api/pulse/autopilot/webhook/${key}?secret=${encodeURIComponent(secret)}`;
     try {
       cronJobId = await createCronJob(`pulse: ${english.slice(0, 60)}`, webhookUrl, plan.cron_schedule || "0 * * * *");
     } catch (err) {
-      return { ok: false, error: (err as Error).message, step: "cron" };
+      return fail(english, motion, ownerEmail, "cron", (err as Error).message);
     }
   }
 
@@ -132,7 +244,7 @@ export async function buildAutomation(
     // the whole insert over a display-only field.
     summary: plan.optimized_rule_prompt.slice(0, 252) + (plan.optimized_rule_prompt.length > 252 ? "…" : ""),
     triggerKind: "schedule",
-    mode: plan.mode,
+    mode: "cron",
     findSql: plan.find_sql,
     subjectCol: plan.subject_col || null,
     watermarkCol: plan.watermark_col || null,
@@ -142,21 +254,21 @@ export async function buildAutomation(
     cronJobId,
     maxRows: plan.max_rows || 50,
     capability: "ready",
-    live: plan.mode === "cron",
+    live: true,
   });
   if (!saved.ok) {
-    return { ok: false, error: saved.error, step: "save" };
+    return fail(english, motion, ownerEmail, "save", saved.error);
   }
 
   return {
     ok: true,
     key,
-    mode: plan.mode,
+    mode: "cron",
     optimizedPrompt: plan.optimized_rule_prompt,
     findSql: plan.find_sql,
     executorPrompt: plan.executor_prompt,
     cronJobId,
     webhookUrl,
-    cronSchedule: plan.mode === "cron" ? plan.cron_schedule : null,
+    cronSchedule: plan.cron_schedule,
   };
 }

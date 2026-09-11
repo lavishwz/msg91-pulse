@@ -112,7 +112,10 @@ export async function inviteMember(
   }
   const row = await readOne<MemberRow>(`${SELECT} WHERE email = ?`, [normalized]);
   if (!row) throw new Error("Invite was written but could not be read back");
-  return toMember(row);
+  const member = toMember(row);
+  const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
+  emitEvent("member.invited", { email: normalized, invitedBy, role }).catch(() => {});
+  return member;
 }
 
 export async function setMemberRole(id: number, role: Role): Promise<boolean> {

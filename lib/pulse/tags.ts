@@ -137,13 +137,22 @@ export async function addTag(
           source   = IF(VALUES(source) = 'human', 'human', source)`,
     [String(accountId), value, value.toLowerCase(), source, addedBy],
   );
+  /* Fire-and-forget: an event automation reacting to this must never be the
+     reason adding a tag itself fails or feels slow. See events.ts. */
+  const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
+  emitEvent("account.tag_added", { accountId: String(accountId), tag: value, addedBy }).catch(() => {});
 }
 
 /** Remove a tag from a company. Case-insensitive, like adding one. */
 export async function removeTag(accountId: number | string, tag: string): Promise<boolean> {
+  const value = normalizeTag(tag);
   const res = await write(`DELETE FROM pulse_account_tag WHERE account_id = ? AND tag_key = ?`, [
     String(accountId),
-    normalizeTag(tag).toLowerCase(),
+    value.toLowerCase(),
   ]);
+  if (res.affectedRows > 0) {
+    const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
+    emitEvent("account.tag_removed", { accountId: String(accountId), tag: value }).catch(() => {});
+  }
   return res.affectedRows > 0;
 }

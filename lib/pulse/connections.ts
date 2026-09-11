@@ -35,14 +35,29 @@ export async function recordConnected(
   memberEmail: string,
   service: ConnectionService,
   viasocketId: string | null,
+  scriptId: string | null = null,
 ): Promise<void> {
   await write(
-    `INSERT INTO pulse_connection (member_email, service, viasocket_id, connected_at, disconnected_at)
-          VALUES (?, ?, ?, NOW(), NULL)
+    `INSERT INTO pulse_connection (member_email, service, viasocket_id, script_id, connected_at, disconnected_at)
+          VALUES (?, ?, ?, ?, NOW(), NULL)
      ON DUPLICATE KEY UPDATE
-          viasocket_id = VALUES(viasocket_id), connected_at = NOW(), disconnected_at = NULL`,
-    [memberEmail, service, viasocketId],
+          viasocket_id = VALUES(viasocket_id), script_id = VALUES(script_id),
+          connected_at = NOW(), disconnected_at = NULL`,
+    [memberEmail, service, viasocketId, scriptId],
   );
+  const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
+  emitEvent("connection.connected", { memberEmail, service }).catch(() => {});
+}
+
+/** The script_id one member's connection runs actions with, or null if there isn't one yet. */
+export async function scriptIdFor(memberEmail: string, service: ConnectionService): Promise<string | null> {
+  const rows = await read<{ script_id: string | null }>(
+    `SELECT script_id
+       FROM pulse_connection
+      WHERE member_email = ? AND service = ? AND connected_at IS NOT NULL AND disconnected_at IS NULL`,
+    [memberEmail, service],
+  );
+  return rows[0]?.script_id ?? null;
 }
 
 /** Record a disconnect. The row is kept, not deleted — see migrations/012. */
@@ -53,6 +68,8 @@ export async function recordDisconnected(memberEmail: string, service: Connectio
      ON DUPLICATE KEY UPDATE disconnected_at = NOW()`,
     [memberEmail, service],
   );
+  const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
+  emitEvent("connection.disconnected", { memberEmail, service }).catch(() => {});
 }
 
 export type TeamConnectionSummary = {

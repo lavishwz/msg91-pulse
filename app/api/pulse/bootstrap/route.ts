@@ -38,7 +38,7 @@ export async function GET() {
     const me = await resolveMe();
     const meId = me?.id ?? null;
 
-    const [mine, wall, g, ranks, anomaly, totals, connections] = await Promise.all([
+    const [mine, wall, g, ranks, anomaly, totals, connections, myCountries] = await Promise.all([
       meId ? listAccounts({ ownerId: meId }, page({ limit: 20 })) : Promise.resolve(null),
       listAccounts({}, page({ limit: 40 })),
       growth(meId),
@@ -46,6 +46,7 @@ export async function GET() {
       auditAnomaly(),
       Promise.all([countAccounts(), countAccounts({ unownedOnly: true })]),
       signedInAs ? connectionState(signedInAs.email) : Promise.resolve(null),
+      meId ? countryCounts(meId) : Promise.resolve([]),
     ]);
 
     return NextResponse.json({
@@ -64,8 +65,14 @@ export async function GET() {
       anomaly,
       counts: { accounts: totals[0], unowned: totals[1] },
       /* Every country the base is in, so the lens lists them all rather than
-         only the ones that happen to be on the scored page of the board. */
+         only the ones that happen to be on the scored page of the board.
+         Used for "team"/"company" scope, which (see board/route.ts) place no
+         ownership restriction on the accounts they show. */
       countries: await countryCounts(),
+      /* The same, narrowed to this rep's own book — what the "me" scope's
+         lens should actually offer, rather than every country the whole
+         company touches regardless of who owns what. */
+      myCountries,
       askCatalogue: ASK_CATALOGUE,
       generatedAt: new Date().toISOString(),
     });

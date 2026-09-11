@@ -16,13 +16,23 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { read, write, acquireLock, releaseLock } from "@/lib/store";
-import { listAccounts } from "./accounts";
+import { read, write, watermark, acquireLock, releaseLock } from "@/lib/store";
+import { accountsAfter } from "./accounts";
 import { healthFor, type AccountHealth } from "./health";
-import { page } from "./paginate";
 
 const PASS_BUDGET_MS = 90_000;
-const BATCH = 50;
+/**
+ * Accounts per page, per loop iteration. Found live: at 50, a single
+ * iteration calls healthFor() on the whole page, which itself makes several
+ * sequential agent-batch calls (see healthJudge.ts's own BATCH) before this
+ * loop ever gets back to checking its own deadline — a pass with a 70s
+ * budget still took 100-200s wall clock, because the deadline can only stop
+ * the *next* iteration, and one iteration was the whole problem. 10 keeps a
+ * single iteration's worst case small enough that the budget check between
+ * iterations is actually the thing bounding total time, not a hopeful upper
+ * bound nothing enforces.
+ */
+const BATCH = 10;
 
 export type HealthPass = {
   scanned: number;
@@ -60,13 +70,46 @@ async function saveHealth(h: AccountHealth): Promise<void> {
   );
 }
 
+/** Where this pass remembers how far through the customer base it has gotten. */
+const CURSOR_STREAM = "account-health-cursor";
+
 /**
- * Score every real customer account it can reach within the budget, oldest
- * cache first so a stale row is refreshed before a fresh one is redone.
+ * Move the cursor, forwards or back to 0 on wraparound.
  *
- * Not a single unbounded scan: it pages through `listAccounts` the same way
- * any other caller must (see paginate.ts), and stops when the budget is
- * spent — the next pass picks up more accounts, it does not repeat these.
+ * Deliberately not `advanceWatermark()` (lib/store.ts): that helper only ever
+ * moves a position forward (`GREATEST`), which is right for a watermark that
+ * must never lose track of what it has already processed, and wrong here —
+ * this cursor is supposed to fall back to 0 once it reaches the end, so the
+ * next pass starts a fresh lap over the whole customer base instead of
+ * sitting at the highest id forever.
+ */
+async function setCursor(position: number): Promise<void> {
+  await write(
+    `INSERT INTO pulse_watermark (stream, position, last_run_at, last_count)
+          VALUES (?, ?, NOW(), 0)
+     ON DUPLICATE KEY UPDATE position = VALUES(position), last_run_at = NOW()`,
+    [CURSOR_STREAM, String(position)],
+  );
+}
+
+/**
+ * Score real customer accounts, a batch at a time, resuming from wherever the
+ * last pass left off rather than starting over from the top every time.
+ *
+ * This used to page through `listAccounts` (newest-signup-first, OFFSET-based)
+ * starting at offset 0 on every call — which meant every single hourly pass
+ * re-scored the same handful of newest accounts and never reached the rest of
+ * the customer base at all. Found by checking `pulse_account_health` directly
+ * after this had been running for a while: only ~40 rows existed, and every
+ * one of them was among the ~40 newest signups in the whole system — out of
+ * over ten thousand customer accounts.
+ *
+ * The fix is `accountsAfter()` (accounts.ts): a page ordered by `user_pid`,
+ * which is stable across time (new signups don't shift where an existing
+ * account sits), plus a persisted cursor (`pulse_watermark`, see `setCursor`
+ * above) so each pass resumes exactly where the last one stopped. Once a pass
+ * runs off the end of the table, it wraps back to 0 and starts a new lap —
+ * so over time every account gets (re-)scored, not just the newest sliver.
  */
 export async function runHealthPass(budgetMs = PASS_BUDGET_MS): Promise<HealthPass> {
   const holder = randomUUID();
@@ -75,16 +118,27 @@ export async function runHealthPass(budgetMs = PASS_BUDGET_MS): Promise<HealthPa
 
   try {
     const deadline = Date.now() + budgetMs;
-    let cursor = 0;
+    let afterId = Number(await watermark(CURSOR_STREAM, "0")) || 0;
     let scanned = 0;
     let scored = 0;
     let aiScored = 0;
+    let wrapped = false;
 
     while (Date.now() < deadline) {
-      const { rows, nextCursor } = await listAccounts({}, page({ limit: BATCH, cursor }));
-      if (!rows.length) break;
-      scanned += rows.length;
+      const rows = await accountsAfter(afterId, BATCH);
 
+      if (!rows.length) {
+        // Ran off the end. Wrap once, so a genuinely empty customer base (or
+        // one entirely below whatever id this started at) does not spin —
+        // wrapping a second time in the same pass means there is truly
+        // nothing to score.
+        if (wrapped) break;
+        wrapped = true;
+        afterId = 0;
+        continue;
+      }
+
+      scanned += rows.length;
       const health = await healthFor(
         rows.map((a) => ({ id: a.id, hasOwner: Boolean(a.owner), ageDays: a.ageDays })),
       );
@@ -94,8 +148,8 @@ export async function runHealthPass(budgetMs = PASS_BUDGET_MS): Promise<HealthPa
         await saveHealth(h);
       }
 
-      if (nextCursor == null) break;
-      cursor = nextCursor;
+      afterId = Math.max(...rows.map((a) => a.id));
+      await setCursor(afterId);
     }
 
     return { scanned, scored, aiScored };

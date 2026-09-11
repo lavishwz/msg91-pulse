@@ -26,12 +26,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "bad or missing secret" }, { status: 401 });
   }
 
-  try {
-    const result = await runHealthPass();
-    return NextResponse.json({ ok: true, ...result });
-  } catch (err) {
-    return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 500 });
-  }
+  // Not awaited — same reasoning as the automation webhook's comment: this
+  // account's real cron-job.org enforces roughly a 30s ceiling no matter what
+  // requestTimeout is set to, and no per-call budget reliably stays under
+  // that once real GTWY latency is in the mix. This is a persistent process,
+  // so the response does not have to wait for the work; runHealthPass()
+  // already takes its own lock ("account-health"), so a fire that lands
+  // while a previous pass is still running just gets told so, cleanly.
+  runHealthPass(250_000).catch((err) => {
+    console.error("[pulse] health pass failed in the background:", (err as Error).message);
+  });
+  return NextResponse.json({ ok: true, started: true });
 }
 
 /** GET is a dry status read: how stale the cache is, without acting. */

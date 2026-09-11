@@ -122,6 +122,22 @@ export async function getAutomation(key: string): Promise<Automation | null> {
 }
 
 /**
+ * Every live automation listening for this event, right now.
+ *
+ * Unlike `due()`, this has no schedule to check — an event automation runs
+ * the instant `emitEvent` calls this, not on a next-run-at timer.
+ */
+export async function automationsForEvent(eventName: string): Promise<Automation[]> {
+  const rows = await read<Row>(
+    `SELECT ${COLUMNS} FROM pulse_automation
+      WHERE live = 1 AND state = 'active' AND capability = 'ready'
+        AND trigger_kind = 'event' AND when_event = ?`,
+    [eventName],
+  );
+  return rows.map(toAutomation);
+}
+
+/**
  * The automations a pass should run now.
  *
  * Schedule only. Events have no scheduler yet, branches wait on their parent's
@@ -183,11 +199,17 @@ export async function saveAutomation(
   if (a.triggerKind === "branch" && !a.parentKey)
     return { ok: false, error: "a branch runs on another automation's result, so it needs a parent" };
 
-  /* A guard is stored so the manifest can show it, and is never given a query
-     or a schedule — there is nothing for either to do. */
-  const isRunnable = a.triggerKind === "schedule";
+  if (a.triggerKind === "event" && !a.whenEvent?.trim())
+    return { ok: false, error: "an event automation needs to name which event it reacts to" };
 
-  if (isRunnable && a.capability !== "blocked") {
+  /* A guard is stored so the manifest can show it, and is never given a query
+     or a schedule — there is nothing for either to do. An event automation
+     has no query either: the event's own payload is the row, so it is
+     runnable without one — see runEventAutomation in automation-runner.ts. */
+  const isSchedule = a.triggerKind === "schedule";
+  const isRunnable = isSchedule || a.triggerKind === "event";
+
+  if (isSchedule && a.capability !== "blocked") {
     if (!a.findSql?.trim())
       return { ok: false, error: "a scheduled automation needs a query to find its rows" };
     const g = guard(a.findSql, Math.min(a.maxRows ?? 50, 200));
@@ -254,11 +276,39 @@ export async function retireAutomation(key: string): Promise<boolean> {
   return res.affectedRows > 0;
 }
 
+/**
+ * Delete an automation completely: tear down whatever it provisioned
+ * (cron-job.org job, legacy dedicated GTWY agent) and remove the row itself —
+ * unlike retireAutomation, which only marks it retired and keeps the row as
+ * history. The decision/signal rows it already produced are left alone; they
+ * are an audit trail of what actually happened, not part of the automation's
+ * own definition, and this only deletes the definition.
+ *
+ * Safe to call on a key that was already retired, and safe to call twice —
+ * the second call just finds no row and reports false.
+ */
+export async function deleteAutomationCompletely(key: string): Promise<boolean> {
+  const existing = await getAutomation(key);
+  if (!existing) return false;
+
+  if (existing.cronJobId) {
+    const { deleteCronJob } = await import("@/lib/pulse/cronjob");
+    await deleteCronJob(existing.cronJobId).catch(() => {});
+  }
+  if (existing.gtwyAgentId) {
+    const { deleteAgent } = await import("@/lib/pulse/gtwyAdmin");
+    await deleteAgent(existing.gtwyAgentId).catch(() => {});
+  }
+
+  const res = await write(`DELETE FROM pulse_automation WHERE automation_key = ?`, [key]);
+  return res.affectedRows > 0;
+}
+
 export async function setLive(key: string, live: boolean): Promise<boolean> {
   const res = await write(
     `UPDATE pulse_automation SET live = ?
       WHERE automation_key = ? AND state='active' AND capability='ready'
-        AND trigger_kind='schedule'`,
+        AND trigger_kind IN ('schedule','event')`,
     [live ? 1 : 0, key],
   );
   return res.affectedRows > 0;

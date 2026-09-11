@@ -16,6 +16,7 @@ import {
   teamConnectionSummary,
   type ConnectionService,
 } from "@/lib/pulse/connections";
+import { enableViasocketApp, GMAIL_SERVICE_ID } from "@/lib/pulse/viasocket";
 
 const SERVICES: ConnectionService[] = ["gmail", "cal", "slack"];
 
@@ -52,7 +53,20 @@ export async function POST(req: NextRequest) {
 
   try {
     if (action === "connected") {
-      await recordConnected(session.user.email, service, typeof body?.viasocketId === "string" ? body.viasocketId : null);
+      const viasocketId = typeof body?.viasocketId === "string" ? body.viasocketId : null;
+      let scriptId: string | null = null;
+      // Gmail is the only service Pulse runs actions against so far — the
+      // enable call turns the auth_id from the popup into the script_id that
+      // does that. Best-effort: a member is still "connected" without it,
+      // just unable to see recent mail until they reconnect.
+      if (service === "gmail" && viasocketId) {
+        try {
+          scriptId = await enableViasocketApp(session.user.email, viasocketId, GMAIL_SERVICE_ID);
+        } catch (err) {
+          console.warn("[pulse] viasocket enable failed:", (err as Error).message);
+        }
+      }
+      await recordConnected(session.user.email, service, viasocketId, scriptId);
     } else {
       await recordDisconnected(session.user.email, service);
     }

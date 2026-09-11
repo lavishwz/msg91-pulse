@@ -1,4 +1,6 @@
 import { read, write } from "@/lib/store";
+import { query } from "@/lib/db";
+import { accountName } from "@/lib/pulse/domain";
 
 /**
  * The AI log, read back.
@@ -29,6 +31,16 @@ export type LogRow = {
   reasons: string[];
   held: boolean;
   errorCode: string | null;
+  /**
+   * Did an LLM call actually judge this row? False for 'human' (a person
+   * acted), 'system' (the breaker talking about itself), and 'rules' (daily.ts's
+   * pure SQL-and-comparison scanner, which by its own header comment has "no
+   * agent involved at all"). Without this, a `rules` row and a genuine
+   * signup-triage/rule-worker verdict were indistinguishable in the feed that
+   * calls itself "every decision AI made" — the promise was wider than what the
+   * data underneath it could back up.
+   */
+  isAI: boolean;
 };
 
 type Raw = {
@@ -137,7 +149,21 @@ function shape(r: Raw): LogRow {
       detail: `${r.hold_reason ?? "too much activity in one hour"}. It will not run again until a person clears it.`,
       tag: "escalated", kind: "act", verdict: r.verdict, score: null, confidence: null,
       policyVersion: r.policy_version, model: null, agent: r.agent,
-      reasons: [], held: Boolean(r.held), errorCode: r.error_code,
+      reasons: [], held: Boolean(r.held), errorCode: r.error_code, isAI: false,
+    };
+  }
+
+  // daily.ts's scanner: a condition checked, not a row an LLM read. Its own
+  // header comment is explicit that "no agent is involved at all" — so this
+  // reads as what it is, a matched rule, not a verdict.
+  if (r.agent === "rules") {
+    return {
+      when: hhmm(r.at), at: r.at.toISOString(), signalKey: r.signal_key,
+      title: `${name} matched a rule`,
+      detail: reasons.length ? reasons.join(" ") : (r.action_taken ?? "condition met"),
+      tag: "acted", kind: "ok", verdict: r.verdict, score: null, confidence: null,
+      policyVersion: r.policy_version, model: null, agent: r.agent,
+      reasons, held: Boolean(r.held), errorCode: r.error_code, isAI: false,
     };
   }
 
@@ -154,7 +180,7 @@ function shape(r: Raw): LogRow {
       reasons: [(out.why as string) ?? "", (out.recommended_move as string) ?? ""]
         .filter(Boolean)
         .concat(reasons),
-      held: Boolean(r.held), errorCode: r.error_code,
+      held: Boolean(r.held), errorCode: r.error_code, isAI: true,
     };
   }
   if (r.agent === "portfolio-digest") {
@@ -167,7 +193,7 @@ function shape(r: Raw): LogRow {
       confidence: r.confidence === null ? null : Number(r.confidence),
       policyVersion: r.policy_version, model: r.model, agent: r.agent,
       reasons: plays.map((p) => `${p.worth ?? ""} — ${p.what ?? ""}`.trim()),
-      held: Boolean(r.held), errorCode: r.error_code,
+      held: Boolean(r.held), errorCode: r.error_code, isAI: true,
     };
   }
   const domain = (inp.email_domain as string) || "";
@@ -182,7 +208,19 @@ function shape(r: Raw): LogRow {
         ? `A person put ${name} back`
         : `A person acted on ${name}`;
 
-  const title = r.agent === "human"
+  // A custom automation with no single account behind it (a portfolio-wide
+  // digest, e.g. auto.monthly.signup_digest) has nothing to fill `name` with —
+  // `subject_id` is null by design, not missing data — so the fallback chain
+  // above lands on "Account ?" and every title below reads "Scored Account ?".
+  // The worker's own headline is already a complete sentence in that case;
+  // showing it instead of forcing the account-shaped vocabulary onto a row
+  // that was never about one account is both more honest and more useful.
+  const portfolioHeadline =
+    !r.subject_id && typeof out.headline === "string" && out.headline.trim() ? out.headline.trim() : null;
+
+  const title = portfolioHeadline
+    ? portfolioHeadline
+    : r.agent === "human"
     ? humanTitle
     : r.error_code
     ? `Could not decide on ${name}`
@@ -224,15 +262,49 @@ function shape(r: Raw): LogRow {
     reasons,
     held: Boolean(r.held),
     errorCode: r.error_code,
+    // Every agent that reaches this final, generic branch is an actual LLM
+    // call (signup-triage, outreach-drafter, rule-worker:<automation key>) —
+    // the ones that are not (human, system, rules) all returned earlier.
+    isAI: r.agent !== "human",
   };
+}
+
+/**
+ * Real names for the rows `shape()` would otherwise be reduced to labelling
+ * "Account 50" — every automation's decision (the shared ruleWorker, not
+ * signup-triage) has a numeric `subject_id` and nothing else, because
+ * `subject_name`'s subquery only ever looks up signup-triage's own
+ * `company_name`. Batch-resolved against MSG91's real schema (read-only,
+ * `lib/db.ts`) rather than guessed from whatever fields a given automation's
+ * find_sql happened to select — those vary rule to rule, an id does not.
+ */
+async function resolveSubjectNames(rows: Raw[]): Promise<Map<string, string>> {
+  const ids = [
+    ...new Set(
+      rows
+        .filter((r) => !r.subject_name && r.subject_id && /^\d+$/.test(r.subject_id))
+        .map((r) => r.subject_id as string),
+    ),
+  ];
+  if (!ids.length) return new Map();
+  const marks = ids.map(() => "?").join(",");
+  const found = await query<{ user_pid: number; user_fname: string | null; user_lname: string | null; user_uname: string | null }>(
+    `SELECT user_pid, user_fname, user_lname, user_uname FROM ms_user WHERE user_pid IN (${marks})`,
+    ids,
+  ).catch(() => []);
+  return new Map(found.map((a) => [String(a.user_pid), accountName(a)]));
 }
 
 /** The Live and AI log feeds: every decision, newest first. */
 export async function decisions(limit = 40, before?: string): Promise<LogRow[]> {
-  // Only what the AI did. A person releasing a draft or reversing a suppression
-  // is a human act, and human acts are the Audit log's question — "are the
-  // people behaving?" — not Activity's. The rows still exist; they are read by
-  // a different surface with a different audience and retention.
+  // Everything Autopilot did on its own, whether that was an LLM call or a
+  // plain rule match (daily.ts's `agent = 'rules'` rows) — `shape()` sets
+  // `isAI` per row so the feed can tell the two apart instead of implying
+  // every row here was judged by a model. A person releasing a draft or
+  // reversing a suppression is a human act, and human acts are the Audit
+  // log's question — "are the people behaving?" — not Activity's. The rows
+  // still exist; they are read by a different surface with a different
+  // audience and retention.
   const rows = before
     ? await read<Raw>(
         `${SELECT} WHERE d.agent <> 'human' AND d.at < ? ORDER BY d.at DESC, d.id DESC LIMIT ?`,
@@ -242,6 +314,8 @@ export async function decisions(limit = 40, before?: string): Promise<LogRow[]> 
         `${SELECT} WHERE d.agent <> 'human' ORDER BY d.at DESC, d.id DESC LIMIT ?`,
         [limit],
       );
+  const names = await resolveSubjectNames(rows);
+  for (const r of rows) if (!r.subject_name && r.subject_id) r.subject_name = names.get(r.subject_id) ?? null;
   return rows.map(shape);
 }
 
@@ -251,6 +325,8 @@ export async function humanActs(limit = 25): Promise<LogRow[]> {
     `${SELECT} WHERE d.agent = 'human' ORDER BY d.at DESC LIMIT ?`,
     [limit],
   );
+  const names = await resolveSubjectNames(rows);
+  for (const r of rows) if (!r.subject_name && r.subject_id) r.subject_name = names.get(r.subject_id) ?? null;
   return rows.map(shape);
 }
 
@@ -271,6 +347,8 @@ export async function suppressed(limit = 25): Promise<LogRow[]> {
       ORDER BY d.at DESC LIMIT ?`,
     [limit],
   );
+  const names = await resolveSubjectNames(rows);
+  for (const r of rows) if (!r.subject_name && r.subject_id) r.subject_name = names.get(r.subject_id) ?? null;
   return rows.map(shape);
 }
 

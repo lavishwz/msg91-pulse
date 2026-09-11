@@ -189,6 +189,7 @@ export type CompiledRule = z.infer<typeof CompiledRuleSchema>;
 /** What the planner returns for one English rule: a full, runnable build plan. */
 export const AutomationPlanSchema = z.object({
   mode: z.enum(["cron", "event"]),
+  when_event: z.string().optional().default(""),
   cron_schedule: z.string(),
   find_sql: z.string(),
   subject_col: z.string(),
@@ -577,6 +578,7 @@ export async function planAutomation(
   english: string,
   motion: string,
 ): Promise<AgentCall<AutomationPlan>> {
+  const { eventsCatalogueForPlanner } = await import("./autopilot/events");
   return callAgent("automationPlanner", AutomationPlanSchema, "Translate this rule.", {
     today: today(),
     motion,
@@ -585,6 +587,7 @@ export async function planAutomation(
     fields: Object.entries(RULE_FIELDS)
       .map(([k, v]) => `- ${k} — ${v}`)
       .join("\n"),
+    events: eventsCatalogueForPlanner(),
   });
 }
 

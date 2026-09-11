@@ -1,5 +1,14 @@
 import { query, queryOne } from "@/lib/db";
-import { limitClause, page, toPaged, type Page, type Paged } from "./paginate";
+import {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  int,
+  limitClause,
+  page,
+  toPaged,
+  type Page,
+  type Paged,
+} from "./paginate";
 import { countryOf } from "./country";
 import { ownersFor, overrideCounts, type OwnerOverride } from "./ownership";
 import {
@@ -310,6 +319,65 @@ export async function listAccounts(
   const accounts = await hydrate(hits.map((h) => Number(h.user_pid)));
   const filtered = filter.motion ? accounts.filter((a) => a.motion === filter.motion) : accounts;
   return toPaged(filtered, req);
+}
+
+/** How many of the newest signups a team/company board can show (board/route.ts's own `LIMIT`). */
+const BOARD_WINDOW = 200;
+
+/**
+ * A page of "boardworthy" customer accounts, ordered by id, starting just
+ * after `afterId`. Built for lib/pulse/healthCron.ts's background scoring
+ * pass.
+ *
+ * "Boardworthy" — owned, or among the newest signups — rather than every
+ * customer account that has ever existed. A board can only ever show two
+ * kinds of account: one somebody owns (any "me" or "team" view: `listAccounts`
+ * filters on `user_handled_by`), or one of the newest signups (a "company"
+ * view with no owner filter, bounded to the same `LIMIT 200` board/route.ts
+ * uses). An account that is neither — unowned and years old — cannot appear
+ * on any board Pulse renders, so scoring it first is wasted work: found by
+ * checking directly, only 28 of ~3,772 *owned* accounts had id 129 or lower,
+ * because sweeping the entire customer base in id order reaches ancient,
+ * irrelevant accounts long before it reaches the ones actually on screen.
+ * Restricting the universe here cuts the sweep from ~10,000 accounts to
+ * ~3,800, so real, currently-visible accounts get scored in days, not weeks.
+ *
+ * `listAccounts`'s own "newest signup first" order is right for a person
+ * looking at their wall, and wrong for a pass that must not get stuck: a
+ * fixed OFFSET into `ORDER BY user_date DESC` shifts under it every time a
+ * new account signs up. `user_pid` never changes once assigned, so ordering
+ * by it and resuming from "> afterId" always means the same thing regardless
+ * of what has signed up since — which is what makes it safe to persist as a
+ * cursor across separate calls, including the wraparound in healthCron.ts.
+ */
+export async function accountsAfter(afterId: number, limit: number): Promise<Account[]> {
+  const cap = Math.min(MAX_PAGE_SIZE, Math.max(1, int(limit, DEFAULT_PAGE_SIZE)));
+  const hits = await query<{ user_pid: number }>(
+    `SELECT u.user_pid
+       FROM ms_user u
+       LEFT JOIN user_handled_by h ON h.user_id = u.user_pid
+      WHERE u.user_type = ${USER_TYPE.CUSTOMER}
+        AND u.user_pid > ?
+        AND (
+          h.admin_id IS NOT NULL
+          OR u.user_pid IN (
+            -- MariaDB does not allow LIMIT directly inside an IN subquery
+            -- ("doesn't yet support LIMIT & IN/ALL/ANY/SOME subquery") —
+            -- wrapping it in a derived table works around that.
+            SELECT user_pid FROM (
+              SELECT user_pid FROM ms_user
+               WHERE user_type = ${USER_TYPE.CUSTOMER}
+               ORDER BY user_date DESC
+               LIMIT ${BOARD_WINDOW}
+            ) newest
+          )
+        )
+      ORDER BY u.user_pid ASC
+      LIMIT ${cap}`,
+    [afterId],
+  );
+  if (!hits.length) return [];
+  return hydrate(hits.map((h) => Number(h.user_pid)));
 }
 
 const CURRENCY_BY_ENTITY: Record<string, string> = {
@@ -750,15 +818,33 @@ export type CountryCount = {
   accounts: number;
 };
 
-export async function countryCounts(): Promise<CountryCount[]> {
+/**
+ * `ownerId` narrows the count to one rep's own book — the "me" scope's lens
+ * should only ever offer countries that rep actually has accounts in, not
+ * every country the whole company touches. Omitted (or for "team"/"company",
+ * which use the same unrestricted account listing as each other — see
+ * board/route.ts), this counts across every customer account, unchanged from
+ * before.
+ */
+export async function countryCounts(ownerId?: number): Promise<CountryCount[]> {
+  const joins = ["LEFT JOIN default_destination_country d ON d.u_id = u.user_pid"];
+  const where = ["u.user_type = 3"];
+  const params: number[] = [];
+  if (ownerId) {
+    joins.push("JOIN user_handled_by h ON h.user_id = u.user_pid");
+    where.push("h.admin_id = ?");
+    params.push(ownerId);
+  }
+
   const rows = await query<{ code: string | null; currency: string | null; n: number }>(
     `SELECT NULLIF(TRIM(d.billing_country), '') AS code,
             NULLIF(TRIM(d.currency), '')        AS currency,
             COUNT(*)                            AS n
        FROM ms_user u
-       LEFT JOIN default_destination_country d ON d.u_id = u.user_pid
-      WHERE u.user_type = 3
+       ${joins.join(" ")}
+      WHERE ${where.join(" AND ")}
       GROUP BY code, currency`,
+    params,
   );
 
   /* Two rows can name the same country — one by dialling code, one only by

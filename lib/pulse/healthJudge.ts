@@ -31,8 +31,16 @@ import { judgeHealth, healthAgentConfigured, type HealthVerdict } from "./agents
  */
 export const MIN_CONFIDENCE = 0.35;
 
-/** Accounts per gateway call. One call per account would be the cost bug. */
-const BATCH = 25;
+/**
+ * Accounts per gateway call. One call per account would be the cost bug —
+ * but 25 turned out to be the opposite bug: a single call that size took
+ * long enough that no deadline check in runHealthPass() could interrupt it,
+ * since a deadline can only stop the *next* call, not one already in flight.
+ * Found live: a pass with a 70s budget still took 125s+ and hit the local
+ * dev tunnel's hard 100s wall. 8 keeps a single call's worst case bounded
+ * enough that the budget check between calls actually means something.
+ */
+const BATCH = 8;
 
 export type HealthSignals = {
   id: number;

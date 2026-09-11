@@ -369,6 +369,185 @@ async function partnerMotion(): Promise<Answer> {
   };
 }
 
+/** Accounts on AED billing — the UAE entity, one quarter. */
+async function uaeEntity(): Promise<Answer> {
+  // Two passes, same reason as every other scanner in this codebase touching
+  // ms_trans: it has no index on trans_tuserid, so a correlated subquery here
+  // would cost one full scan per AED account instead of one scan total.
+  const candidates = await query<{
+    user_pid: number;
+    name: string;
+    user_email: string | null;
+    owner: string | null;
+  }>(
+    `SELECT u.user_pid,
+            TRIM(CONCAT(COALESCE(u.user_fname,''),' ',COALESCE(u.user_lname,''))) name,
+            u.user_email, a.user_fname owner
+       FROM ms_user u
+       JOIN default_destination_country d ON d.u_id = u.user_pid AND d.currency = 'AED'
+       LEFT JOIN user_handled_by h ON h.user_id = u.user_pid
+       LEFT JOIN ms_user a ON a.user_pid = h.admin_id
+      WHERE u.user_type = ${USER_TYPE.CUSTOMER}
+      LIMIT ${PAGE}`,
+  );
+
+  const ids = candidates.map((c) => Number(c.user_pid)).filter(Number.isFinite);
+  const paidById = new Map<number, number>();
+  if (ids.length) {
+    const paid = await query<{ id: number; paid: string }>(
+      `SELECT t.trans_tuserid id, SUM(t.trans_amt) paid
+         FROM ms_trans t
+        WHERE t.trans_tuserid IN (${ids.map(() => "?").join(",")})
+          AND t.trans_type = 1 AND t.payment_mode = 2
+          AND t.trans_date >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+        GROUP BY t.trans_tuserid`,
+      ids,
+    );
+    for (const r of paid) paidById.set(Number(r.id), Number(r.paid));
+  }
+
+  const rows = candidates
+    .map((c) => ({ ...c, paid: paidById.get(Number(c.user_pid)) ?? null }))
+    .sort((a, b) => (b.paid ?? -1) - (a.paid ?? -1));
+
+  const unownedCount = rows.filter((r) => !(r.owner ?? "").trim()).length;
+  const received = rows.reduce((a, r) => a + (r.paid ?? 0), 0);
+
+  return {
+    id: "uae",
+    question: "UAE entity, this quarter",
+    available: true,
+    big: rows.length ? money(String(received), "AED") : count(rows.length),
+    headline: `${count(rows.length)} account${rows.length === 1 ? "" : "s"} bill in AED.${
+      unownedCount ? ` ${unownedCount} have no owner.` : ""
+    }`,
+    prose:
+      "Entity comes from billing currency (default_destination_country), the same rule every " +
+      "other entity split in Pulse uses. Received is gateway payments only, last 90 days, native " +
+      "currency, never converted.",
+    breakdown: [],
+    table: {
+      columns: ["Account", "Received (90 days)", "Owner", "Contact"],
+      rows: rows.map((r) => [
+        r.name || r.user_email || `account ${r.user_pid}`,
+        r.paid != null ? money(r.paid, "AED") : "—",
+        (r.owner ?? "").trim() || "Unassigned",
+        r.user_email ?? "—",
+      ]),
+    },
+    action: unownedCount ? "Assign the unowned ones" : null,
+    stamp: ["all entities", "commercial · L2", PROVISIONAL_NOTE, "live"],
+    provisional: true,
+  };
+}
+
+/**
+ * Accounts that went quiet — somebody at MSG91 acted on them before, and
+ * nobody has since. Different signal from `flat` (a rep with no actions at
+ * all): this is the account's own admin_updation_log trail going cold, so an
+ * account only appears once someone was actually engaged with it.
+ */
+async function coldAccounts(): Promise<Answer> {
+  const rows = await query<{
+    user_pid: number;
+    name: string;
+    last_acted: Date;
+    quiet_days: number;
+    owner: string | null;
+  }>(
+    `SELECT u.user_pid,
+            TRIM(CONCAT(COALESCE(u.user_fname,''),' ',COALESCE(u.user_lname,''))) name,
+            MAX(l.date) last_acted, DATEDIFF(NOW(), MAX(l.date)) quiet_days,
+            a.user_fname owner
+       FROM admin_updation_log l
+       JOIN ms_user u ON u.user_pid = l.upt_id AND u.user_type = ${USER_TYPE.CUSTOMER}
+       LEFT JOIN user_handled_by h ON h.user_id = u.user_pid
+       LEFT JOIN ms_user a ON a.user_pid = h.admin_id
+      GROUP BY u.user_pid, name, a.user_fname
+     HAVING quiet_days BETWEEN 60 AND 365
+      ORDER BY last_acted DESC
+      LIMIT ${PAGE}`,
+  );
+
+  return {
+    id: "cold",
+    question: "Which accounts have not been touched in 60 days?",
+    available: true,
+    big: count(rows.length),
+    headline: rows.length
+      ? `${rows.length} account${rows.length === 1 ? "" : "s"} had somebody working them, then went quiet.`
+      : "Nothing has gone cold in the last year.",
+    prose:
+      "From admin_updation_log, the same source flat reps uses — it sees changes made in the panel, " +
+      "not calls or mail. An account only shows up here once it has a history to go quiet from; a " +
+      "signup nobody has ever touched is a different question (unowned or stuck).",
+    breakdown: [],
+    table: {
+      columns: ["Account", "Last worked", "Quiet for", "Owner"],
+      rows: rows.map((r) => [
+        r.name || `account ${r.user_pid}`,
+        new Date(r.last_acted).toISOString().slice(0, 10),
+        `${r.quiet_days} days`,
+        (r.owner ?? "").trim() || "Unassigned",
+      ]),
+    },
+    action: null,
+    stamp: ["all entities", "internal", "live"],
+    provisional: false,
+  };
+}
+
+/** Revenue by partner — the reseller breakdown partnerMotion counts, priced. */
+async function partnerRevenue(): Promise<Answer> {
+  const rows = await query<{
+    reseller: number;
+    reseller_name: string;
+    currency: string | null;
+    accounts: number;
+    paid: string;
+  }>(
+    `SELECT pr.user_pid reseller,
+            TRIM(CONCAT(COALESCE(pr.user_fname,''),' ',COALESCE(pr.user_lname,''))) reseller_name,
+            d.currency, COUNT(DISTINCT u.user_pid) accounts, SUM(t.trans_amt) paid
+       FROM ms_user u
+       JOIN ms_user pr ON pr.user_pid = u.user_userid
+                      AND pr.user_type = ${USER_TYPE.RESELLER}
+                      AND pr.user_pid <> 2
+       JOIN ms_trans t ON t.trans_tuserid = u.user_pid
+                      AND t.trans_type = 1 AND t.payment_mode = 2
+                      AND t.trans_date >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+       LEFT JOIN default_destination_country d ON d.u_id = u.user_pid
+      WHERE u.user_type = ${USER_TYPE.CUSTOMER}
+      GROUP BY pr.user_pid, reseller_name, d.currency
+      ORDER BY paid DESC
+      LIMIT ${PAGE}`,
+  );
+
+  const totalAccounts = rows.reduce((a, r) => a + Number(r.accounts), 0);
+
+  return {
+    id: "partners",
+    question: "Revenue by partner this month",
+    available: true,
+    big: count(totalAccounts),
+    headline: rows.length
+      ? `${count(totalAccounts)} partner-sourced account${totalAccounts === 1 ? "" : "s"} paid in the last 30 days.`
+      : "No partner-sourced account has paid through the gateway in the last 30 days.",
+    prose:
+      "Same partner-sourced definition as 'how much of the book is partner-sourced' — an account " +
+      "whose parent in ms_user is another reseller. Priced from gateway payments only, native " +
+      "currency, never converted across partners.",
+    breakdown: rows.map((r) => [
+      `${r.reseller_name || `reseller ${r.reseller}`} · ${(r.currency ?? "").trim() || "no entity"}`,
+      `${money(r.paid, r.currency)} · ${r.accounts} account${Number(r.accounts) === 1 ? "" : "s"}`,
+    ]),
+    table: null,
+    action: null,
+    stamp: ["all entities", "commercial · L2", PROVISIONAL_NOTE, "live"],
+    provisional: true,
+  };
+}
+
 /** New signups in the last 7 days. */
 async function recentSignups(): Promise<Answer> {
   const rows = await query<{
@@ -428,6 +607,9 @@ const ANSWERS: Record<string, (offset?: number) => Promise<Answer>> = {
   payments: paymentsByEntity,
   entities: accountsByEntity,
   signups: recentSignups,
+  uae: uaeEntity,
+  cold: coldAccounts,
+  partners: partnerRevenue,
 };
 
 export const ASK_CATALOGUE: { id: string; question: string; pinned?: boolean }[] = [
@@ -439,6 +621,9 @@ export const ASK_CATALOGUE: { id: string; question: string; pinned?: boolean }[]
   { id: "flat", question: "Whose accounts are flat?" },
   { id: "partner", question: "How much of the book is partner-sourced?" },
   { id: "entities", question: "How many accounts does each entity have?" },
+  { id: "uae", question: "UAE entity, this quarter" },
+  { id: "cold", question: "Which accounts have not been touched in 60 days?" },
+  { id: "partners", question: "Revenue by partner this month" },
 ];
 
 export async function answer(id: string, offset = 0, fresh = false): Promise<Answer> {

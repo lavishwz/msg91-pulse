@@ -193,6 +193,18 @@ export async function assignOwner(
       actor,
     ],
   );
+
+  if (ownerId !== null) {
+    const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
+    emitEvent("account.reassigned", {
+      accountId,
+      accountName: a.accountName ?? null,
+      ownerId,
+      ownerName: a.ownerName ?? null,
+      previousOwnerId: a.previousOwnerId == null ? null : String(a.previousOwnerId),
+      assignedBy: actor,
+    }).catch(() => {});
+  }
 }
 
 /**

@@ -480,6 +480,71 @@ async function walletRunDry(limit: number): Promise<Card[]> {
   }));
 }
 
+/**
+ * 7. A recharge that failed to collect.
+ *
+ * `micro_sub_payment_failed_logs` records every auto-recharge/subscription
+ * payment MSG91's billing tried to collect and could not — a much earlier
+ * signal than the wallet actually reaching zero (walletRunDry, above, only
+ * fires once the account has already gone quiet for three weeks). A repeat
+ * failure while the account is still transacting is the moment to look,
+ * before the account goes quiet at all.
+ *
+ * No timestamp exists on this table (checked: `id, company_id, status` only —
+ * see docs/schema-notes for the full column list), so this cannot be scoped
+ * to "recent" failures, only "has ever had one." That is stated in the
+ * evidence rather than implied — the count is real, the recency is not known.
+ * Cheap regardless: the whole table is a few hundred rows, so this is a group
+ * by with no ms_trans scan at all.
+ */
+async function repeatedPaymentFailure(limit: number): Promise<Card[]> {
+  const rows = await query<{
+    user_pid: number;
+    name: string;
+    currency: string | null;
+    admin_id: number | null;
+    fails: number;
+  }>(
+    `SELECT u.user_pid,
+            TRIM(CONCAT(COALESCE(u.user_fname,''),' ',COALESCE(u.user_lname,''))) name,
+            d.currency, h.admin_id, COUNT(*) fails
+       FROM micro_sub_payment_failed_logs m
+       JOIN ms_user u ON u.user_pid = m.company_id AND u.user_type = ${USER_TYPE.CUSTOMER}
+       LEFT JOIN default_destination_country d ON d.u_id = u.user_pid
+       LEFT JOIN user_handled_by h ON h.user_id = u.user_pid
+      GROUP BY u.user_pid, name, d.currency, h.admin_id
+      ORDER BY fails DESC, u.user_pid DESC
+      LIMIT ${limit}`,
+  );
+
+  return rows.map((r) => {
+    const fails = Number(r.fails ?? 1);
+    return {
+      key: `payment-failed:${r.user_pid}`,
+      scope: "me" as const,
+      reason: "Watch closely" as const,
+      watch: true,
+      headline: `${trim(r.name)}'s recharge failed to collect.`,
+      why:
+        `<span class="l1">${fails} failed ${fails === 1 ? "attempt" : "attempts"}</span> on ` +
+        `record — MSG91's billing tried to collect an auto-recharge and could not. This is ` +
+        `earlier than a dry wallet: nothing has to have gone quiet yet for a card to belong here.`,
+      l1: `${fails} failed ${fails === 1 ? "attempt" : "attempts"}`,
+      action: null,
+      solid: false,
+      account: { id: Number(r.user_pid), name: r.name },
+      geo: geoLine(r.currency, "Inbound"),
+      clock: null,
+      evidence: [
+        ["Failed recharge attempts", String(fails)],
+        ["When", "not recorded — this table carries no timestamp, only that it happened"],
+        ["Owner", r.admin_id ? `admin ${r.admin_id}` : "Unassigned"],
+        ["Basis", "micro_sub_payment_failed_logs, grouped by company_id"],
+      ],
+    };
+  });
+}
+
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
 function humanMins(mins: number): string {
@@ -533,6 +598,7 @@ async function buildCardsUncached(n: number): Promise<Card[]> {
     unownedPaying(n),
     verificationStalled(n),
     walletRunDry(n),
+    repeatedPaymentFailure(n),
   ]);
 
   const order: CardReason[] = [

@@ -41,5 +41,13 @@ if (!capped.ok || !capped.sql.endsWith(`LIMIT ${MAX_ROWS}`)) { fail++; console.l
 const added = guard("SELECT 1");
 if (!added.ok || !added.sql.endsWith(`LIMIT ${MAX_ROWS}`) || !added.addedLimit) { fail++; console.log("FAIL  limit not added:", added); } else pass++;
 
+// Capping an offset-form LIMIT must keep the offset, not drop it — an earlier
+// bug replaced "LIMIT 500000, 999" with a bare "LIMIT 200", silently turning
+// "row 500,000 onward" into "the first 200 rows".
+const offsetCapped = guard("SELECT * FROM ms_user LIMIT 500000, 999");
+if (!offsetCapped.ok || offsetCapped.sql !== `SELECT * FROM ms_user LIMIT 500000, ${MAX_ROWS}`) {
+  fail++; console.log("FAIL  offset dropped when capping:", offsetCapped);
+} else pass++;
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

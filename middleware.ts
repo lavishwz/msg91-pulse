@@ -38,11 +38,11 @@ function isPublic(pathname: string): boolean {
     // register looks like.
     pathname === "/sw.js" ||
     pathname === "/manifest.webmanifest" ||
-    pathname.startsWith("/api/auth/") ||
-    // cron-job.org calls these directly, with no cookie and no secret — this
-    // is the un-authed placeholder noted in build.ts/webhook/route.ts, to be
-    // revisited once cron-job.org's outgoing calls carry a shared secret.
-    pathname.startsWith("/api/pulse/autopilot/webhook/")
+    pathname.startsWith("/api/auth/")
+    // The per-automation webhook (/api/pulse/autopilot/webhook/[key]) is NOT
+    // listed here: cron-job.org's outgoing calls now carry the same shared
+    // secret the tick uses (see build.ts), so it is authenticated via
+    // isMachineCall() below instead of being a public route.
   );
 }
 

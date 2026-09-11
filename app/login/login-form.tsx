@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 
 const WIDGET_SRC = "https://36blocks.com/assets/proxy-auth/proxy-auth.js";
 
@@ -33,7 +33,6 @@ function safeNext(value: string | null): string {
 }
 
 export default function LoginForm({ referenceId }: { referenceId: string }) {
-  const router = useRouter();
   const params = useSearchParams();
   const [status, setStatus] = useState<"working" | "widget" | "error">("working");
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +62,14 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
           });
           const body = (await res.json().catch(() => ({}))) as { error?: string };
           if (!res.ok) throw new Error(body.error ?? `Sign-in failed (${res.status})`);
-          router.replace(next);
+          // A full navigation, not router.replace(). The app past this point
+          // is pulse.js/pulse-live.js — a vanilla bootstrap that fetches
+          // everything on page load, not a React tree Next's client router
+          // re-renders. router.replace() swapped the route without ever
+          // re-running that bootstrap, so a first sign-in showed the navbar
+          // and nothing else until a manual reload ran it for real. A real
+          // navigation runs it exactly once, right away, like a reload does.
+          window.location.href = next;
         } catch (err) {
           setError(err instanceof Error ? err.message : "Sign-in failed");
           setStatus("error");
@@ -119,13 +125,23 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
       setStatus("error");
     };
     document.body.appendChild(script);
-  }, [params, referenceId, router]);
+  }, [params, referenceId]);
 
   return (
     <>
-      {/* The widget renders itself into an element whose id is the reference id. */}
-      <div id={referenceId} className="authwidget" />
-      {status === "working" && <div className="authwait">Signing you in…</div>}
+      {/* The widget renders itself into an element whose id is the reference id.
+          Hidden while "working": that state covers both before the widget has
+          anything to show (case 2, first arrival) and after it has cleared
+          its own UI to hand control back here (case 1, the token exchange) —
+          an empty box with nothing in it read as the login box reappearing
+          for no reason in exactly that second case. */}
+      <div id={referenceId} className="authwidget" hidden={status === "working"} />
+      {status === "working" && (
+        <div className="authwait" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="loader" style={{ width: 18, height: 18, borderWidth: 2 }} />
+          <span>Signing you in…</span>
+        </div>
+      )}
       {error && (
         <div className="autherr" role="alert">
           <b>Not signed in.</b> {error}

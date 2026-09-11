@@ -12,7 +12,29 @@
  * real and which are still the prototype's sample data.
  */
 window.PulseLive = (function () {
-  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, boardLoaded: false, autopilot: null, drafts: [], policy: null, manifest: null, motionRules: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null };
+  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, boardLoaded: false, flightLoaded: false, autopilot: null, autopilotError: null, drafts: [], policy: null, manifest: null, motionRules: null, automations: [], asked: [], digest: null, verdicts: {}, alerts: [], tagError: null, mockDismissed: false, audit: null, auditError: null, auditLoadingMore: false, gmailRecent: null, gmailRecentError: null, gmailRecentLoaded: false };
+
+  /**
+   * Sample-data notice (static markup in app/pulse-shell.tsx, #mockbar).
+   *
+   * state.mock is the same list report() has always printed to the console —
+   * this just also puts it on screen, since a fake number sitting next to real
+   * ones is not something a person should need devtools to catch. Called from
+   * report(), which already runs at the points where boot's async pieces have
+   * settled enough for state.mock to be worth reading.
+   */
+  function updateMockBanner() {
+    const bar = document.getElementById("mockbar");
+    const msg = document.getElementById("mockmsg");
+    if (!bar || !msg) return;
+    if (state.mockDismissed || !state.mock.length) {
+      bar.hidden = true;
+      return;
+    }
+    msg.textContent =
+      "Sample data, not live: " + state.mock.join("; ") + ". Everything else on screen is real.";
+    bar.hidden = false;
+  }
 
   /** How many rows of an answer are on screen at once. Matches lib/pulse/ask.ts. */
   const PAGE_ROWS = 50;
@@ -113,6 +135,11 @@ window.PulseLive = (function () {
    * changes the book size beside every name, and both surfaces show it.
    */
   function applyStandings(standings, bag) {
+    // Clear the sample leaderboard/reassign list up front — a real empty
+    // response must win over the prototype's names, not leave them standing
+    // in for a team that turned out to have nobody in it.
+    bag.STANDINGS.length = 0;
+    if (bag.REPS) bag.REPS.length = 0;
     if (!standings.length) return;
     if (bag.REPS) {
       /* Two admins can share a display name — ms_user.user_fname is not
@@ -146,11 +173,14 @@ window.PulseLive = (function () {
 
   /** Cards arrive on their own request; see the note in the bootstrap route. */
   function applyCards(cards, bag) {
+    // A real "nothing matched" answer must clear the sample cards, not leave
+    // them standing in as if they were still live — an empty response is a
+    // fact about the account, not a reason to keep showing invented ones.
+    bag.CARDS.length = 0;
     if (!cards || !cards.length) {
       state.mock.push("cards (no signals matched right now)");
       return;
     }
-    bag.CARDS.length = 0;
     cards.forEach((c) => bag.CARDS.push(toCard(c)));
     state.real.push(cards.length + " cards from live scanners");
   }
@@ -166,6 +196,10 @@ window.PulseLive = (function () {
     /* Every country the customer base is in, for the lens. Not derived from
        the board: the board scores one page and most of it has no country. */
     state.countries = data.countries || null;
+    /* The same, narrowed to this rep's own book — what the lens should show
+       on "me" scope, so it doesn't offer 40 countries the person has no
+       accounts in at all. */
+    state.myCountries = data.myCountries || null;
     state.can = data.can || {};
     /* Two different questions, and they used to be answered by one value.
        `signedInAs` is the person holding the session — that is the identity the
@@ -199,16 +233,16 @@ window.PulseLive = (function () {
     const wall = (data.wall || []).concat(data.myAccounts || []);
     const seen = new Set();
     const unique = wall.filter((a) => (seen.has(a.id) ? false : seen.add(a.id)));
-    if (unique.length) {
-      bag.BOOK.length = 0;
-      unique.forEach((a) => bag.BOOK.push(toBookRow(a)));
-      unique.forEach((a) => {
-        bag.CUST[a.name] = bag.CUST[a.name] || toCustStub(a);
-        state.ids[a.name] = a.id;
-      });
-      state.wallNext = data.wallNext ?? null;
-      real.push(unique.length + " accounts (ms_user + user_handled_by)");
-    }
+    // A real (even empty) wall answer replaces the sample book — an owner with
+    // zero accounts today must see zero, not the prototype's eighteen.
+    bag.BOOK.length = 0;
+    unique.forEach((a) => bag.BOOK.push(toBookRow(a)));
+    unique.forEach((a) => {
+      bag.CUST[a.name] = bag.CUST[a.name] || toCustStub(a);
+      state.ids[a.name] = a.id;
+    });
+    state.wallNext = data.wallNext ?? null;
+    real.push(unique.length + " accounts (ms_user + user_handled_by)");
 
     if (data.growth) {
       ["me", "team", "company"].forEach((scope) => {
@@ -221,7 +255,15 @@ window.PulseLive = (function () {
         delete g.delta;
       });
       real.push("growth stats (signups, payers, unowned)");
-      mock.push("the score itself — weighted to promises and recoveries Pulse does not record yet");
+      // Not pushed to `mock`: deleting score/delta means pulse.js's own
+      // render (`g.score==null?"":...`) shows nothing where the score would
+      // go, not a fake number standing in for it. There is nothing fake on
+      // screen here to disclose — flagging an honest, correctly-hidden gap
+      // as "sample data" just confused people into thinking something was
+      // broken. The gap itself is still real (no mailbox means no promise
+      // tracking) — it is just not something a person can mistake for a
+      // live number, so it does not belong in the same banner as CARDS/BOOK
+      // ever showing invented content in place of real content.
     }
 
     // Carry the owner name onto every stub so the company header can show it.
@@ -415,7 +457,18 @@ window.PulseLive = (function () {
 
   const checkConnections = () => { checkMsg91(); checkStore(); };
 
-  /** Replace the audit feed with real staff actions. */
+  /**
+   * Replace the audit feed with real staff actions.
+   *
+   * Used to patch `bag.AUTO.audit.f`/`.sys` — the prototype's own mock object
+   * — in place, and only on success. That meant "still loading" and "the
+   * fetch just failed" looked identical to a reader: the mock rows ("Sample
+   * Rep 3 revealed…") just sat there either way, silently, forever, with
+   * nothing on screen admitting it was not real. `state.audit` is a separate
+   * value now, explicitly null until this answers — the Audit tab shows a
+   * skeleton while it's null and an honest error if it stays null with
+   * `state.auditError` set, instead of ever falling back to the seed copy.
+   */
   async function loadAudit(bag, render) {
     try {
       // Two sources, one log. Legacy staff changes come from MSG91's own change
@@ -433,28 +486,38 @@ window.PulseLive = (function () {
         "approve",
         "ok",
       ]);
-      bag.AUTO.audit.f = humanRows.concat(
-        data.rows.map((r) => [r.when, r.actor + " " + r.what, r.detail, "config", r.tag]),
+      const f = humanRows.concat(
+        // The kind used to be r.tag — "act" for admin_updation_log type 1 only,
+        // everything else uncolored — so two rows both labeled "config" could
+        // render one blue and one not, with nothing on screen explaining why.
+        // "config" now drives both the label and the color consistently.
+        data.rows.map((r) => [r.when, r.actor + " " + r.what, r.detail, "config", "config"]),
       );
-      if (data.anomaly) {
-        bag.AUTO.audit.sys = [
-          "Anomaly",
-          data.anomaly.actor +
-            " changed " +
-            data.anomaly.changes +
-            " things across " +
-            data.anomaly.accounts +
-            " accounts in 24 hours.",
-          data.anomaly.note + " Window " + data.anomaly.window + ".",
-        ];
-      }
+      const sys = data.anomaly
+        ? [
+            "Anomaly",
+            data.anomaly.actor +
+              " changed " +
+              data.anomaly.changes +
+              " things across " +
+              data.anomaly.accounts +
+              " accounts in 24 hours.",
+            data.anomaly.note + " Window " + data.anomaly.window + ".",
+          ]
+        // No anomaly right now is a real, good answer — not "not loaded yet" —
+        // so this is an empty array, never the mock sentence left standing in.
+        : [];
+      state.audit = { f, sys };
+      state.auditError = null;
       state.auditNext = data.nextCursor ?? null;
       // The old "abandoned at step N" feed had its own tab and no longer does:
       // suppression is an action type in Activity now, filtered by a chip. The
       // query is dropped rather than kept for a surface nothing renders.
       render();
     } catch (err) {
+      state.auditError = err.message;
       console.warn("[pulse] audit failed:", err.message);
+      render();
     }
   }
 
@@ -489,7 +552,14 @@ window.PulseLive = (function () {
 
       render();
     } catch (err) {
+      // Distinct from "nothing decided yet" above: that is a real, good answer
+      // from the store. This is the store refusing to answer at all, and
+      // state.autopilot staying null for that reason is what let "1,842
+      // signals" — the prototype's own number — sit on screen looking real
+      // indefinitely. autopilotError is what lets the header say so instead.
+      state.autopilotError = err.message;
       console.warn("[pulse] autopilot decisions failed:", err.message);
+      render();
     }
   }
 
@@ -704,6 +774,22 @@ window.PulseLive = (function () {
     }
   }
 
+  /**
+   * The automations actually built and running — pulse_automation, built via
+   * the planner (build.ts), not the sentence-rule compiler. Shown alongside
+   * the motion rules so a rule somebody built this way is not invisible next
+   * to the ones seeded with the product.
+   */
+  async function loadAutomations(render) {
+    try {
+      const d = await get("/api/pulse/autopilot/automations");
+      state.automations = d.automations || [];
+      if (render) render();
+    } catch (err) {
+      console.warn("[pulse] automations failed:", err.message);
+    }
+  }
+
   async function ruleAction(payload, then) {
     try {
       const res = await fetch("/api/pulse/autopilot/rules", {
@@ -790,17 +876,28 @@ window.PulseLive = (function () {
    * Unlike compileRule, this one writes something real — a running automation
    * — so it is only offered from the same screen, one button over.
    */
-  async function buildAutomation(motion, english, cb) {
+  async function buildAutomation(motion, english, cb, eventName) {
     try {
       const res = await fetch("/api/pulse/autopilot/build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ motion, english }),
+        body: JSON.stringify(eventName ? { motion, english, eventName } : { motion, english }),
       });
       const out = await res.json();
       cb(out);
     } catch (err) {
       cb({ ok: false, error: err.message });
+    }
+  }
+
+  /** The fixed event catalogue for the Rules page's "when this happens" dropdown. */
+  async function loadEventCatalogue(cb) {
+    try {
+      const res = await fetch("/api/pulse/autopilot/build");
+      const out = await res.json();
+      cb(out.ok ? out.events : []);
+    } catch {
+      cb([]);
     }
   }
 
@@ -812,6 +909,20 @@ window.PulseLive = (function () {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "retire", key }),
       });
+      const out = await res.json();
+      if (then) then(out);
+    } catch (err) {
+      if (then) then({ ok: false, error: err.message });
+    }
+  }
+
+  /** Delete an automation entirely — tears down its cron job/agent and removes the row. */
+  async function deleteAutomation(key, then) {
+    try {
+      const res = await fetch(
+        "/api/pulse/autopilot/automations?key=" + encodeURIComponent(key),
+        { method: "DELETE" },
+      );
       const out = await res.json();
       if (then) then(out);
     } catch (err) {
@@ -874,16 +985,22 @@ window.PulseLive = (function () {
   async function loadFlight(bag, render) {
     try {
       const d = await get("/api/pulse/autopilot/decisions?view=flight&limit=12");
-      if (!d.rows.length) return;
+      // Cleared even when there is nothing real to show: an early `return`
+      // here left the hardcoded sample rows on screen forever whenever the
+      // account genuinely had zero in-flight items, indistinguishable from
+      // the fake data never having been replaced at all.
       bag.FLIGHT.length = 0;
       d.rows.forEach((r) => {
         // The renderer appends the "d" itself, so days stays a number here.
         bag.FLIGHT.push([r.account, r.what, r.ball, r.days, r.old ? 1 : 0, r.doing]);
       });
       state.real.push("in flight (drafts held, timers set, messages out)");
+      state.flightLoaded = true;
       render();
     } catch (err) {
       console.warn("[pulse] in flight failed:", err.message);
+      state.flightLoaded = true;
+      render();
     }
   }
 
@@ -924,6 +1041,28 @@ window.PulseLive = (function () {
     }
   }
 
+  /**
+   * Open an account the reader has never had in their book — a decision log
+   * row (`Scored Account 50`) carries only an id, not a name, and an
+   * automation can easily score accounts nobody owns. Fetches the account by
+   * id, builds the same stub `toCustStub` gives every other company on
+   * first open, and hands the resolved name back so the caller can switch
+   * the view the same way `openCompany` always has.
+   */
+  async function loadAccountById(id, bag, cb) {
+    try {
+      const d = await get("/api/pulse/accounts/" + id);
+      if (!d.ok || !d.account) { cb(null); return; }
+      const a = d.account;
+      state.ids[a.name] = a.id;
+      bag.CUST[a.name] = bag.CUST[a.name] || toCustStub(a);
+      cb(a.name);
+    } catch (err) {
+      console.warn("[pulse] account " + id + " failed:", err.message);
+      cb(null);
+    }
+  }
+
   /** Enrich a company page with its real detail the first time it is opened. */
   async function loadAccount(name, bag, render) {
     const id = state.ids[name];
@@ -938,6 +1077,7 @@ window.PulseLive = (function () {
          changes while you are looking at it, and the detail request is skipped
          entirely once the account is loaded. */
       loadTags(name, bag, render);
+      loadContacts(name, bag, render);
     }
     if (!id || !bag.CUST[name] || !bag.CUST[name].__stub) return;
     try {
@@ -956,6 +1096,12 @@ window.PulseLive = (function () {
          let you pick from — were fetched from MSG91 and thrown away. They are
          two lists now, under two headings, and only the notes page. */
       c.pe = (d.people || []).map((p) => [p.name, p.email, p.role || "member"]);
+      // Pulse's own additions to that list — see loadContacts below. Kept
+      // separate from c.pe rather than merged into it: MSG91's list cannot be
+      // added to or removed from here, and conflating the two would make a
+      // hand-added contact look editable the same way, or an invited member
+      // look removable, when only one of those is actually true.
+      if (c.peMine === undefined) c.peMine = [];
       /* Autopilot's own record of this company: what it decided, what it wrote
          and is holding, and what it intends to do next. */
       c.autopilot = d.autopilot || null;
@@ -1069,6 +1215,64 @@ window.PulseLive = (function () {
       bag.TAGS[name] = before;
       state.tagError = err.message;
       console.warn("[pulse] removing tag from " + name + " failed:", err.message);
+    }
+    render();
+  }
+
+  /**
+   * People at a company that MSG91 never invited — pulse_account_contact
+   * (migrations/021). "＋ Add a person" used to open the unrelated "Log what
+   * happened" sheet; this is the real table and the real calls behind it.
+   */
+  async function loadContacts(name, bag, render) {
+    const id = state.ids[name];
+    if (!id) return;
+    try {
+      const d = await get("/api/pulse/accounts/" + id + "/contacts");
+      const c = bag.CUST[name];
+      if (c) c.peMine = (d.contacts || []).map((p) => [p.id, p.name, p.role]);
+      render();
+    } catch (err) {
+      console.warn("[pulse] contacts for " + name + " failed:", err.message);
+    }
+  }
+
+  async function addContact(name, personName, role, bag, render) {
+    const id = state.ids[name];
+    if (!id) {
+      state.tagError = name + " is one of the prototype's sample companies, so there is no account to add a person to.";
+      render();
+      return;
+    }
+    try {
+      const d = await post("/api/pulse/accounts/" + id + "/contacts", { name: personName, role: role || null });
+      const c = bag.CUST[name];
+      if (c) c.peMine = (d.contacts || []).map((p) => [p.id, p.name, p.role]);
+      state.tagError = null;
+    } catch (err) {
+      state.tagError = err.message;
+      console.warn("[pulse] adding a person to " + name + " failed:", err.message);
+    }
+    render();
+  }
+
+  async function removeContact(name, personId, bag, render) {
+    const id = state.ids[name];
+    if (!id) return;
+    const c = bag.CUST[name];
+    const before = c ? c.peMine : [];
+    if (c) c.peMine = before.filter((p) => p[0] !== personId);
+    render();
+    try {
+      const res = await fetch(
+        "/api/pulse/accounts/" + id + "/contacts?id=" + personId,
+        { method: "DELETE", headers: { accept: "application/json" } },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.ok === false) throw new Error(body.error || "HTTP " + res.status);
+    } catch (err) {
+      if (c) c.peMine = before;
+      console.warn("[pulse] removing a person from " + name + " failed:", err.message);
     }
     render();
   }
@@ -1342,16 +1546,24 @@ window.PulseLive = (function () {
   /** Load more suppressed signups onto the Filtered feed. */
   /** Load more rows onto the audit feed. */
   async function loadMoreAudit(bag, render) {
-    if (state.auditNext == null) return;
+    if (state.auditNext == null || state.auditLoadingMore) return;
+    // Was still writing into bag.AUTO.audit.f — the mock object's own field —
+    // which loadAudit stopped reading from the moment state.audit became the
+    // real source of truth. The fetch was succeeding; the button just never
+    // showed it, because nothing renders that field any more.
+    state.auditLoadingMore = true;
+    render();
     try {
       const data = await get("/api/pulse/audit?view=staff&limit=25&cursor=" + state.auditNext);
-      bag.AUTO.audit.f = bag.AUTO.audit.f.concat(
-        (data.rows || []).map((r) => [r.when, r.actor + " " + r.what, r.detail, "config", r.tag]),
+      state.audit.f = state.audit.f.concat(
+        (data.rows || []).map((r) => [r.when, r.actor + " " + r.what, r.detail, "config", "config"]),
       );
       state.auditNext = data.nextCursor ?? null;
-      render();
     } catch (err) {
       console.warn("[pulse] more audit failed:", err.message);
+    } finally {
+      state.auditLoadingMore = false;
+      render();
     }
   }
 
@@ -1390,6 +1602,25 @@ window.PulseLive = (function () {
       state.voice.loaded = true;
       console.warn("[pulse] voice failed:", err.message);
     }
+    render();
+  }
+
+  /**
+   * The last 10 Gmail messages for Profile's "Recent mail" panel. Same
+   * loaded-once-then-cached shape as loadVoice: cheap the first time, no
+   * reason to refetch every time the tab re-renders.
+   */
+  async function loadGmailRecent(bag, render) {
+    if (state.gmailRecentLoaded) return;
+    try {
+      const data = await get("/api/pulse/gmail/recent");
+      state.gmailRecent = data.mails;
+      state.gmailRecentError = null;
+    } catch (err) {
+      state.gmailRecentError = err.message;
+      console.warn("[pulse] gmail recent failed:", err.message);
+    }
+    state.gmailRecentLoaded = true;
     render();
   }
 
@@ -1672,11 +1903,13 @@ window.PulseLive = (function () {
       bag.setBoard(boards[scope]);
       render();
     } catch (err) {
-      // Failed is not pending: fall back to the sample band rather than leaving
-      // a skeleton up for ever.
+      // Failed is not pending, and must repaint to say so — leaving boardLoaded
+      // true without a render() left the skeleton up (or, worse, whatever the
+      // previous scope had drawn) looking like the real answer forever.
       state.boardLoaded = true;
       delete boards[scope];
       console.warn("[pulse] board failed:", err.message);
+      render();
     }
   }
 
@@ -1687,7 +1920,11 @@ window.PulseLive = (function () {
     searchQuestions,
     compileRule,
     buildAutomation,
+    loadEventCatalogue,
     retireAutomation,
+    deleteAutomation,
+    loadAutomations,
+    loadAccountById,
     loadMotionRules,
     saveMotionRule,
     addMotionRule,
@@ -1716,11 +1953,15 @@ window.PulseLive = (function () {
     loadTags,
     addTags,
     removeTag,
+    loadContacts,
+    addContact,
+    removeContact,
     /* Reassignment. Real now: it writes to pulse_account_owner and the page
        reads its own write back. */
     loadVoice,
     addVoiceTrait,
     removeVoiceTrait,
+    loadGmailRecent,
     openReassign,
     closeReassign,
     pickRep,
@@ -1800,17 +2041,23 @@ window.PulseLive = (function () {
         loadDrafts(bag, render);
         loadManifest(bag, render);
         loadMotionRules(render);
+        loadAutomations(render);
         loadAsked(render);
         loadFlight(bag, render);
         loadMonthly(bag, render);
         loadAlerts(render);
       } catch (err) {
         state.error = err.message;
+        // Bootstrap itself failed, so apply() never ran and nothing is on the
+        // prototype's own list of what fell back — but every surface on
+        // screen is still the sample data it started with. Say so.
+        state.mock = ["the whole screen (bootstrap could not be reached: " + err.message + ")"];
         console.error(
           "[pulse] live data unavailable, showing the prototype's sample data instead:",
           err.message,
         );
         render();
+        updateMockBanner();
       }
     },
     loadAnswer,
@@ -1825,6 +2072,7 @@ window.PulseLive = (function () {
         state.mock.forEach((m) => lines.push("  · " + m));
       }
       console.log(lines.join("\n"), "font-weight:bold", "font-weight:normal");
+      updateMockBanner();
     },
   };
 })();

@@ -12,7 +12,8 @@ import { accountProducts } from "@/lib/pulse/products";
 import { ownerHistory } from "@/lib/pulse/ownership";
 import { page } from "@/lib/pulse/paginate";
 import { listTags } from "@/lib/pulse/tags";
-import { healthFor } from "@/lib/pulse/health";
+import { healthFor, type AccountHealth } from "@/lib/pulse/health";
+import { cachedHealthFor } from "@/lib/pulse/healthCron";
 import { recordReveal, revealsFor } from "@/lib/pulse/reveals";
 import { gate } from "@/lib/pulse/guard";
 
@@ -76,8 +77,19 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       forAccount(accountId).catch(() => null),
       reveal ? accountCommercial(accountId, account.currency) : Promise.resolve(null),
       /* The same score the board uses, with its four components — so "which
-         part moved" is answerable on the page the board sends you to. */
-      healthFor([{ id: accountId, hasOwner: Boolean(account.owner), ageDays: account.ageDays }]),
+         part moved" is answerable on the page the board sends you to.
+         Read from the cache the background pass fills first: opening this
+         page used to call the account-health agent live, every time, which
+         alone took 5-15s+ on top of everything else here — found live, the
+         hard way, from how slow a plain page open actually was. Only an
+         account the background pass has never reached yet falls back to
+         scoring it live, so the page is still correct on a genuinely first
+         visit — just not fast for that one case. */
+      (async (): Promise<Map<number, AccountHealth>> => {
+        const cached = await cachedHealthFor([accountId]);
+        if (cached.has(accountId)) return cached;
+        return healthFor([{ id: accountId, hasOwner: Boolean(account.owner), ageDays: account.ageDays }]);
+      })(),
       /* The company's tags, from Pulse's own store. Sent with the page rather
          than fetched after it, so they are there on the first paint — and
          degraded to an empty list on failure, like autopilot above, because a

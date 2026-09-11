@@ -4,6 +4,11 @@ import { redirect } from "next/navigation";
 import { gate } from "@/lib/pulse/guard";
 import AccessRemoved from "./access-removed";
 
+/* Fixed for the life of this server process, so it changes exactly on every
+   deploy/restart and never mid-session — enough to bust a stale cached copy
+   of the client scripts without churning the URL on every request. */
+const BUILD_ID = String(Date.now());
+
 /**
  * Pulse, behind the invite list.
  *
@@ -74,13 +79,27 @@ export default async function PulseShell() {
             <div className="hd2">Access</div>
             {/* Pulse is invite-only, so the list of who is in is a surface, not
                 a setting buried in a config file. Everyone who is in can see it
-                and can invite. */}
-            <button data-members="">Members · who can sign in</button>
+                and can invite. A real page (/members) rather than a sheet, so
+                it has an address, survives a refresh, and can be linked to a
+                teammate. */}
+            <a href="/members">Members · who can sign in</a>
             <div className="sp"></div>
             <button data-signout="" style={{ color: "var(--muted)" }}>Sign out</button>
           </div>
         </div>
       </header>
+
+      {/* Sample-data notice. Static markup, filled and shown by pulse-live.js
+          once it knows which parts of the bootstrap answer had to fall back
+          to the prototype's sample rows (state.mock) — previously that only
+          ever reached the console. Sits above the content rather than inside
+          #main so a re-render of the current screen never wipes it or a
+          dismissal out. */}
+      <div className="mockbar" id="mockbar" hidden role="status" aria-live="polite">
+        <span className="mockdot" aria-hidden="true"></span>
+        <span id="mockmsg"></span>
+        <button id="mockx" aria-label="Dismiss">✕</button>
+      </div>
 
       <main className="wrap" id="main" suppressHydrationWarning></main>
 
@@ -173,12 +192,16 @@ export default async function PulseShell() {
           {`window.PULSE_SIGNED_IN_AS=${JSON.stringify(me)}`}
         </Script>
       ) : null}
-      {/* The live-data layer must be defined before the renderer runs. */}
-      <Script src="/pulse-live.js" strategy="afterInteractive" />
-      <Script src="/pulse.js" strategy="afterInteractive" />
+      {/* The live-data layer must be defined before the renderer runs. A build
+          id on the query string means a fix here is never one stale cached
+          copy away from looking unfixed — no-cache still asks the browser to
+          revalidate, but a copy fetched before that header existed has no
+          reason to; a new URL on every deploy leaves it nothing to reuse. */}
+      <Script src={`/pulse-live.js?v=${BUILD_ID}`} strategy="afterInteractive" />
+      <Script src={`/pulse.js?v=${BUILD_ID}`} strategy="afterInteractive" />
       {/* Session upkeep, sign out, and the members sheet. Last, so the menu it
           binds to and the sheet markup it fills are both already there. */}
-      <Script src="/pulse-auth.js" strategy="afterInteractive" />
+      <Script src={`/pulse-auth.js?v=${BUILD_ID}`} strategy="afterInteractive" />
     </>
   );
 }

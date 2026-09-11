@@ -155,7 +155,10 @@ export function guard(raw: string, maxRows = MAX_ROWS): GuardResult {
       // "select ... from create_log" style names are fine; only reject when the
       // keyword is used as a statement or clause, i.e. followed by whitespace
       // and not preceded by a dot or backtick.
-      const asClause = new RegExp(`(^|[\\s(,])${word}\\s`, "i");
+      // The trailing `(\s|$)` matters: without it, a statement ending in a
+      // bare forbidden keyword with nothing after it (no trailing whitespace
+      // for `\s` to match) slipped past this specific check.
+      const asClause = new RegExp(`(^|[\\s(,])${word}(\\s|$)`, "i");
       if (asClause.test(lower)) return { ok: false, reason: `contains "${word}"` };
     }
   }
@@ -171,10 +174,15 @@ export function guard(raw: string, maxRows = MAX_ROWS): GuardResult {
     return { ok: true, sql: `${stmt.trim()} LIMIT ${maxRows}`, limit: maxRows, addedLimit: true };
   }
 
-  // `LIMIT a, b` means offset a, count b.
+  // `LIMIT a, b` means offset a, count b. The offset is not a row count and
+  // must survive being capped — replacing `LIMIT 500000, 10000` with a bare
+  // `LIMIT 200` used to silently turn "row 500,000 onward" into "the first
+  // 200 rows", answering a completely different question with no error.
+  const offset = limitMatch[2] !== undefined ? Number(limitMatch[1]) : null;
   const declared = Number(limitMatch[2] ?? limitMatch[1]);
   if (!Number.isFinite(declared) || declared > maxRows) {
-    const replaced = stmt.trim().replace(/\blimit\s+\d+\s*(?:,\s*\d+\s*)?$/i, `LIMIT ${maxRows}`);
+    const newLimit = offset !== null ? `${offset}, ${maxRows}` : `${maxRows}`;
+    const replaced = stmt.trim().replace(/\blimit\s+\d+\s*(?:,\s*\d+\s*)?$/i, `LIMIT ${newLimit}`);
     return { ok: true, sql: replaced, limit: maxRows, addedLimit: false };
   }
 
