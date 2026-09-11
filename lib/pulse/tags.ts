@@ -138,9 +138,15 @@ export async function addTag(
     [String(accountId), value, value.toLowerCase(), source, addedBy],
   );
   /* Fire-and-forget: an event automation reacting to this must never be the
-     reason adding a tag itself fails or feels slow. See events.ts. */
+     reason adding a tag itself fails or feels slow. See events.ts. after()
+     is what actually keeps this alive once the response has gone out — on
+     serverless compute (Vercel, or AWS Lambda / GCP Cloud Run once this
+     moves there) a bare un-awaited promise can be frozen mid-flight the
+     moment the request handler returns, with no error and the automation
+     simply never running. */
+  const { after } = await import("next/server");
   const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
-  emitEvent("account.tag_added", { accountId: String(accountId), tag: value, addedBy }).catch(() => {});
+  after(() => emitEvent("account.tag_added", { accountId: String(accountId), tag: value, addedBy }).catch(() => {}));
 }
 
 /** Remove a tag from a company. Case-insensitive, like adding one. */
@@ -151,8 +157,9 @@ export async function removeTag(accountId: number | string, tag: string): Promis
     value.toLowerCase(),
   ]);
   if (res.affectedRows > 0) {
+    const { after } = await import("next/server");
     const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
-    emitEvent("account.tag_removed", { accountId: String(accountId), tag: value }).catch(() => {});
+    after(() => emitEvent("account.tag_removed", { accountId: String(accountId), tag: value }).catch(() => {}));
   }
   return res.affectedRows > 0;
 }

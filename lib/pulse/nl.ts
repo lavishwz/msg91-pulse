@@ -154,12 +154,18 @@ export async function plan(question: string, who: string | null = null): Promise
     // ask the agent, exactly as if nothing had been remembered.
   }
 
+  // after(): a bare un-awaited promise can be frozen mid-flight the moment
+  // the request handler returns on serverless compute — see tags.ts's
+  // addTag for the full reasoning. Lower stakes here (a lost write just
+  // means this question asks the agent again next time), but the same fix
+  // applies for the same reason.
+  const { after } = await import("next/server");
   const first = await askOnce(question, []);
   if (!first.plan.needs_schema_for.length || first.plan.sql) {
-    void remember(question, schemaVersion(), first.plan, first.model, who).catch(() => {});
+    after(() => remember(question, schemaVersion(), first.plan, first.model, who).catch(() => {}));
     return { ...first.plan, rounds: 1, model: first.model, usage: first.usage };
   }
   const second = await askOnce(question, first.plan.needs_schema_for.slice(0, 8));
-  void remember(question, schemaVersion(), second.plan, second.model, who).catch(() => {});
+  after(() => remember(question, schemaVersion(), second.plan, second.model, who).catch(() => {}));
   return { ...second.plan, rounds: 2, model: second.model, usage: second.usage };
 }

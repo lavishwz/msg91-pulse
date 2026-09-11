@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { acquireLock, releaseLock } from "@/lib/store";
 import { getAutomation } from "@/lib/pulse/autopilot/automations";
 import { runOne } from "@/lib/pulse/autopilot/automation-runner";
@@ -34,15 +34,22 @@ import { runOne } from "@/lib/pulse/autopilot/automation-runner";
  * judge kept failing on schedule even though it always finished correctly
  * when called by hand with a patient timeout.
  *
- * The actual fix: this is a persistent Node process, not a serverless
- * function that dies the moment a response is sent — so the response does
- * not have to wait for the work. cron-job.org gets an immediate 200 and its
- * own timeout becomes irrelevant at any value; the real pass keeps running
- * after the response is sent, same guard/watermark/decision machinery,
- * same budget. A per-automation lock (same pattern runAutomations already
- * uses for the internal tick) stops two overlapping fires of the same
- * automation from double-processing rows if a pass ever runs longer than
- * the interval between schedule ticks.
+ * The actual fix: the response does not have to wait for the work — but on
+ * Vercel (a serverless runtime, not a persistent process the way this was
+ * first written and tested against a local tunnel) simply not awaiting a
+ * promise is not enough. Once a route handler returns, the platform is free
+ * to freeze or tear down the invocation at any moment; an un-awaited
+ * `runOne(...)` call could be silently cut off mid-pass with no error and no
+ * released lock, which is exactly the failure mode that must not happen
+ * unattended overnight. `after()` (next/server) is Next's own answer to
+ * this: it keeps the invocation alive to run its callback after the response
+ * has been sent, on Vercel specifically via Vercel's waitUntil under the
+ * hood. cron-job.org still gets an immediate 200 and its own timeout is
+ * still irrelevant at any value — the difference is the platform now knows
+ * to keep the process around for the real pass. A per-automation lock (same
+ * pattern runAutomations already uses for the internal tick) stops two
+ * overlapping fires of the same automation from double-processing rows if a
+ * pass ever runs longer than the interval between schedule ticks.
  */
 export async function POST(_req: Request, { params }: { params: Promise<{ key: string }> }) {
   const { key } = await params;
@@ -57,14 +64,17 @@ export async function POST(_req: Request, { params }: { params: Promise<{ key: s
     return NextResponse.json({ ok: true, skipped: "already running" });
   }
 
-  // Deliberately not awaited: see the comment above for why. Errors are
-  // caught here because nothing downstream is left to catch them once the
-  // response has already gone out.
-  runOne(a, Date.now() + 250_000)
-    .catch((err) => {
-      console.error(`[pulse] automation ${key} failed in the background:`, (err as Error).message);
-    })
-    .finally(() => releaseLock(`automation:${key}`, holder));
+  // Runs after the response is sent, but the invocation is kept alive for it
+  // — see the comment above for why that distinction matters here. Errors
+  // are caught inside because nothing downstream is left to catch them once
+  // the response has already gone out.
+  after(() =>
+    runOne(a, Date.now() + 250_000)
+      .catch((err) => {
+        console.error(`[pulse] automation ${key} failed in the background:`, (err as Error).message);
+      })
+      .finally(() => releaseLock(`automation:${key}`, holder)),
+  );
 
   return NextResponse.json({ ok: true, started: true });
 }

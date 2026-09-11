@@ -113,8 +113,11 @@ export async function inviteMember(
   const row = await readOne<MemberRow>(`${SELECT} WHERE email = ?`, [normalized]);
   if (!row) throw new Error("Invite was written but could not be read back");
   const member = toMember(row);
+  // after(): see tags.ts's addTag for why a bare un-awaited emitEvent is not
+  // safe on serverless compute.
+  const { after } = await import("next/server");
   const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
-  emitEvent("member.invited", { email: normalized, invitedBy, role }).catch(() => {});
+  after(() => emitEvent("member.invited", { email: normalized, invitedBy, role }).catch(() => {}));
   return member;
 }
 

@@ -93,8 +93,11 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
 
     await removeMember(id);
     forgetMembership(target.email);
+    // after(): see tags.ts's addTag for why a bare un-awaited emitEvent is
+    // not safe on serverless compute.
+    const { after } = await import("next/server");
     const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
-    emitEvent("member.removed", { email: target.email, removedBy: me.email }).catch(() => {});
+    after(() => emitEvent("member.removed", { email: target.email, removedBy: me.email }).catch(() => {}));
     return NextResponse.json({ ok: true, removed: target.email });
   } catch (err) {
     return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 503 });

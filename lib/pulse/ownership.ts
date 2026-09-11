@@ -195,15 +195,20 @@ export async function assignOwner(
   );
 
   if (ownerId !== null) {
+    // after(): see tags.ts's addTag for why a bare un-awaited emitEvent is
+    // not safe on serverless compute.
+    const { after } = await import("next/server");
     const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
-    emitEvent("account.reassigned", {
-      accountId,
-      accountName: a.accountName ?? null,
-      ownerId,
-      ownerName: a.ownerName ?? null,
-      previousOwnerId: a.previousOwnerId == null ? null : String(a.previousOwnerId),
-      assignedBy: actor,
-    }).catch(() => {});
+    after(() =>
+      emitEvent("account.reassigned", {
+        accountId,
+        accountName: a.accountName ?? null,
+        ownerId,
+        ownerName: a.ownerName ?? null,
+        previousOwnerId: a.previousOwnerId == null ? null : String(a.previousOwnerId),
+        assignedBy: actor,
+      }).catch(() => {}),
+    );
   }
 }
 

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { runHealthPass, healthCacheAge } from "@/lib/pulse/healthCron";
 
 /**
@@ -29,13 +29,17 @@ export async function POST(req: Request) {
   // Not awaited — same reasoning as the automation webhook's comment: this
   // account's real cron-job.org enforces roughly a 30s ceiling no matter what
   // requestTimeout is set to, and no per-call budget reliably stays under
-  // that once real GTWY latency is in the mix. This is a persistent process,
-  // so the response does not have to wait for the work; runHealthPass()
-  // already takes its own lock ("account-health"), so a fire that lands
-  // while a previous pass is still running just gets told so, cleanly.
-  runHealthPass(250_000).catch((err) => {
-    console.error("[pulse] health pass failed in the background:", (err as Error).message);
-  });
+  // that once real GTWY latency is in the mix. On Vercel a bare un-awaited
+  // call is not enough to survive the response being sent — after() is what
+  // actually keeps the invocation alive for it (see the automation webhook's
+  // comment for the full reasoning). runHealthPass() already takes its own
+  // lock ("account-health"), so a fire that lands while a previous pass is
+  // still running just gets told so, cleanly.
+  after(() =>
+    runHealthPass(250_000).catch((err) => {
+      console.error("[pulse] health pass failed in the background:", (err as Error).message);
+    }),
+  );
   return NextResponse.json({ ok: true, started: true });
 }
 

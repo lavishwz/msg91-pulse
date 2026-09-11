@@ -45,8 +45,11 @@ export async function recordConnected(
           connected_at = NOW(), disconnected_at = NULL`,
     [memberEmail, service, viasocketId, scriptId],
   );
+  // after(): see tags.ts's addTag for why a bare un-awaited emitEvent is not
+  // safe on serverless compute.
+  const { after } = await import("next/server");
   const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
-  emitEvent("connection.connected", { memberEmail, service }).catch(() => {});
+  after(() => emitEvent("connection.connected", { memberEmail, service }).catch(() => {}));
 }
 
 /** The script_id one member's connection runs actions with, or null if there isn't one yet. */
@@ -68,8 +71,9 @@ export async function recordDisconnected(memberEmail: string, service: Connectio
      ON DUPLICATE KEY UPDATE disconnected_at = NOW()`,
     [memberEmail, service],
   );
+  const { after } = await import("next/server");
   const { emitEvent } = await import("@/lib/pulse/autopilot/automation-runner");
-  emitEvent("connection.disconnected", { memberEmail, service }).catch(() => {});
+  after(() => emitEvent("connection.disconnected", { memberEmail, service }).catch(() => {}));
 }
 
 export type TeamConnectionSummary = {
