@@ -2070,14 +2070,82 @@ function vAuto(){
    whatever they opened next. */
 let openMailId=null;
 
+/**
+ * A date as something a person can read, or nothing at all.
+ *
+ * The mail list and thread both showed `new Date(x).toLocaleString()`
+ * unguarded. ViaSocket's two date fields are not the same format — the list
+ * gives ISO ("2026-09-11T16:57:47.000Z") and the thread gives RFC 2822
+ * ("Fri, 11 Sep 2026 16:57:47 +0000") — and anything either one cannot parse
+ * renders the literal string "Invalid Date" in the header of the mail, which
+ * reads as a bug in the mail rather than a missing field. An unparseable date
+ * is better shown as no date.
+ */
+function mailDate(v,opts){
+ if(!v)return "";
+ const d=new Date(v);
+ if(isNaN(d.getTime()))return "";
+ return d.toLocaleString("en-IN",opts||undefined);
+}
+
+/**
+ * The human half of a From header: "Ollama" out of "Ollama <hello@ollama.com>".
+ *
+ * The old expression was /<.*>/ — greedy and unanchored, so on a header
+ * carrying two addresses ("A <a@x>, B <b@y>") it matched from the first "<"
+ * to the last ">" and swallowed the second name along with both addresses.
+ * This takes the part before the first angle bracket instead, and falls back
+ * to the address itself when the header is a bare "<a@x>" with no name on it,
+ * since an empty sender line says less than an email address does.
+ */
+function mailSender(from){
+ const s=String(from||"").trim();
+ const name=s.split("<")[0].replace(/^["']|["']$/g,"").trim();
+ if(name)return name;
+ const addr=/<([^>]+)>/.exec(s);
+ return addr?addr[1]:(s||"Unknown sender");
+}
+
+/**
+ * Mail body text, escaped, with its URLs made clickable.
+ *
+ * Order matters and is the whole trick: escape first, then match URLs in the
+ * *escaped* text. Linkifying first and escaping after would escape the anchors
+ * into visible markup; escaping inside a replace callback on raw text risks
+ * putting an unescaped fragment into an href. Matching escaped text means the
+ * URL characters that matter here (& becomes &amp;) are already inert.
+ *
+ * The visible text of a long link is shortened while the href keeps every
+ * character. A real unsubscribe URL in this mailbox is 179 characters of
+ * unbroken hex — printed in full it is four lines of noise, and it was the
+ * thing that used to push the panel off its own width.
+ */
+function mailBodyHTML(text){
+ const safe=esc(text);
+ return safe.replace(/https?:\/\/[^\s<]+/g,(url)=>{
+  /* Trailing sentence punctuation is almost never part of the address. */
+  const trail=/[.,;:!?)\]]+$/.exec(url);
+  const href=trail?url.slice(0,-trail[0].length):url;
+  const tail=trail?trail[0]:"";
+  const shown=href.length>60?href.slice(0,48)+"…"+href.slice(-8):href;
+  return `<a href="${href}" target="_blank" rel="noopener noreferrer nofollow" class="maillink">${shown}</a>${tail}`;
+ });
+}
+
 /** The full thread (falling back to the list preview until it loads) plus any attachments. */
 function mailThreadHTML(messages,attachments,fallback){
+ const empty=`<span class="mailempty">This message has no text content — it was sent as HTML only. Open it in Gmail to read it.</span>`;
  const body=messages&&messages.length
+  /* The panel header already names the sender and the date of the mail that
+     was opened. Repeating them on the first message of a single-message
+     thread printed "Ollama <hello@ollama.com>" twice, one line under the
+     other. A per-message header earns its place only when there is more than
+     one message to tell apart. */
   ?messages.map((msg,i)=>`<div${i>0?' style="margin-top:18px;padding-top:18px;border-top:1px solid var(--line)"':""}>
-    <p class="why" style="font-weight:500;color:var(--ink);font-size:13.5px;margin:0">${esc(msg.from)}${
-      msg.date?` · ${esc(new Date(msg.date).toLocaleString("en-IN"))}`:""}</p>
-    <p class="why" style="margin-top:6px;white-space:pre-wrap">${esc(msg.body||"(no content)")}</p></div>`).join("")
-  :`<p class="why" style="white-space:pre-wrap">${esc(fallback||"(no content)")}</p>`;
+    ${messages.length>1?`<p class="why mailfrom">${esc(msg.from)}${
+      (d=>d?` · ${esc(d)}`:"")(mailDate(msg.date))}</p>`:""}
+    <div class="mailbody">${msg.body?mailBodyHTML(msg.body):empty}</div></div>`).join("")
+  :`<div class="mailbody">${fallback?mailBodyHTML(fallback):empty}</div>`;
  const att=attachments&&attachments.length
   ?`<h4>Attachments</h4>${attachments.map(a=>
     `<div class="lrow"><span class="nm2">📎 ${esc(a.filename)}</span>
@@ -2104,9 +2172,9 @@ function gmailRecentPanel(){
  }else{
   body=`<div class="feed" style="margin-top:14px">${mails.map(m=>
    `<div class="item" data-mail="${esc(m.id)}" role="button" tabindex="0">
-     <time>${m.date?esc(new Date(m.date).toLocaleDateString("en-IN",{day:"2-digit",month:"short"})):""}</time>
+     <time>${esc(mailDate(m.date,{day:"2-digit",month:"short"}))}</time>
      <div class="bd">
-      <b>${esc(m.from.replace(/<.*>/,"").trim()||m.from)}</b>
+      <b>${esc(mailSender(m.from))}</b>
       <span>${esc(m.subject)}</span>
       ${m.snippet?`<span class="snip">${esc(m.snippet)}</span>`:""}
      </div>
@@ -3547,10 +3615,10 @@ function openPanel(kind,arg){
   const m=mails.find(x=>x.id===arg);
   if(!m){$("#pk").hidden=true;return;}
   openMailId=m.id;
-  B.innerHTML=`<div class="pkh">${AVI(m.from,40)}
-   <div class="t4"><div class="lb2">Mail · ${esc(m.date?new Date(m.date).toLocaleString("en-IN"):"")}</div>
+  B.innerHTML=`<div class="pkh">${AVI(mailSender(m.from),40)}
+   <div class="t4"><div class="lb2">${(d=>d?`Mail · ${esc(d)}`:"Mail")(mailDate(m.date))}</div>
    <b>${esc(m.subject)}</b></div><button class="cx2" data-pkx>✕</button></div>
-   <p class="why" style="font-weight:500;color:var(--ink);font-size:14.5px;margin:20px 0 0">${esc(m.from)}</p>
+   <p class="why mailfrom" style="font-size:14.5px;margin:20px 0 0">${esc(m.from)}</p>
    <div id="mailThread">${mailThreadHTML(null,null,m.body||m.snippet)}</div>
    <p id="mailLoading" style="font-size:11.5px;color:var(--faint);margin-top:10px">
     <span class="inline-loader" style="margin-right:6px"></span>Loading the full thread${m.attachmentCount?" and attachments":""}…</p>

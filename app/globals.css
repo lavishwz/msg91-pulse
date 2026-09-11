@@ -677,6 +677,37 @@ h1 .sl{color:var(--faint)}
 .pk[hidden]{display:none}
 .pkb{width:min(560px,100%);height:100%;background:var(--paper);border-left:1px solid var(--line2);
  overflow-y:auto;padding:22px 30px 60px;box-shadow:-24px 0 60px -30px rgba(26,24,19,.4)}
+/* The panel is a fixed width and its content is a stranger's email. Nothing
+   inside it may set its own width: one unbreakable token — a 179-character
+   unsubscribe URL, a base64 fragment, a long filename — used to stretch the
+   panel past its own edge and take the header, the close button and the
+   scrollbar off screen with it. */
+.pkb{overflow-x:hidden}
+.pkb>*{max-width:100%}
+
+/* ── mail, read in the side panel ────────────────────────────────────────
+   The body is plain text out of somebody else's mail client: it keeps its own
+   line breaks (pre-wrap), and it may contain tokens longer than any line this
+   panel can offer. overflow-wrap:anywhere is what lets those break; without
+   it pre-wrap will happily render a single 179-character word straight off the
+   side of the page. `.why`'s 60ch is dropped here — the panel is already
+   narrower than that, and the cap only fought with the padding. */
+.mailbody{color:var(--ink2);margin:6px 0 0;font-size:13.5px;line-height:1.65;
+ white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;max-width:100%}
+.mailbody .maillink{color:var(--br);text-decoration:underline;text-underline-offset:2px;
+ overflow-wrap:anywhere}
+.mailbody .maillink:hover{color:var(--br-d)}
+.mailempty{color:var(--faint);font-style:italic;white-space:normal}
+/* One row, one height. The subject is somebody else's line of text and can be
+   any length; left to wrap it made its row stand taller than its neighbours
+   and broke the rhythm of the list. Scoped to mail rows so the other feeds
+   that share `.item .bd span` keep wrapping as they always have. */
+.item[data-mail] .bd span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mailfrom{font-weight:500;color:var(--ink);font-size:13.5px;margin:0;
+ overflow-wrap:anywhere;max-width:100%}
+/* The attachment row is a filename from elsewhere too, and `.lrow .nm2` sets a
+   150px floor that a long one blows straight through. */
+.pkb .lrow .nm2{min-width:0;overflow-wrap:anywhere}
 .pkh{display:flex;align-items:flex-start;gap:14px;padding-bottom:18px;border-bottom:1px solid var(--line);
  position:sticky;top:-22px;background:var(--paper);padding-top:22px;margin-top:-22px;z-index:2}
 .pkh .t4{flex:1;min-width:0}
