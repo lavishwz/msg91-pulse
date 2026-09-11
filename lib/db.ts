@@ -72,8 +72,25 @@ function createPool(): mysql.Pool {
     dateStrings: false,
     timezone: "Z",
     charset: "utf8mb4_general_ci",
+    /* Same remote-MySQL problem the store hit, and the same fix — see the
+       note in lib/store.ts. A remote server closes idle connections on its
+       own schedule, and mysql2 hands a closed one straight back out of the
+       pool: every call then fails with ECONNRESET until the process
+       restarts, which reads as "MSG91 is down" while the host answers the
+       command line perfectly. This pool had the keepalive half and not the
+       idleTimeout half, so it could still be holding a connection the server
+       had already hung up on. Every automation query, every board scoring
+       pass and every Ask answer goes through here.
+
+       maxIdle matters more here than it did for the store: on serverless
+       each concurrent invocation is its own process with its own pool, so
+       "ten connections" is ten per instance. Retiring idle ones keeps a
+       burst of traffic from leaving a long tail of frozen instances each
+       holding connections open against a shared read-only host. */
     enableKeepAlive: true,
     keepAliveInitialDelay: 10_000,
+    idleTimeout: 60_000,
+    maxIdle: 2,
   });
 }
 
