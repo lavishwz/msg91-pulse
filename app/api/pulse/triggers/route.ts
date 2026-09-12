@@ -126,6 +126,7 @@ export async function POST(req: NextRequest) {
       trigger.id,
       authId,
       hookUrlFor(sub.hookKey),
+      trigger.inputData,
     );
     await recordSubscribed(sub.id, scriptId, hookUrl);
     return NextResponse.json({ ok: true, id: sub.id, label: trigger.label });

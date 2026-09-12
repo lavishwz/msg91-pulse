@@ -120,50 +120,45 @@ export type ViasocketTrigger = {
   id: string;
   label: string;
   description: string;
+  /** Fixed inputData for this trigger's own subscribe call — see below. */
+  inputData: Record<string, unknown>;
 };
 
 /**
- * The triggers a service offers.
+ * The triggers Gmail offers, read off ViaSocket's own dashboard and pasted in
+ * — nothing lists a service's triggers by API (`/embed/*` 404s on every
+ * plausible catalogue route), so this is what everyone using this API does,
+ * the same provenance as the action_version_ids in lib/pulse/gmail.ts.
  *
- * These are configuration, not discovery, and that is not a shortcut — it is
- * what ViaSocket leaves us. Nothing lists a service's triggers: `/embed/*`
- * serves enable, subscribe, list-options and the flow list and 404s
- * ("Route does not exist") on every plausible catalogue route; plug-service's
- * /plugins/search answers the same upstream 400 whatever it is asked; and the
- * published embed docs describe the SDK rather than any such API. The
- * action_version_ids already in lib/pulse/gmail.ts (rowgko0n0edh and friends)
- * have exactly this provenance too — read off the ViaSocket dashboard and
- * pasted in.
+ * Hardcoded here rather than an env var on purpose: none of these ids are
+ * secrets (same reasoning as GMAIL_SERVICE_ID above) — they're just which
+ * trigger, not a credential — so there's no reason to push them through
+ * config. A wrong id is a code review away from being caught instead of a
+ * silent env typo.
  *
- * So the ids live in the environment rather than in this file: adding a
- * trigger becomes a config change rather than a deploy, and a wrong id can be
- * corrected without touching code.
- *
- *   VIASOCKET_GMAIL_TRIGGERS=[{"id":"row…","label":"New mail received",
- *                              "description":"Fires when a message arrives"}]
+ * `inputData` is fixed per trigger rather than collected from the person
+ * subscribing: both real Gmail triggers need a `thread` choice and nothing
+ * else required, so "first_email_only", no sender/subject filter — the
+ * broadest, simplest version of each — is hardcoded rather than building a
+ * picker UI for a field nobody has to set. "New Attachment" (row0c62qpq3t)
+ * requires a `label` id with no sensible universal default and needs a real
+ * list-options picker to choose one, so it isn't offered yet.
  */
-function triggersFromEnv(varName: string): ViasocketTrigger[] {
-  const raw = (process.env[varName] ?? "").trim();
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter((t) => t && typeof t.id === "string" && t.id.trim())
-      .map((t) => ({
-        id: String(t.id).trim(),
-        label: String(t.label ?? t.id).trim(),
-        description: String(t.description ?? "").trim(),
-      }));
-  } catch {
-    // A malformed value is a misconfiguration, not a reason to fail the page:
-    // the UI renders "none configured" and says why, same as an unset variable.
-    return [];
-  }
-}
-
 export function gmailTriggers(): ViasocketTrigger[] {
-  return triggersFromEnv("VIASOCKET_GMAIL_TRIGGERS");
+  return [
+    {
+      id: "rowubk94iqsc",
+      label: "New email received",
+      description: "Fires the moment a message arrives in the mailbox.",
+      inputData: { thread: "first_email_only" },
+    },
+    {
+      id: "rowpw1i7ci9h",
+      label: "New email sent",
+      description: "Fires when a new message appears in Sent.",
+      inputData: { thread: "first_email_only" },
+    },
+  ];
 }
 
 /**

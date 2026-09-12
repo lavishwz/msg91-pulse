@@ -3476,8 +3476,9 @@ const RULEDEF={
  *                       "Gmail offers no triggers"
  *   failed to load    — the error, not the last good catalogue: a stale list
  *                       is a set of buttons that may no longer do anything
- *   none configured   — VIASOCKET_GMAIL_TRIGGERS is unset. That is a
- *                       deployment gap with a specific fix, so it says so
+ *   none configured   — the catalogue in lib/pulse/viasocket.ts's
+ *                       gmailTriggers() came back empty, which should not
+ *                       happen; kept as a safety net, not the normal path
  *   not connected     — a trigger watches a mailbox; there has to be one
  */
 function gmailTriggerCard(){
@@ -3496,11 +3497,7 @@ function gmailTriggerCard(){
   return box(`<p style="margin-top:10px;color:var(--ink2)">Connect Gmail first — a trigger needs a mailbox to watch.
    <span class="pen" data-connect="gmail" style="cursor:pointer;color:var(--br)" role="button" tabindex="0">Connect Gmail</span></p>`);
  if(!t.catalogue.length)
-  return box(`<p style="margin-top:10px;color:var(--ink2)">No Gmail triggers are configured yet.</p>
-   <p style="font-size:12.5px;color:var(--faint);margin-top:8px">ViaSocket publishes no API that lists a service's
-   triggers, so their ids come from its dashboard the same way the action ids in lib/pulse/gmail.ts did.
-   Set <code>VIASOCKET_GMAIL_TRIGGERS</code> to a JSON array of
-   <code>{"id","label","description"}</code> and they appear here.</p>`);
+  return box(`<p style="margin-top:10px;color:var(--ink2)">No Gmail triggers are available right now.</p>`);
 
  const subFor=id=>t.subscriptions.find(s=>s.triggerVersionId===id);
  const rows=t.catalogue.map(c=>{
