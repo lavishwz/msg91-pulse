@@ -27,7 +27,7 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;pad
 .mark{width:25px;height:25px;border-radius:7px;background:var(--br);color:#fff;display:grid;
  place-items:center;font-family:var(--m);font-size:12px}
 /* Search owns the middle of the header. Copied from pulse-v2-game. */
-.askbar{flex:1;max-width:420px;margin:0 auto;display:flex;align-items:center;gap:10px;
+.askbar{flex:1;min-width:0;max-width:420px;margin:0 auto;display:flex;align-items:center;gap:10px;
  background:var(--raise);border:1px solid var(--line2);border-radius:10px;padding:8px 13px;
  font-size:14px;color:var(--faint);cursor:text}
 .askbar:hover{border-color:var(--br)}
@@ -35,7 +35,7 @@ button{font:inherit;color:inherit;background:none;border:none;cursor:pointer;pad
 .askbar .kk2{font-family:var(--m);font-size:10px;color:var(--faint);border:1px solid var(--line2);
  border-radius:4px;padding:1px 5px}
 .hint{font-family:var(--m);font-size:10px;letter-spacing:.05em;color:var(--faint)}
-.who{display:flex;align-items:center;gap:9px;font-size:14px;color:var(--ink2)}
+.who{display:flex;align-items:center;gap:9px;font-size:14px;color:var(--ink2);flex:none}
 .avi{width:28px;height:28px;border-radius:8px;background:var(--br-s);color:var(--br-d);
  display:grid;place-items:center;font-family:var(--m);font-size:10.5px}
 
@@ -200,7 +200,7 @@ h1 .sl{color:var(--faint)}
 .feed{margin-top:24px}
 .item{display:flex;gap:15px;padding:14px 0;border-bottom:1px solid var(--line);align-items:baseline}
 .item time{font-family:var(--m);font-size:11px;color:var(--faint);min-width:48px;flex:none}
-.item .bd{flex:1;min-width:0}
+.item .bd{flex:1;min-width:0;overflow-wrap:anywhere}
 .item .bd b{font-weight:500;font-size:14.5px}
 .item .bd span{color:var(--muted);display:block;font-size:13px;margin-top:2px;line-height:1.5}
 .tg{font-family:var(--m);font-size:9.5px;letter-spacing:.06em;padding:3px 8px;border-radius:5px;
@@ -834,6 +834,19 @@ h1 .sl{color:var(--faint)}
 .mate .mv3{font-family:var(--m);font-size:13px;color:var(--ok);flex:none;text-align:right}
 .mate .mv3 em{font-style:normal;display:block;font-size:11px;color:var(--faint);margin-top:3px}
 
+/* .mate is avatar + label + a right-aligned stat in one row. The stat
+   ("78%" plus "without a person" underneath) has no flex-shrink room to
+   give — it's already as narrow as its own text allows — so below 480px
+   the label (.mb, flex:1) was the one being squeezed, down to one word per
+   line. Wrapping the row moves the stat onto its own line instead, and
+   .mb gets the full width to itself. */
+@media(max-width:480px){
+ .mate{flex-wrap:wrap}
+ .mate .mv3{flex-basis:calc(100% - 50px);margin-left:50px;text-align:left;margin-top:-4px}
+ .mate .mv3 em{display:inline;margin-top:0}
+ .mate .mv3 em::before{content:" · "}
+}
+
 /* ⌘K resting state · views, pinned questions, recent, do */
 .vrow{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:8px;width:100%;font-size:14.5px}
 .vrow[aria-selected="true"]{background:var(--sink)}
@@ -1003,11 +1016,7 @@ h1 .sl{color:var(--faint)}
 /* Members. A page of its own (/members) — it used to be a sheet, but the one
    screen that answers "who can sign in" deserves an address bar entry. */
 .mempage{max-width:640px;margin:0 auto;padding-top:48px}
-.members-top .brand,.members-top .who,.members-nav a{color:inherit;text-decoration:none}
-.members-nav{display:flex;align-items:center;gap:4px;margin:0 auto}
-.members-nav a{padding:5px 10px;border-radius:7px;font-size:13.5px;color:var(--muted)}
-.members-nav a:hover,.members-nav a[aria-current="page"]{background:var(--sink);color:var(--ink)}
-.members-top .who{margin-left:0}
+.members-top .brand,.members-top .who{color:inherit;text-decoration:none}
 .mempage .back{display:inline-block;font-size:13px;color:var(--muted);margin-bottom:20px}
 .mempage .back:hover{color:var(--br)}
 .mempage h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.02em}
@@ -1018,8 +1027,9 @@ h1 .sl{color:var(--faint)}
 .mem .av2{width:30px;height:30px;border-radius:8px;background:var(--br-s);color:var(--br-d);
  display:grid;place-items:center;font-family:var(--m);font-size:10.5px;flex:none}
 .mem .tx2{flex:1;min-width:0}
-.mem .tx2 b{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis}
-.mem .tx2 span{font-size:12.5px;color:var(--faint)}
+.mem .tx2 b{display:block;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mem .tx2 span{font-size:12.5px;color:var(--faint);overflow-wrap:anywhere}
+.memctl{display:flex;align-items:center;gap:12px;flex:none;min-width:0}
 .mem .pill{font-family:var(--m);font-size:9px;letter-spacing:.06em;text-transform:uppercase;
  border-radius:999px;padding:2px 8px;border:1px solid var(--line2);color:var(--muted)}
 .mem .pill[data-on="active"]{border-color:var(--ok);color:var(--ok)}
@@ -1061,15 +1071,24 @@ h1 .sl{color:var(--faint)}
    ═══════════════════════════════════════════════════════════════════════ */
 @media (max-width:760px){
  .members-top{gap:10px}
- .members-nav{gap:0}
- .members-nav a{padding:5px 7px;font-size:12.5px}
- .members-top .who{font-size:0}
+ /* Same squeeze as the account-owned reads-elsewhere: pill + role control +
+    remove button are three fixed-width things that don't have anywhere left
+    to shrink to, so below 600px they move to a row of their own under the
+    name/email instead of eating .tx2 down to nothing. */
+ .mem{flex-wrap:wrap;row-gap:8px}
+ .memctl{flex:1 1 100%;margin-left:0;padding-left:42px;min-width:0}
+ .memctl .memrole{min-width:0;flex-shrink:1}
+ .memf{flex-wrap:wrap}
 
  /* header: the search bar gives up its fixed max-width and its keyboard
-    hint, which mean nothing on a screen with no ⌘ key */
+    hint, which mean nothing on a screen with no ⌘ key. The signed-in name
+    goes too — it's decorative here (it's also the first line of the menu
+    the button opens) — but the avatar stays: it's still what says "this is
+    the account button" once the name is gone. */
  .askbar span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
  .askbar .kk2{display:none}
- .who button#abtn span{display:none}
+ .whoname{display:none}
+ .who{gap:0}
  .amenu{width:min(224px,calc(100vw - 24px))}
 
  /* grids that were only ever laid out two-across */
@@ -1099,6 +1118,18 @@ h1 .sl{color:var(--faint)}
 
  /* status bar: keep it clear of the home-indicator/gesture area on iOS */
  .dbbar{bottom:calc(12px + env(safe-area-inset-bottom))}
+
+ /* Icon-only close buttons (peek panel, sample-data banner) were sized for a
+    mouse pointer — 44px is the accepted minimum comfortable touch target,
+    and these were nowhere near it. Padding grows the hit area without
+    blowing up the glyph itself. */
+ .pkh .cx2{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;margin:-11px -11px -11px 0}
+ .mockbar #mockx{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center;margin:-13px 0}
+ /* .skip is a text-styled button (onboarding's Close/Back/"I will do this
+    later", a card's "Not mine") — plenty of width from its label, but with
+    no padding at all its height was whatever the font gave it, well under
+    a comfortable tap target. */
+ .skip{min-height:44px;display:inline-flex;align-items:center}
 }
 
 @media (max-width:480px){
@@ -1110,6 +1141,16 @@ h1 .sl{color:var(--faint)}
  .cxn .cta{width:100%}
  .money{grid-template-columns:1fr 1fr}
  .stats{grid-template-columns:repeat(2,1fr)}
+}
+
+/* A card's quick-action row (Evidence/Done/Snooze/Reassign/Wrong) is five
+   buttons wide — it fits a desktop .row next to the account name, but not
+   a phone one. Below 600px it drops margin-left:auto (which forced it onto
+   the same line as the account link) and wraps onto its own line instead,
+   same as .row already does for its other children. */
+@media(max-width:600px){
+ .qa{margin-left:0;flex-wrap:wrap;flex-basis:100%}
+ .qa button{padding:6px 9px}
 }
 
 /* Safe-area padding for the app when it's launched standalone (installed

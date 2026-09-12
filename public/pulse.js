@@ -1507,6 +1507,14 @@ function paint(){
   drawReassign();
   window.scrollTo({top:here===LASTPLACE?y:0});
   restoreFocus(focused);
+  /* .tabs scrolls horizontally on a narrow screen (five Autopilot tabs, or
+     Ask's own two, don't all fit) and every render recreates it from scratch,
+     which resets that scroll to 0 — so a render lands on Rules or Audit log
+     with the strip still showing Activity and no visible sign which tab is
+     actually open. Putting the selected button back in view undoes that,
+     on first paint and on every later one alike. */
+  const activeTab=main.querySelector(".tabs button[aria-selected=\"true\"]");
+  if(activeTab)activeTab.scrollIntoView({block:"nearest",inline:"nearest"});
  };
 
  /* Motion belongs to a navigation, not to a repaint.

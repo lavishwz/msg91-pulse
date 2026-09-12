@@ -35,13 +35,19 @@ export default async function MembersPage() {
         <a className="brand" href="/" aria-label="Pulse home">
           <span className="mark">P</span> Pulse
         </a>
-        <nav className="members-nav" aria-label="Primary navigation">
-          <a href="/">Now</a>
-          <a href="/ask">Ask</a>
-          <a href="/profile">Profile</a>
-        </nav>
-        <a className="who" href="/profile" aria-label="Open your profile">
-          {me.name} <span className="avi">{me.initials}</span>
+        {/* Every other screen's header is brand + search + who — this one
+            used to be its own thing (three text links), which is what read
+            as a different app the moment you landed here from anywhere else.
+            The bar doesn't need to open the palette from a plain page like
+            this one; it only needs to look like the same header, and take
+            you to the one that does. */}
+        <a className="askbar" href="/" aria-label="Ask or search anything">
+          <span>Ask or search anything</span>
+          <span className="gr3"></span>
+          <span className="kk2">⌘K</span>
+        </a>
+        <a className="who whow" href="/profile" aria-label="Open your profile">
+          <span className="whoname">{me.name}</span> <span className="avi">{me.initials}</span>
         </a>
       </header>
       <main className="wrap">

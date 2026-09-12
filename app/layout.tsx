@@ -13,6 +13,12 @@ export const metadata: Metadata = {
     statusBarStyle: "default",
     title: "Pulse",
   },
+  /* Next's `appleWebApp.capable` now only emits the standardised
+     `mobile-web-app-capable` tag, not the older `apple-mobile-web-app-capable`
+     one — Safari has honoured the standard tag since iOS 16.4, but anything
+     older only ever recognised the Apple-prefixed name, so it's added by hand
+     to actually get the standalone (no browser chrome) launch on those. */
+  other: { "apple-mobile-web-app-capable": "yes" },
   icons: {
     icon: [
       { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },

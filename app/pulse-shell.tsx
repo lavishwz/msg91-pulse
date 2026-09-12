@@ -58,7 +58,8 @@ export default async function PulseShell() {
         </div>
         <div className="who whow">
           <button id="abtn" style={{ display: "flex", alignItems: "center", gap: "9px" }}>
-            {me?.name ?? "Pulse"} <span className="avi">{me?.initials ?? "··"}</span>
+            <span className="whoname">{me?.name ?? "Pulse"}</span>{" "}
+            <span className="avi">{me?.initials ?? "··"}</span>
           </button>
           <div className="amenu" id="amenu" hidden>
             <div className="hd2">{me ? `${me.name} · Sales` : "Signed in"}</div>

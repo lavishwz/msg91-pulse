@@ -231,40 +231,45 @@ export default function MembersClient() {
                     {m.email} · {invitedByLabel(m.invitedBy)} · {when}
                   </span>
                 </span>
-                <span className="pill" data-on={m.status}>
-                  {m.status}
-                </span>
-                {can.canSetRole && !m.founder ? (
-                  <select
-                    className="memrole"
-                    aria-label={`Member type for ${m.email}`}
-                    value={m.role}
-                    disabled={busy}
-                    onChange={(e) => onChangeRole(m, e.target.value as Role)}
-                  >
-                    {ROLES.map((r) => (
-                      <option key={r} value={r}>
-                        {ROLE_LABEL[r]}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <span className="pill" data-role={m.role}>
-                    {ROLE_LABEL[m.role]}
+                {/* Grouped so the three of them can wrap onto their own row
+                    below the name/email on a narrow screen, instead of each
+                    squeezing .tx2 down to a few characters per line. */}
+                <span className="memctl">
+                  <span className="pill" data-on={m.status}>
+                    {m.status}
                   </span>
-                )}
-                {mayRemove ? (
-                  <button
-                    className="rm"
-                    disabled={busy}
-                    aria-label={`Remove ${m.email}`}
-                    onClick={() => onRemove(m)}
-                  >
-                    {isMe ? "Leave" : "Remove"}
-                  </button>
-                ) : (
-                  <span className="rm" aria-hidden="true"></span>
-                )}
+                  {can.canSetRole && !m.founder ? (
+                    <select
+                      className="memrole"
+                      aria-label={`Member type for ${m.email}`}
+                      value={m.role}
+                      disabled={busy}
+                      onChange={(e) => onChangeRole(m, e.target.value as Role)}
+                    >
+                      {ROLES.map((r) => (
+                        <option key={r} value={r}>
+                          {ROLE_LABEL[r]}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <span className="pill" data-role={m.role}>
+                      {ROLE_LABEL[m.role]}
+                    </span>
+                  )}
+                  {mayRemove ? (
+                    <button
+                      className="rm"
+                      disabled={busy}
+                      aria-label={`Remove ${m.email}`}
+                      onClick={() => onRemove(m)}
+                    >
+                      {isMe ? "Leave" : "Remove"}
+                    </button>
+                  ) : (
+                    <span className="rm" aria-hidden="true"></span>
+                  )}
+                </span>
               </div>
             );
           })}
