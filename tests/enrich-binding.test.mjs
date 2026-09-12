@@ -560,22 +560,27 @@ const tightDashes = bindPlaceholders("SELECT 5--3 AS x, :accountId FROM ms_user"
 check(tightDashes.names.length === 0, "5--3 is read as a comment, not as arithmetic — fails closed");
 check(tightDashes.sql === "SELECT 5--3 AS x, :accountId FROM ms_user", "and the statement is still returned byte-for-byte");
 
-/* Three: a `--` inside a string literal. bindPlaceholders gets this right —
-   the literal is a literal and the placeholder after it binds — but the guard
-   that runs next does not respect literals when it strips comments, and cuts
-   the statement at the marker. That is a defect in lib/pulse/sqlguard.ts, not
-   in enrich.ts, and it predates the comment fix; it is recorded here because
-   this is the path that reaches it. It returns ok:true on a statement whose
-   string literal is now unterminated and whose `?` is gone, so MySQL refuses
-   the prepare — loud, not silent, and nothing of the payload is in it. */
+/* Three: a `--` inside a string literal, end to end.
+   enrich has always read this correctly — a literal is a literal and the
+   placeholder after it binds. sqlguard did not: stripComments() knew nothing
+   about literals, so it cut the statement at the marker and returned ok:true on
+   the wreckage — an unterminated quote, no WHERE, and the `?` gone. It failed
+   loudly at the server rather than silently, and nothing of a payload ever
+   reached the SQL, but an ordinary query was being corrupted and then approved,
+   and the approving was the part that should never have happened.
+   sqlguard is literal-aware now, so this asserts the whole path: one
+   placeholder in, one slot out, literal intact on both sides. */
 const dashInLiteral = "SELECT user_bal FROM ms_user WHERE note = '-- :them' AND user_id = :accountId";
 const dashBound = bindPlaceholders(dashInLiteral);
 check(dashBound.names.join(",") === "accountId", "enrich reads a -- inside a literal correctly: one placeholder");
 check(dashBound.sql.includes("'-- :them'"), "and leaves the literal intact");
 const dashGuarded = guard(dashBound.sql, 50);
-check(dashGuarded.ok && qmarks(dashGuarded.sql) === 0,
-  "sqlguard's bug: it strips from the -- inside the literal and loses the slot");
-check(dashGuarded.ok && !dashGuarded.sql.includes(DROP), "even there, nothing of a payload is in the sql");
+check(dashGuarded.ok, "the guard accepts it rather than mangling it");
+check(dashGuarded.ok && qmarks(dashGuarded.sql) === dashBound.names.length,
+  "and the slot survives: one ? for one bound value, which is the pair MySQL compares");
+check(dashGuarded.ok && dashGuarded.sql.includes("'-- :them'"),
+  "the literal is still whole after the guard, marker and all");
+check(dashGuarded.ok && !dashGuarded.sql.includes(DROP), "and nothing of a payload is in the sql");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

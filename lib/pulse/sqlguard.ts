@@ -121,12 +121,74 @@ export type GuardResult =
   | { ok: true; sql: string; limit: number; addedLimit: boolean }
   | { ok: false; reason: string };
 
-/** Strip comments so keyword checks cannot be smuggled past in a comment. */
+/**
+ * Strip comments so keyword checks cannot be smuggled past in one — without
+ * touching a comment marker that is only part of a string.
+ *
+ * The three regexes this replaces did not know what a literal was, so
+ *
+ *     WHERE note = '-- nothing to see' AND user_id = 5
+ *
+ * was cut at the dashes: everything after them vanished, the statement was
+ * returned with an unterminated quote and no WHERE, and guard() answered
+ * ok: true on it. A prepared statement then failed at the server, which is
+ * loud rather than silent and nothing was ever injected — but it is a
+ * perfectly ordinary query being corrupted and then approved, and "approved"
+ * is the part that should never have happened.
+ *
+ * Blanked rather than removed, so every offset in the statement still lines up
+ * with the original for anything that reports a position.
+ */
 function stripComments(sql: string): string {
-  return sql
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/--[^\n]*/g, " ")
-    .replace(/#[^\n]*/g, " ");
+  let out = "";
+  let i = 0;
+  while (i < sql.length) {
+    const c = sql[i];
+
+    if (c === "'" || c === '"' || c === "`") {
+      const q = c;
+      out += c;
+      i++;
+      while (i < sql.length) {
+        if (sql[i] === "\\") { out += sql.slice(i, i + 2); i += 2; continue; }
+        if (sql[i] === q) {
+          /* A doubled quote is an escaped quote, not the end. */
+          if (sql[i + 1] === q) { out += q + q; i += 2; continue; }
+          out += q; i++; break;
+        }
+        out += sql[i]; i++;
+      }
+      continue;
+    }
+
+    if (c === "/" && sql[i + 1] === "*") {
+      const close = sql.indexOf("*/", i + 2);
+      const end = close === -1 ? sql.length : close + 2;
+      out += " ".repeat(end - i);
+      i = end;
+      continue;
+    }
+    /* MySQL only opens a `--` comment when whitespace follows, so `5--3` is
+       arithmetic. Matching that keeps a legitimate expression intact. */
+    if (c === "-" && sql[i + 1] === "-" && (sql[i + 2] === undefined || /[\s\0]/.test(sql[i + 2]))) {
+      const nl = sql.indexOf("\n", i);
+      const end = nl === -1 ? sql.length : nl;
+      out += " ".repeat(end - i);
+      i = end;
+      continue;
+    }
+    if (c === "#") {
+      const nl = sql.indexOf("\n", i);
+      const end = nl === -1 ? sql.length : nl;
+      out += " ".repeat(end - i);
+      i = end;
+      continue;
+    }
+
+    out += c;
+    i++;
+  }
+  return out;
 }
 
 /**
