@@ -186,14 +186,33 @@ export const CompiledRuleSchema = z.object({
 
 export type CompiledRule = z.infer<typeof CompiledRuleSchema>;
 
-/** What the planner returns for one English rule: a full, runnable build plan. */
+/**
+ * What the planner returns for one English rule: a full, runnable build plan.
+ *
+ * The four query fields are optional, and that is not laxness — it is the only
+ * way an event automation can be built at all.
+ *
+ * buildAutomation() tells the planner, for an event rule, "There is no
+ * database query — the payload itself is the one row to judge". These fields
+ * were nonetheless required, so a model that *obeyed* that instruction failed
+ * this schema and the build died at step "plan" with "find_sql Invalid input".
+ * A build could only succeed when the model disobeyed and invented a query —
+ * which was then thrown away two lines later, because the event branch saves
+ * findSql/subjectCol/watermarkCol as null regardless.
+ *
+ * Requiring them bought nothing even on the schedule path: an empty string
+ * satisfies z.string() and would fail the guard immediately afterwards with a
+ * better message than a schema error can give. So the real check stays where
+ * it belongs — guard() and dryRun() for the query, and the event branch simply
+ * ignores all four.
+ */
 export const AutomationPlanSchema = z.object({
   mode: z.enum(["cron", "event"]),
   when_event: z.string().optional().default(""),
-  cron_schedule: z.string(),
-  find_sql: z.string(),
-  subject_col: z.string(),
-  watermark_col: z.string(),
+  cron_schedule: z.string().optional().default(""),
+  find_sql: z.string().optional().default(""),
+  subject_col: z.string().optional().default(""),
+  watermark_col: z.string().optional().default(""),
   max_rows: z.number().int().positive(),
   executor_prompt: z.string(),
   optimized_rule_prompt: z.string(),
@@ -290,27 +309,65 @@ async function callAgent<T>(
   timeoutMs = 120_000,
 ): Promise<AgentCall<T>> {
   const id = agentId(key);
-  const reply = await chat({ user, agentId: id, variables, timeoutMs });
 
-  const parsed = schema.safeParse(extractJson(reply.content));
-  if (!parsed.success) {
-    throw new GtwyError(
-      `The ${AGENTS[key].slug} agent's reply did not match its schema: ` +
-        parsed.error.issues
-          .map((i) => `${i.path.join(".") || "(root)"} ${i.message}`)
-          .join("; ") +
-        `. Check the agent's prompt and JSON schema — see docs/autopilot-agent-prompts.md.`,
-      "BAD_AGENT_REPLY",
+  /**
+   * A reply that does not parse is retried; everything else is not.
+   *
+   * These are language models, so a malformed answer is a normal, occasional
+   * outcome rather than a fault to report. One call with no retry meant a
+   * single bad reply killed whatever asked for it — and building an automation
+   * is the worst place for that, because the person watching has already
+   * waited twenty-five seconds and gets a 502 with nothing saved. Seen live:
+   * twelve automations built through the deployed route, eleven fine and one
+   * dead on "expected object, received null" — the model had returned nothing
+   * parseable at all. Retrying it once would have built it.
+   *
+   * Only BAD_AGENT_REPLY is retried. A timeout, a refusal or a transport error
+   * is not something a second identical call fixes, and chat() already has its
+   * own handling for those; retrying them would just spend the caller's
+   * remaining budget before failing anyway.
+   *
+   * The parse error is fed back into the next attempt. Told what was wrong
+   * with the last answer, the model tends to fix that specific field rather
+   * than re-rolling the same mistake.
+   */
+  const ATTEMPTS = 3;
+  let lastIssues = "";
+  for (let attempt = 1; ; attempt++) {
+    const ask =
+      attempt === 1
+        ? user
+        : `${user}\n\nYour previous reply could not be used: ${lastIssues}. ` +
+          `Reply again with JSON only, matching the schema exactly.`;
+    const reply = await chat({ user: ask, agentId: id, variables, timeoutMs });
+    const parsed = schema.safeParse(extractJson(reply.content));
+
+    if (parsed.success) {
+      return {
+        data: parsed.data,
+        agent: AGENTS[key].slug,
+        agentId: id,
+        model: reply.model,
+        usage: reply.usage as Record<string, unknown>,
+      };
+    }
+
+    lastIssues = parsed.error.issues
+      .map((i) => `${i.path.join(".") || "(root)"} ${i.message}`)
+      .join("; ");
+
+    if (attempt >= ATTEMPTS) {
+      throw new GtwyError(
+        `The ${AGENTS[key].slug} agent's reply did not match its schema after ${ATTEMPTS} attempts: ` +
+          lastIssues +
+          `. Check the agent's prompt and JSON schema — see docs/autopilot-agent-prompts.md.`,
+        "BAD_AGENT_REPLY",
+      );
+    }
+    console.warn(
+      `[pulse] ${AGENTS[key].slug} reply did not parse (attempt ${attempt}/${ATTEMPTS}): ${lastIssues}`,
     );
   }
-
-  return {
-    data: parsed.data,
-    agent: AGENTS[key].slug,
-    agentId: id,
-    model: reply.model,
-    usage: reply.usage as Record<string, unknown>,
-  };
 }
 
 const today = () => new Date().toISOString().slice(0, 10);

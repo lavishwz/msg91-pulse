@@ -18,7 +18,7 @@ import { planAutomation } from "@/lib/pulse/agents";
 import { guard } from "@/lib/pulse/sqlguard";
 import { query, columnsOf } from "@/lib/db";
 import { write } from "@/lib/store";
-import { createCronJob, cronIntervalMinutes } from "@/lib/pulse/cronjob";
+import { createCronJob, deleteCronJob, cronIntervalMinutes } from "@/lib/pulse/cronjob";
 import { saveAutomation, type Motion, type Scope } from "./automations";
 import { EVENTS, isEventName, type EventName } from "./events";
 import { publicBaseUrl } from "@/lib/pulse/baseUrl";
@@ -239,6 +239,18 @@ export async function buildAutomation(
   }
 
   /* ── schedule automations: unchanged from before this feature ── */
+  /* find_sql is optional on the plan schema so an event rule can be built
+     without one (see AutomationPlanSchema). On this path it is the whole
+     point, so its absence is caught here with a message that says what the
+     planner actually did — rather than being handed to guard() as an empty
+     string and coming back as a parse complaint about nothing. */
+  if (!plan.find_sql?.trim()) {
+    return fail(
+      english, motion, ownerEmail, "plan",
+      "the planner returned no query for a scheduled rule. Say more plainly what it should look for, " +
+        "or pick an event instead if it should react to something happening inside Pulse.",
+    );
+  }
   const g = guard(plan.find_sql, Math.min(plan.max_rows || 50, 200));
   if (!g.ok) {
     return fail(english, motion, ownerEmail, "guard", "the planner's query is not safe to run: " + g.reason);
@@ -278,6 +290,17 @@ export async function buildAutomation(
     }
   }
 
+  /* From here the job exists at cron-job.org and is already on its schedule,
+     while the row it fires at does not exist yet. If the save below fails,
+     that job keeps calling /webhook/<key> for a key nothing will ever match —
+     forever, and invisibly, because a job firing into a 404 looks healthy from
+     cron-job.org's side.
+
+     This is not hypothetical: the automation inventory reports exactly one
+     such job today ("firing at an automation that no longer exists"), which is
+     what this leak leaves behind. The job is torn down on a failed save so the
+     failure is total rather than half-committed. */
+
   const saved = await saveAutomation({
     key,
     motion,
@@ -310,7 +333,21 @@ export async function buildAutomation(
     live: true,
   });
   if (!saved.ok) {
-    return fail(english, motion, ownerEmail, "save", saved.error);
+    /* Take the job back down — see the note above. Its own failure is reported
+       alongside the save's rather than replacing it: the save error is what
+       went wrong, and a job left behind is something a person has to know to
+       go and delete by hand. */
+    let orphan = "";
+    if (cronJobId) {
+      try {
+        await deleteCronJob(cronJobId);
+      } catch (err) {
+        orphan =
+          ` (and cron job ${cronJobId} could not be removed: ${(err as Error).message}` +
+          ` — it will keep firing at a rule that was never saved, delete it at cron-job.org)`;
+      }
+    }
+    return fail(english, motion, ownerEmail, "save", saved.error + orphan);
   }
 
   return {
