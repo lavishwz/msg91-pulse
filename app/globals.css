@@ -1198,3 +1198,42 @@ h1 .sl{color:var(--faint)}
  .card,.conn,.ru,.skwrap{opacity:1;transform:none;animation:none}
  ::view-transition-old(root),::view-transition-new(root){animation:none}
 }
+
+/* ---------------------------------------------------------------------------
+ * pulseFlash — the fallback message, for the window before react-hot-toast has
+ * mounted. toastDone used to call alert() here; this is the same information
+ * in something that looks like the product and leaves on its own.
+ *
+ * Fixed to the bottom on a phone and the top-right on a desktop, because on a
+ * phone the top is where the notch and the address bar are and the bottom is
+ * where the thumb already is.
+ * ------------------------------------------------------------------------ */
+#pflash{
+ position:fixed;z-index:9999;display:flex;flex-direction:column;gap:8px;
+ left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom));
+ pointer-events:none}
+.pflash-item{
+ pointer-events:auto;max-width:420px;margin:0 auto;width:100%;
+ padding:11px 14px;border-radius:10px;font-size:13.5px;line-height:1.45;
+ background:var(--ink);color:var(--paper,#fff);
+ box-shadow:0 10px 30px -10px rgba(26,24,19,.5);
+ animation:pflash-in .18s cubic-bezier(.22,.61,.36,1) both}
+.pflash-item[data-ok="0"]{background:var(--danger,#a8462a)}
+.pflash-item[data-out="1"]{animation:pflash-out .22s ease both}
+@keyframes pflash-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes pflash-out{to{opacity:0;transform:translateY(6px)}}
+@media (min-width:721px){
+ #pflash{left:auto;right:18px;bottom:auto;top:18px}
+ .pflash-item{margin:0}
+}
+@media (prefers-reduced-motion:reduce){
+ .pflash-item,.pflash-item[data-out="1"]{animation:none;opacity:1;transform:none}
+}
+
+/* A timestamp: "2h ago · 12 Sep, 6:45 pm", with the full moment in the tooltip.
+   The absolute half is hidden below 520px rather than allowed to wrap the line
+   in half — the relative reading is the one that still works at that width, and
+   the tooltip keeps the exact value one press away. */
+.tstamp{white-space:nowrap}
+.tstamp .tsec{color:var(--faint)}
+@media (max-width:520px){ .tstamp .tsec{display:none} }

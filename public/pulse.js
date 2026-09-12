@@ -894,6 +894,58 @@ const LOGDET={
 function esc(v){return String(v==null?"":v).replace(/[&<>"']/g,c=>
  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);}
 
+/* ── one way to write a moment ────────────────────────────────────
+ *
+ * Times were shown as "2h ago" and nothing else — fine for reading at a glance,
+ * useless for anything a person has to act on or compare. "Was that before or
+ * after the outage?" has no answer in "2h ago". Every timestamp now carries the
+ * real thing: the date, and the hour with am/pm.
+ *
+ * The year is dropped inside the current year, because it is noise on every
+ * line for the eleven months it is obvious, and kept the moment it is not.
+ * Seconds live in the tooltip, where the one person who needs them can find
+ * them without the other ninety-nine reading past them.
+ */
+function whenAbs(iso){
+ if(!iso)return "";
+ const d=new Date(iso);
+ if(isNaN(d))return "";
+ const sameYear=d.getFullYear()===new Date().getFullYear();
+ return d.toLocaleString("en-IN",{
+  day:"numeric",month:"short",...(sameYear?{}:{year:"numeric"}),
+  hour:"numeric",minute:"2-digit",hour12:true});
+}
+/** The full moment, for a title attribute: weekday, year, seconds. */
+function whenFull(iso){
+ if(!iso)return "";
+ const d=new Date(iso);
+ if(isNaN(d))return "";
+ return d.toLocaleString("en-IN",{
+  weekday:"short",day:"numeric",month:"short",year:"numeric",
+  hour:"numeric",minute:"2-digit",second:"2-digit",hour12:true});
+}
+function whenRel(iso){
+ if(!iso)return "never";
+ const s=(Date.now()-new Date(iso).getTime())/1000;
+ if(!isFinite(s))return "never";
+ if(s<0)return "in a moment";
+ if(s<60)return "just now";
+ if(s<3600)return Math.round(s/60)+"m ago";
+ if(s<86400)return Math.round(s/3600)+"h ago";
+ return Math.round(s/86400)+"d ago";
+}
+/**
+ * What goes on screen: the relative reading first because that is what the eye
+ * wants, the absolute beside it because that is what a decision needs, the full
+ * moment in the tooltip. `.tsec` lets the absolute half be hidden on a narrow
+ * screen without taking the sentence with it.
+ */
+function whenHTML(iso){
+ if(!iso)return `<span class="tstamp">never</span>`;
+ return `<span class="tstamp" title="${esc(whenFull(iso))}">${esc(whenRel(iso))}`
+  +`<span class="tsec"> · ${esc(whenAbs(iso))}</span></span>`;
+}
+
 function hue(n){let h=7;for(let i=0;i<n.length;i++)h=(h*31+n.charCodeAt(i))%360;return h;}
 function ini(n){const w=n.replace(/[^A-Za-z ]/g,"").trim().split(/\s+/);
  return ((w[0]||"?")[0]+(w[1]?w[1][0]:(w[0]||"?")[1]||"")).toUpperCase();}
@@ -2184,9 +2236,7 @@ function vAuto(){
   }else if(!autos.length){
    body=`<p style="margin:22px 0 0;color:var(--ink2)">No automations right now — nothing scheduled, nothing event-driven.</p>`;
   }else{
-   const rel=(iso)=>{if(!iso)return "never";const s=(Date.now()-new Date(iso).getTime())/1000;
-    if(s<60)return "just now";if(s<3600)return Math.round(s/60)+"m ago";
-    if(s<86400)return Math.round(s/3600)+"h ago";return Math.round(s/86400)+"d ago";};
+   /* whenHTML: relative, absolute and the full moment in one place. */
    body=`<div class="feed" style="margin-top:22px">${autos.map(a=>{
     const hist=AUTOHIST[a.key];
     const open=S.autoHist===a.key;
@@ -2197,7 +2247,7 @@ function vAuto(){
         ${a.live?"":`<em style="font-style:normal;font-size:11px;color:var(--watch);margin-left:6px">not scheduled</em>`}</b>
        <span>${a.motion} · ${a.mode==="cron"?(a.everyMinutes?"every "+a.everyMinutes+" min":"scheduled"):"on "+(a.whenEvent||"?")}
         · ${a.runCount} run${a.runCount===1?"":"s"} · ${a.alertCount} alert${a.alertCount===1?"":"s"}
-        · last run ${rel(a.lastRunAt)}${a.lastError?` · <span style="color:var(--danger,#a8462a)">${esc(a.lastError)}</span>`:""}</span></div>
+        · last run ${whenHTML(a.lastRunAt)}${a.lastError?` · <span style="color:var(--danger,#a8462a)">${esc(a.lastError)}</span>`:""}</span></div>
       <span class="pen" data-auto-hist="${a.key}" style="cursor:pointer;white-space:nowrap">${open?"hide history":"history"}</span>
       ${canEditRules()?`<span class="pen" data-automation-retire="${a.key}" style="cursor:pointer">turn off</span>
        <span class="pen" data-automation-delete="${a.key}" style="cursor:pointer;color:var(--danger,#a8462a)">delete</span>`:""}
@@ -3017,12 +3067,20 @@ document.addEventListener("click",e=>{
  const adel=t.closest("[data-automation-delete]");
  if(adel&&window.PulseLive&&PulseLive.deleteAutomation){
   const key=adel.dataset.automationDelete;
-  if(!confirm("Delete this automation completely? This removes its cron job, its schedule and the row itself — it cannot be undone."))return;
-  adel.textContent="…";
-  PulseLive.deleteAutomation(key,(out)=>{
-   if(!out.ok){alert(out.error||"Could not delete it.");adel.textContent="delete";return;}
-   $("#ov").hidden=true;
-   PulseLive.loadAutomations(render);});
+  /* Our own dialog, not the browser's — see pulseConfirm. Async now, so the
+     handler returns immediately and the decision arrives when it arrives. */
+  pulseConfirm({
+   title:"Delete this automation?",
+   body:"This removes its cron job, its schedule and the rule itself. It cannot be undone.",
+   confirmLabel:"Delete it",danger:true,
+  }).then(yes=>{
+   if(!yes)return;
+   adel.textContent="…";
+   PulseLive.deleteAutomation(key,(out)=>{
+    if(!out.ok){toastDone(null,false,out.error||"Could not delete it.");adel.textContent="delete";return;}
+    $("#ov").hidden=true;
+    PulseLive.loadAutomations(render);});
+  });
   return;}
  const ahist=t.closest("[data-auto-hist]");
  if(ahist){
@@ -3050,7 +3108,7 @@ document.addEventListener("click",e=>{
   PulseLive.loadAccountById(id,PULSE_BAG,name=>{
    if(name){$("#pk").hidden=true;openCompany(name);}
    else{osa.disabled=false;osa.textContent="Open account →";
-    alert("Could not open that account — it may have been removed.");}});
+    toastDone(null,false,"Could not open that account — it may have been removed.");}});
   return;}
  const rsn=t.closest("[data-rule-save-new]");
  if(rsn&&window.PulseLive&&PulseLive.addMotionRule){
@@ -3381,12 +3439,94 @@ let pendingConnectKey=null;
 
 /* react-hot-toast's own function, handed over by app/toast-bridge.tsx (a
    React island — this file is plain script and has no other way to reach a
-   component tree). Falls back to alert() for the rare case this fires before
-   that bridge has mounted, so a failure is never silent. */
+   component tree). Falls back to pulseFlash() for the rare case this fires
+   before that bridge has mounted, so a failure is never silent and never the
+   browser's own dialog. */
 function toastLoading(msg){return window.pulseToast?window.pulseToast.loading(msg):null;}
 function toastDone(id,ok,msg){
  if(window.pulseToast){if(id)window.pulseToast.dismiss(id);window.pulseToast[ok?"success":"error"](msg);}
- else if(!ok)alert(msg);
+ else pulseFlash(msg,ok);
+}
+
+/* ── saying things, without the browser's own dialogs ──────────────────────
+ *
+ * alert() and confirm() are the browser's, not ours: they carry Chrome's
+ * typography, cannot be styled, and block the whole page — including, as the
+ * Claude-in-Chrome notes for this project point out, every subsequent event.
+ * They also look nothing like the rest of Pulse, which is the part a reader
+ * notices first.
+ *
+ * Two replacements, because the two jobs are different. A message needs to be
+ * seen and dismissed; a decision needs a focused, blocking choice with a clear
+ * destructive option.
+ */
+
+/**
+ * Last-resort message when react-hot-toast has not mounted yet.
+ *
+ * toastDone used to fall back to alert() here, on the reasoning that a silent
+ * failure is worse than an ugly dialog. Both were avoidable: this is the same
+ * information in a element that styles like the product and disappears on its
+ * own.
+ */
+function pulseFlash(msg,ok){
+ let host=$("#pflash");
+ if(!host){
+  host=document.createElement("div");
+  host.id="pflash";
+  document.body.appendChild(host);
+ }
+ const el=document.createElement("div");
+ el.className="pflash-item";
+ el.dataset.ok=ok?"1":"0";
+ el.textContent=String(msg||"");
+ host.appendChild(el);
+ setTimeout(()=>{el.dataset.out="1";setTimeout(()=>el.remove(),240);},4200);
+}
+
+/**
+ * Ask a yes/no question in the product's own dialog.
+ *
+ * Resolves true or false rather than taking a callback, so a caller reads in
+ * the order it happens — `if (!(await pulseConfirm(...))) return;` is the same
+ * shape the old `if (!confirm(...)) return;` had.
+ *
+ * Escape and the backdrop both mean no, which is the safe answer: this is only
+ * ever used in front of something destructive, and a reader who hits Escape
+ * has not agreed to anything.
+ */
+function pulseConfirm({title,body,confirmLabel="Yes, do it",cancelLabel="Cancel",danger=false}){
+ return new Promise(resolve=>{
+  const ov=$("#ov"),box=$("#ovb");
+  if(!ov||!box){resolve(false);return;}
+  let done=false;
+  const finish=v=>{
+   if(done)return;done=true;
+   ov.hidden=true;
+   box.removeEventListener("click",onClick);
+   document.removeEventListener("keydown",onKey,true);
+   resolve(v);
+  };
+  const onClick=e=>{
+   if(e.target.closest("[data-cy]"))finish(true);
+   else if(e.target.closest("[data-cn]"))finish(false);
+  };
+  const onKey=e=>{
+   if(e.key==="Escape"){e.stopPropagation();finish(false);}
+   /* Enter confirms only when the confirm button itself has focus, so a
+      reader holding Enter from a previous field cannot delete something. */
+  };
+  box.innerHTML=`<h3>${esc(title)}</h3>
+   <p class="sub" style="margin-top:8px;white-space:pre-line">${esc(body||"")}</p>
+   <div class="row" style="margin-top:20px;gap:10px;flex-wrap:wrap">
+    <button class="go solid" data-cy="1"${danger?' style="background:var(--danger,#a8462a);border-color:var(--danger,#a8462a)"':""}>${esc(confirmLabel)}</button>
+    <button class="go" data-cn="1">${esc(cancelLabel)}</button></div>`;
+  ov.hidden=false;
+  box.addEventListener("click",onClick);
+  document.addEventListener("keydown",onKey,true);
+  const first=box.querySelector("[data-cy]");
+  if(first)first.focus();
+ });
 }
 
 function saveConnection(service,action,viasocketId){
@@ -3902,7 +4042,7 @@ function openAutomation(key){
    ${canEditRules()?`<button class="go" style="color:var(--watch)" data-automation-retire="${a.key}">${a.live?"Turn it off":"Retire it"}</button>
    <button class="go" style="color:var(--danger,#a8462a)" data-automation-delete="${a.key}">Delete completely</button>`:""}
    <button class="go" id="ovx">Close</button></div>
-  <div class="ver">${a.key}</div></div>`;
+  </div>`;
  $("#ov").hidden=false;
 }
 

@@ -13,10 +13,30 @@ const MOTIONS: Motion[] = ["inbound", "outbound", "startup", "partner", "any"];
  * into the client so the dropdown can never list an event the backend does
  * not actually recognize.
  */
+/**
+ * Two of the seven events are deliberately not offered.
+ *
+ * connection.connected and connection.disconnected fire when somebody links or
+ * unlinks their own Gmail, Calendar or Slack. They are real events and the
+ * backend still runs the rules already built on them — what is removed here is
+ * only the ability to build *new* rules against them, because in practice they
+ * describe a person's own housekeeping rather than anything about an account,
+ * and a rule written on them tells you that you connected something you just
+ * connected.
+ *
+ * Filtered here rather than deleted from events.ts on purpose: emitEvent still
+ * fires them, existing subscriptions still receive them, and a rule somebody
+ * built before this keeps working. Removing the name outright would strand
+ * those rows against an event the catalogue no longer admits exists.
+ */
+const NOT_OFFERED = new Set(["connection.connected", "connection.disconnected"]);
+
 export async function GET() {
   return NextResponse.json({
     ok: true,
-    events: Object.entries(EVENTS).map(([name, e]) => ({ name, label: e.label })),
+    events: Object.entries(EVENTS)
+      .filter(([name]) => !NOT_OFFERED.has(name))
+      .map(([name, e]) => ({ name, label: e.label })),
   });
 }
 
