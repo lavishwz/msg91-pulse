@@ -16,7 +16,7 @@
 
 import { planAutomation } from "@/lib/pulse/agents";
 import { guard } from "@/lib/pulse/sqlguard";
-import { query } from "@/lib/db";
+import { query, columnsOf } from "@/lib/db";
 import { write } from "@/lib/store";
 import { createCronJob, cronIntervalMinutes } from "@/lib/pulse/cronjob";
 import { saveAutomation, type Motion, type Scope } from "./automations";
@@ -88,14 +88,61 @@ async function fail(
  * run against the real read-only connection is the only check that does,
  * and it is cheap: LIMIT 0 means MySQL plans the query and returns no rows.
  */
-async function dryRun(sql: string): Promise<{ ok: true } | { ok: false; error: string }> {
+async function dryRun(sql: string): Promise<{ ok: true; columns: string[] } | { ok: false; error: string }> {
   const wrapped = `SELECT * FROM (${sql.replace(/;\s*$/, "")}) __dry_run LIMIT 0`;
   try {
     await query(wrapped);
-    return { ok: true };
+    /* The same plan, asked for its field list rather than its rows — what
+       subject_col and watermark_col are checked against below. */
+    return { ok: true, columns: await columnsOf(sql) };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
+}
+
+/**
+ * Keep subject_col and watermark_col honest about the query they belong to.
+ *
+ * Both name a column of the plan's own find_sql, and the planner names one
+ * the query does not actually return often enough to matter — it writes
+ * `SELECT u.user_pid AS subject_id …` and then answers "user_pid", or selects
+ * an aggregate and names the column it aggregated. Nothing checked, and
+ * neither failure announces itself at run time:
+ *
+ *   subject_col missing — `row[subjectCol]` is undefined, so every row in the
+ *     pass falls back to the same "portfolio" signal key. pulse_decision and
+ *     pulse_signal both dedupe on that key, so an automation that judged
+ *     twenty-three rows leaves one row behind and the Log reads "Scored
+ *     Account ?". Found live on a rule with 101 runs and exactly one visible
+ *     decision.
+ *
+ *   watermark_col missing — `markOf(undefined)` is "", which is falsy, so the
+ *     mark never advances and the watermark quietly does nothing at all. The
+ *     rule still runs; it just re-judges the same rows forever while the UI
+ *     says it is watermarked.
+ *
+ * Repaired rather than refused: the query is sound and the rule is what the
+ * person asked for — it is only the column name that is wrong, and a plausible
+ * id column in the result is a better answer than failing the build. When
+ * there is nothing to fall back to the column is cleared, which puts the rule
+ * on the no-watermark rotation path instead of a silently broken one.
+ */
+function columnNamed(wanted: string | null | undefined, columns: string[]): string | null {
+  if (!wanted) return null;
+  const exact = columns.find((c) => c === wanted);
+  if (exact) return exact;
+  const insensitive = columns.find((c) => c.toLowerCase() === wanted.toLowerCase());
+  return insensitive ?? null;
+}
+
+/** A column that looks like it identifies the row, for a subject_col that named nothing. */
+function idColumn(columns: string[]): string | null {
+  return (
+    columns.find((c) => /^(subject_id|user_pid)$/i.test(c)) ??
+    columns.find((c) => /(^|_)pid$/i.test(c)) ??
+    columns.find((c) => /(^|_)id$/i.test(c)) ??
+    null
+  );
 }
 
 function slugify(s: string): string {
@@ -252,8 +299,8 @@ export async function buildAutomation(
        halves of the automation's cadence agreeing with each other. */
     everyMinutes: cronIntervalMinutes(cronSchedule),
     findSql: plan.find_sql,
-    subjectCol: plan.subject_col || null,
-    watermarkCol: plan.watermark_col || null,
+    subjectCol: columnNamed(plan.subject_col, dry.columns) ?? idColumn(dry.columns),
+    watermarkCol: columnNamed(plan.watermark_col, dry.columns),
     agentTask: plan.executor_prompt,
     executorPrompt: plan.executor_prompt,
     optimizedPrompt: plan.optimized_rule_prompt,

@@ -140,6 +140,27 @@ export async function query<T = mysql.RowDataPacket>(
   return rows as T[];
 }
 
+/**
+ * The column names a SELECT would return, without fetching a single row.
+ *
+ * `query()` throws the driver's field metadata away, which is the right shape
+ * for callers that want data — but an automation is saved with the *names* of
+ * two columns of its own query (subject_col, watermark_col), and nothing ever
+ * checked that the query returns them. It usually does not matter until it
+ * does: a subject_col the query does not return makes every row of every pass
+ * share one signal key, and both pulse_decision and pulse_signal dedupe on
+ * that key, so a hundred passes leave one overwritten row behind.
+ *
+ * LIMIT 0 means MySQL plans the query and returns the field list with no rows,
+ * so this costs about what the existing dry run costs.
+ */
+export async function columnsOf(sql: string): Promise<string[]> {
+  const [, fields] = await pool().query(
+    `SELECT * FROM (${sql.replace(/;\s*$/, "")}) __cols LIMIT 0`,
+  );
+  return ((fields ?? []) as mysql.FieldPacket[]).map((f) => String(f.name));
+}
+
 /** Same as `query`, but returns the first row (or null). */
 export async function queryOne<T = mysql.RowDataPacket>(
   sql: string,
