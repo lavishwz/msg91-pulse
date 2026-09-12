@@ -2,271 +2,15 @@ const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const PROD=["SMS","OTP","WHATSAPP","EMAIL","VOICE","HELLO","SEGMENTO","CAMPAIGN","RCS","MASK"];
 const OWNED=["SMS","OTP","WHATSAPP","EMAIL","HELLO"];
 
-let BOOK=[
-["TR","Sample Co 1","India","Startup","growing on SMS, never tried WhatsApp",1],
-["KP","Sample Co 2","India","Outbound","waiting on your rate decision",1],
-["FP","Sample Co 3","UAE","Partner","recovering from yesterday's outage",1],
-["BF","Sample Co 4","US","Inbound","quote ready to send",1],
-["ZL","Sample Co 5","India","Inbound","paused WhatsApp, reason unknown",1],
-["MT","Sample Co 6","Singapore","Partner","stepping back — 22 days of silence",1],
-["NF","Sample Co 7","India","Startup","stuck in DLT approval, day 9",1],
-["OL","Sample Co 8","India","Inbound","signed up 4 minutes ago",1],
-["AL","Sample Co 9","India","Inbound","steady · 180k SMS a month",0],
-["VM","Sample Co 10","India","Outbound","volume dropped, reason unclear",0],
-["SB","Sample Co 11","India","Partner","OTP only · renewal in November",0],
-["MH","Sample Co 12","Singapore","Inbound","onboarding, week 3",0],
-["KI","Sample Co 13","India","Inbound","steady · campaign heavy",0],
-["CE","Sample Co 14","US","Outbound","first invoice paid",0],
-["DL","Sample Co 15","UAE","Partner","growing on WhatsApp",0],
-["PG","Sample Co 16","India","Startup","free credit at 78%",0],
-["LL","Sample Co 17","US","Inbound","quiet, healthy",0],
-["RK","Sample Co 18","India","Startup","first message sent yesterday",0]];
+let BOOK=[];
 
-let CARDS=[
-{s:"me",w:0,r:"Your hands",cust:"Sample Co 8",geo:"India · Inbound",clock:348,
- h:"Call Sample Contact at Sample Co 8.",
- y:'Signed up <span class="l1">4 minutes ago</span> on the OTP trial. Quality 91 — business domain, 40 people, read the pricing page twice. Unassigned until you take her.',
- a:"Call Sample Contact",solid:1,
- rev:[["Quality score","91 / 100 · business domain, 40 employees, 2 pricing visits"],
-      ["Source","utm_campaign=otp-compare · google/cpc"],
-      ["Rule","Inbound · quality ≥ 80 → human contact within 10 minutes"],
-      ["Who she is","Sample Contact Q · Head of Product · sampleco8.example · linkedin.com/in/sample-contact"],
-      ["What they do","K-12 test-prep platform · ~40 staff · Bengaluru · Android app, 60k installs"],
-      ["Why they need OTP","App has a phone-number login. No OTP provider detected on their stack."],
-      ["Owner","Unassigned"]]},
+let CARDS=[];
 
-{s:"me",w:0,r:"Your judgment",cust:"Sample Co 2",geo:"India · Outbound",
- h:"Sample Co 2 wants ₹0.11 per SMS.",
- y:'Your floor is ₹0.125. At 11L a month that is <span class="l1">₹1.4L a year</span> below floor, margin 4.1% against a 9% policy. Asked twice, still unanswered.',
- a:"Review the options",solid:1,
- rev:[["Current rate","₹0.128 · 11,00,000 SMS / month committed"],
-      ["Margin at ₹0.11","4.1% · policy floor is 9%"],
-      ["AI alternative","₹0.119 with 24-month term → margin 9.4%"],
-      ["Comparable","Sample Co 9 ₹0.121 · Sample Co 13 ₹0.124"],
-      ["Competitor","Trial opened 12 Aug, ends 30 Sep"]]},
+let GROWTH={me:{lab:"",h:"",stats:[]},team:{lab:"",h:"",stats:[]},company:{lab:"",h:"",stats:[]}};
 
-{s:"me",w:0,r:"Your voice",cust:"Sample Co 3",geo:"UAE · Partner",
- h:"Sample Co 3 should hear this from you.",
- y:'OTP delivery failed for <span class="l1">4h 12m</span> yesterday on the Etisalat route. Draft is ready but Sample Contact trusts you — it should sound like you.',
- a:"Read the draft",solid:1,
- rev:[["Impact","9,412 OTPs delayed · 2 tickets · both closed"],
-      ["Timeline","15:02 route failed · 15:14 failover · 19:14 recovered"],
-      ["Root cause","Sent by support 19:40"],
-      ["Draft opens","“Sample Contact — yesterday was on us, and here is exactly what happened.”"]]},
+let CUST={};
 
-{s:"me",w:0,r:"Your approval",cust:"Sample Co 4",geo:"US · Inbound",
- h:"The WhatsApp quote for Sample Co 4 is ready.",
- y:'180,000 conversations a month at <span class="l1">$0.0089</span>, margin 11.2%. Built from their email volume and US rate card v4. Nothing outside policy.',
- a:"Approve and send",solid:1,
- rev:[["Quote","WhatsApp Business · 180,000 conv/month · $0.0089"],
-      ["Margin","11.2% · floor 9%"],
-      ["Basis","Email volume Jun–Aug, +31% · US rate card v4"],
-      ["Prepared","Today 08:14 by Pulse"],
-      ["If unanswered","Reminder at 16:00, then held"]]},
-
-{s:"me",w:0,r:"Your knowledge",cust:"Sample Co 5",geo:"India · Inbound",
- h:"Did Sample Contact say why Sample Co 5 paused WhatsApp?",
- y:'Zero volume since <span class="l1">14 August</span>. No ticket, no complaint, invoice paid on time. SMS unchanged. You met him on the 12th.',
- a:"Tell me what happened",solid:0,
- rev:[["WhatsApp","0 messages since 14 Aug · was 22% of spend"],
-      ["SMS","2,40,000 / month · unchanged"],
-      ["Support","No tickets in 90 days"],
-      ["Billing","Invoice #MS-40118 paid 04 Aug, on time"]]},
-
-{s:"me",w:0,r:"Your hands",cust:"Sample Co 1",geo:"India · Startup",
- h:"Sample Co 1 has never touched WhatsApp.",
- y:'<span class="l1">400k SMS</span> a month for order updates, up 12% this quarter. Sample Contact asked about WhatsApp on 22 July and nobody replied.',
- a:"See what to pitch",solid:0,
- rev:[["The opening","Sample Contact D, marketing — 22 Jul, unanswered"],
-      ["Comparable","8 accounts, same profile → +38% median messaging spend"],
-      ["Who to talk to","Sample Contact D, not Sample Contact E"],
-      ["Competitor moved","June"]]},
-
-{s:"me",w:1,r:"Watch closely",cust:"Sample Co 6",geo:"Singapore · Partner",
- h:"Sample Co 6 may be slipping.",
- y:'SMS down <span class="l1">35%</span> over 14 days. Silent 22 days while we reached out 3 times. Sample Contact still opens the reports weekly.',
- a:null,
- rev:[["Silence clock","22 days since they last responded"],
-      ["Effort clock","3 days since we last reached out"],
-      ["Volume","1,84,000 → 1,19,600 / month"],
-      ["Next","Warm intro through the partner, before I ask you"]]},
-
-{s:"me",w:1,r:"Watch closely",cust:"Sample Co 7",geo:"India · Startup",
- h:"Sample Co 7 is stuck in DLT approval.",
- y:'<span class="l1">Day 9</span> and still zero messages sent. Header pending with the operator. I have chased daily and escalated on day 7.',
- a:null,
- rev:[["Signed up","28 Aug · target first value 3 days"],
-      ["Blocked on","Header NOVAFD pending · operator queue"],
-      ["Chased","9 follow-ups · SPOC escalation 04 Sep"],
-      ["Pattern","3rd startup this month on the same operator"]]},
-
-{s:"team",w:0,r:"Your judgment",cust:"Sample Rep 3",geo:"India · Inbound",
- h:"Sample Rep 3 has not touched 6 of his accounts in 61 days.",
- y:'<span class="l1">6 accounts</span> with no meaningful conversation in 30 days. Prompted privately on 8 July and 2 August. Promises kept 96%.',
- a:"Look at his accounts",solid:1,
- rev:[["Accounts","64 accounts · India inbound"],
-      ["Flat since","07 Jul"],
-      ["Private prompts","08 Jul, 02 Aug — his view only"],
-      ["Escalation rule","Manager after 2 prompts and 21 days"],
-      ["Not in question","Response 3h · promises 96%"]]},
-
-{s:"team",w:0,r:"Your hands",cust:"Unassigned",geo:"India · Partner",
- h:"46 accounts have had no owner since Sample Rep 9 left.",
- y:'<span class="l1">14 days</span> unassigned. Three asked a question in that time and nobody answered.',
- a:"Reassign the accounts",solid:1,
- rev:[["Proposed split","India 28 → Sample Rep 1, Sample Rep 2 · UAE 11 → Sample Rep 3 · Singapore 7 → Sample Rep"],
-      ["Basis","Current load, country, product overlap"],
-      ["Unanswered","Sample Co 15, Sample Co 14, Sample Co 13"]]},
-
-{s:"team",w:1,r:"Watch closely",cust:"UAE inbound",geo:"UAE · Inbound",
- h:"First response in UAE slipped to nine hours.",
- y:'Was 4h in July, target is 2h. Every slow response landed between <span class="l1">18:00 and 02:00</span> GST.',
- a:null,
- rev:[["July","4h 10m average"],["September","9h 02m average"],
-      ["Coverage","2 reps · both on leave 26–31 Aug"],
-      ["Suggested","Route after-hours UAE to India late shift for 4 weeks"]]},
-
-{s:"company",w:0,r:"Your judgment",cust:"OTP · UAE",geo:"UAE · Inbound",
- h:"Nine customers were hit by yesterday's UAE outage.",
- y:'<span class="l1">41,200</span> OTPs delayed across 9 accounts, two in their first month. Only two raised tickets.',
- a:"Decide the disclosure",solid:1,
- rev:[["Affected","9 accounts · 41,200 OTPs · 4h 12m"],
-      ["Raised tickets","Sample Co 3, Sample Co 15"],
-      ["Precedent","Mar 2026 full disclosure → 0 churn"],
-      ["Risk","7 accounts will see it in their own dashboards"]]},
-
-{s:"company",w:1,r:"Watch closely",cust:"Product signal",geo:"India · Inbound",
- h:"Sixteen customers asked for RCS this quarter.",
- y:'Up from 12 last quarter and 9 before that. <span class="l1">6 of 16</span> named a competitor in the same conversation.',
- a:null,
- rev:[["Sources","11 sales calls · 3 tickets · 2 signup notes"],
-      ["Profile","Retail and logistics, all above 2L SMS/month"],
-      ["Trend","Q1 9 · Q2 12 · Q3 16"]]}];
-
-let GROWTH={
-me:{lab:"Your September",h:'You kept 9 of 10 promises. <em>Your best month yet.</em>',
- score:86,delta:"+7 from August",
- tip:["Your score","Promises kept 9/10 · first response 4h against a 6h target · 3 accounts recovered · 2 products activated. Weighted to outcomes you control — never to revenue you inherited."],
- stats:[["9/10","promises kept","Promises kept","A promise is any commitment Pulse extracted from your email, calls or notes. One missed: the Sample Co 3 incident note, due 17:00 today."],
-  ["4h","first response","First response","Median time from a high-quality inbound signup to a real human reply. Target is 6h; the team average is 5h."],
-  ["3","recovered","Accounts recovered","Accounts that were declining or silent and are now sending again. Sample Co 10, Sample Co 13, Sample Co 11."],
-  ["2","activated","Products activated","A product that moved from considering or setting up to actively sending. WhatsApp at Sample Co 15, Email at Sample Co 12."],
-  ["18","accounts","Your accounts","Companies where you are the MSG91 owner across all ten products. Nine gained, one handed over this quarter."]],
- pills:1},
-team:{lab:"Sales this September",h:'The team kept 41 of 48 promises. Response time is down to <em>five hours</em> from nine.',
- score:79,delta:"+4 from August",
- tip:["Team score","The median of 25 individual scores, not an average — one bad month cannot drag the team, and one great month cannot hide it."],
- stats:[["41/48","promises kept","Promises kept","Seven missed, six of them in the week two UAE reps were on leave."],
-  ["5h","first response","First response","Down from 9h in July. UAE is the outlier at 9h; India is at 3h."],
-  ["11","recovered","Accounts recovered","Across 25 reps. Sample Rep 1 3, Sample Rep 2 2, Sample Rep 4 2, four others 1 each."],
-  ["9","activated","Products activated","WhatsApp 4 · Email 3 · Voice 1 · Segmento 1."],
-  ["486","accounts","Team accounts","Owned across the team. 46 currently unassigned since Sample Rep 9 left."]],
- movers:[["Sample Rep 1 +3","accounts recovered"],["Sample Rep 3 100%","promises kept"],["Sample Rep 2 +4","products activated"]]},
-company:{lab:"MSG91 this September",h:'Pulse handled 1,842 signals. <em>Sixty-three needed a human.</em>',
- score:92,delta:"+11 from August",
- tip:["Autonomy score","How much of the customer lifecycle runs without a person. 96.6% of signals resolved without escalation, weighted by how consequential each one was."],
- stats:[["1,842","signals","Signals","Every meaningful change: signup, payment, usage shift, message, meeting, ticket, DLT status."],
-  ["63","reached a person","Escalations","Signals where AI decided only a human could resolve it. 41 judgment, 12 approval, 7 voice, 3 knowledge."],
-  ["12","rules proposed","AI proposals","Rules AI wrote for itself after seeing the same decision resolved the same way. Nine accepted."]]}};
-
-let CUST={
-"Sample Co 8":{v:"Four minutes old and already worth a call.",
- s:"Business domain, 40 employees, read the pricing page twice, arrived on the OTP comparison campaign. Quality 91.",
- pe:[["Sample Contact Q","Signed up · not yet contacted","Decision maker"]],
- la:[["OTP","setting up","trial · 4 min"]],
- ev:[["09:12","Signed up on the OTP trial"],["09:10","Read /pricing — second visit"],["08:58","First visit · utm_campaign=otp-compare"]],
- money:[["—","received","No payments yet"],["—","wallet","No wallet"],["Trial","plan","OTP trial · 14 days"]]},
-"Sample Co 2":{v:"Ready to commit, waiting on a rate nobody has answered.",
- s:"Asked twice for ₹0.11 against a ₹0.125 floor. 11L SMS a month committed if it clears.",
- pe:[["Sample Contact A","Asked twice · waiting since 12 Aug","Decision maker"],
-     ["Sample Contact B","Completed the API test 21 Aug","Technical"],
-     ["Sample Contact C","Pays within terms","Billing"]],
- la:[["SMS","considering","11L/mo if cleared"],["OTP","active","40k/mo"]],
- ev:[["03 Sep","Second rate request"],["21 Aug","API test completed"],["12 Aug","First rate request"],
-     ["12 Aug","Competitor trial opened"],["04 Aug","Payment received"]],
- money:[["₹8,42,000","received · 12 months","INR"],["₹1,10,400","wallet balance",""],["₹0.128","current SMS rate",""]]},
-"Sample Co 1":{v:"Growing on SMS, and blind to everything else.",
- s:"400k order-update SMS a month, up 12% this quarter. Marketing asked about WhatsApp in July and nobody replied.",
- pe:[["Sample Contact D","Asked about WhatsApp 22 Jul · last spoke 46d","Marketing"],
-     ["Sample Contact E","Runs the SMS integration · weekly","Technical"],
-     ["Sample Contact G","Pays on time, never talks","Billing"]],
- la:[["SMS","growing","4,00,000/mo"],["OTP","active","62,000/mo"],["EMAIL","setting up","week 3"],
-     ["WHATSAPP","considering","asked Jul"],["VOICE","stopped","ended Feb"]],
- ev:[["12 Sep","SMS crossed 4,00,000 for the first time"],["22 Jul","Sample Contact asked about WhatsApp order updates"],
-     ["04 Jul","Payment received · ₹1,84,000"],["19 Jun","Email integration started"]],
- money:[["₹19,60,000","received · 12 months","INR"],["₹2,40,800","wallet balance",""],["₹0.119","current SMS rate",""]]},
-"Sample Co 6":{v:"They are stepping back, and it is not because we forgot.",
- s:"SMS down 35% over 14 days. Silent 22 days while we reached out three times.",
- pe:[["Sample Contact H","Stopped replying 22d ago","Decision maker"],
-     ["Sample Contact I","Still opens the reports weekly","Operations"]],
- la:[["SMS","declining","1,19,600/mo ▾35%"],["EMAIL","active","flat"],["WHATSAPP","paused","since Aug"]],
- ev:[["28 Aug","Volume began falling"],["25 Aug","Third outreach — no reply"],["15 Aug","Last reply from Sample Contact"],
-     ["02 Aug","Delivery latency ticket · resolved"]],
- money:[["S$41,200","received · 12 months","SGD"],["S$3,900","wallet balance",""],["S$0.0412","current SMS rate",""]]},
-"Sample Co 3":{v:"A solid account that just had a bad day.",
- s:"OTP delivery failed for 4h 12m yesterday on the Etisalat route. Everything else is healthy.",
- pe:[["Sample Contact J","Trusts you · spoke 9d ago","Decision maker"],
-     ["Sample Contact K","Raised both tickets","Technical"]],
- la:[["OTP","active","9,412 delayed, recovered"],["SMS","growing","▴18% this quarter"],["WHATSAPP","setting up","sandbox"]],
- ev:[["05 Sep","Etisalat route failed 15:02–19:14"],["05 Sep","Root cause sent by support"],
-     ["28 Aug","WhatsApp sandbox opened"],["12 Aug","Payment received"]],
- money:[["AED 214,000","received · 12 months","AED"],["AED 18,400","wallet balance",""],["AED 0.0290","current OTP rate",""]]},
-"Sample Co 4":{v:"Growing on email and ready for a second product.",
- s:"Email volume up 31% over two quarters. WhatsApp quote drafted and waiting on approval.",
- pe:[["Sample Contact L","Replies fast · spoke 8d ago","Decision maker"],
-     ["Sample Contact M","Integrated in four days","Technical"]],
- la:[["EMAIL","growing","▴31% two quarters"],["WHATSAPP","considering","quote drafted"]],
- ev:[["06 Sep","Quote drafted by Pulse"],["29 Aug","Asked about WhatsApp pricing"],["14 Aug","Email volume record"]],
- money:[["$64,800","received · 12 months","USD"],["$4,100","wallet balance",""],["$0.00041","current email rate",""]]},
-"Sample Co 5":{v:"Something happened on 14 August and nobody knows what.",
- s:"WhatsApp went to zero with no ticket, no complaint and no missed invoice. SMS unchanged.",
- pe:[["Sample Contact F","You met him 12 Aug","Technical"],["Sample Contact N","Quiet","Operations"]],
- la:[["WHATSAPP","stopped","0 since 14 Aug"],["SMS","active","2,40,000/mo"],["OTP","active","31,000/mo"]],
- ev:[["14 Aug","WhatsApp volume dropped to zero"],["12 Aug","Meeting with Sample Contact"],["04 Aug","Invoice paid on time"]],
- money:[["₹11,20,000","received · 12 months","INR"],["₹1,86,000","wallet balance",""],["₹0.124","current SMS rate",""]]},
-"Sample Co 7":{v:"Nine days in and still cannot send a message.",
- s:"Header pending with the operator since day one. Target time to first value is three days.",
- pe:[["Sample Contact O","Founder · patient so far","Decision maker"]],
- la:[["SMS","setting up","blocked on DLT"]],
- ev:[["06 Sep","Ninth follow-up to the DLT desk"],["04 Sep","Escalated to operator SPOC"],["28 Aug","Signed up"]],
- money:[["₹0","received","Startup programme"],["₹5,000","free credit",""],["—","rate","Not set"]]}};
-
-let ASK={
-churn:{q:"Who is most likely to churn this month?",big:"4",
- h:"Sample Co 6, Sample Co 5, Sample Co 10 and Sample Co 7.",
- p:"All four stopped sending. Three went quiet before the volume moved.",
- brk:[["Sample Co 6","SMS ▾35% · silent 22d"],["Sample Co 5","WhatsApp 0 since 14 Aug"],
-      ["Sample Co 10","SMS ▾28% · silent 31d"],["Sample Co 7","never sent · day 9"]],
- act:"Create recovery missions for all four",
- st:["Rhea Menon","today 09:12","your accounts","fresh to 08:55","2 accounts masked"]},
-flat:{q:"Whose accounts are flat?",big:"2",
- h:"Sample Rep 3 at 61 days, Sample Rep 4 at 34.",
- p:"Both kept their promises and answered fast. Neither started a new conversation with an existing customer in over a month.",
- brk:[["Sample Rep 3","64 accounts · flat since 07 Jul · 2 prompts sent"],
-      ["Sample Rep 4","51 accounts · flat since 03 Aug · not yet prompted"]],
- act:"Open Sample Rep 3's accounts",
- st:["Rhea Menon","today 09:14","Sales team","manager view","2 names masked"]},
-partner:{q:"Partner motion, this month",big:"₹64.2L",
- h:"38 partner-sourced customers across four entities.",
- p:"Native currency only, never converted. Partner-sourced accounts reach first value 11 days faster than inbound.",
- brk:[["India","₹41,80,000 · 21 accounts"],["UAE","AED 402,000 · 9 accounts"],
-      ["United States","$61,400 · 5 accounts"],["Singapore","S$88,200 · 3 accounts"]],
- act:"Break it down by partner",
- st:["saved lens","Rhea Menon","today 09:15","Partner · all countries","no conversion applied"]},
-uae:{q:"UAE entity, this quarter",big:"AED 402k",
- h:"61 customers. Eleven have no owner.",
- p:"First response has slipped from 4h to 9h, and every slow response landed between 18:00 and 02:00 GST.",
- brk:[["Received","AED 402,000"],["Customers","61 · 11 unowned"],["First response","9h 02m vs 2h target"],
-      ["Top account","Sample Co 3 · AED 214,000"]],
- act:"Look at the after-hours gap",
- st:["saved lens","Rhea Menon","today 09:16","UAE entity","AED only"]},
-stuck:{q:"Which startups are stuck before their first message?",big:"3",
- h:"Sample Co 7, Sample Co 16 and Sample Co 18.",
- p:"All three on the same operator's DLT queue, all past day seven against a three-day target.",
- brk:[["Sample Co 7","day 9 · header NOVAFD"],["Sample Co 16","day 8 · header PRTREE"],
-      ["Sample Co 18","day 7 · cleared yesterday"]],
- act:"Escalate all three to the operator",
- st:["Rhea Menon","today 09:18","Startup motion","fresh to 09:00"]}};
+let ASK={};
 
 const TIP={
  draft:["Draft","AI wrote it and stopped. Nothing was sent — a person has to release it."],
@@ -295,110 +39,34 @@ const TABTIP={
  };
 
 let AUTO={
-/* No sample banner here any more. The prototype's "UAE routing rule fired 41
-   times" was the story a circuit breaker is built to catch — and Pulse now has
-   a real one, so a permanent invented version of it sitting above the real feed
-   would be the worst of both. The banner below is drawn from the same alerts
-   the Now surface reads. */
-activity:{
- f:[["09:14","Drafted a recovery mail for Sample Co 6","Silence 22d, effort 3d. Held — the last two drafts to this account were edited.","draft","act"],
- ["09:11","Merged two missions on Sample Co 5","Protect revenue and solve issue, same evidence.","merge",""],
- ["09:04","Chased the DLT desk for Sample Co 7","Ninth follow-up. Escalated to the operator SPOC.","acted","ok"],
- ["08:59","Answered a rate question for Sample Co 9","India rate card v7, inside policy. Sent from rep2@msg91.com.","sent","ok"],
- ["08:52","Merged a duplicate signup","Third signup from sampleco1.example, different department.","merged","ok"],
- ["08:47","Scored 14 new signups","One crossed the call threshold — Sample Co 8, 91.","acted","ok"],
- ["08:31","Scheduled a follow-up on Sample Co 4","If no reply by Thursday, nudge once then hand back.","timer",""],
- ["08:22","Promoted subject line B on recovery mails","+18% reply rate over 240 sends. Policy v7 → v8.","learned","ok"],
- ["08:04","Failed over the AE route","Etisalat degraded. Switched at 08:04, 0 messages lost.","acted","ok"]]},
-rules:{mo:[
- ["Inbound","Sample Rep 1, Sample Rep 2, Sample Rep 3 · 312 accounts",[["ACT","Score every signup within 60 seconds on domain, company size, pages read and UTM."],
-  ["CARD","Quality 80+ → call within 10 minutes. Clock on the card, escalates to the manager at zero."],
-  ["ACT","Quality 40–79 → three-mail onboarding over 12 days. No human unless they reply."],
-  ["ACT","Below 40 → suppress and file under Filtered."]]],
- ["Outbound","Sample Rep 2, Sample Rep · 88 accounts",[["ACT","Research fit against ICP before any contact. No contact without a named reason."],
-  ["ACT","Maximum two touches in 14 days."],["CARD","Any reply from a named decision maker → same-day human contact."],
-  ["ACT","No reply after two touches → cool 90 days, then re-score."]]],
- ["Startup","Sample Rep 1, Sample Rep 3 · 141 accounts",[["ACT","Confirm programme eligibility from the signup form."],
-  ["ACT","Track days to first message. Chase DLT and sender ID daily."],
-  ["CARD","Day 12 with no first message → a person takes over."],["ACT","Free credit at 80% → send the upgrade path."]]],
- ["Partner","Sample Rep 1, Sample Rep · 94 accounts",[["ACT","Monthly digest to each partner of sourced accounts and outcomes."],
-  ["CARD","Partner-sourced account goes quiet → route through the partner."],
-  ["ACT","Never open a price conversation without the partner on the thread."],
-  ["CARD","Partner-sourced volume down 20% → tell the partner manager."]]]],
- pr:[["Stop asking about cancellation clauses under ₹50k","Approved four times in a row with no edits.","Let AI handle it","Keep asking me"],
-  ["Promote recovery mails from draft to send","22 drafts released unedited. Accounts under ₹1L a month only.","Promote to send","Not yet"]]},
-ailogSample:{f:[
- ["09:14","Sample Co 6 · risk detected · confidence 0.81","SMS −35%/14d (reports) · no inbound reply 22d (gmail) · 3 outbound attempts. Policy: Partner, protect revenue. Drafted recovery mail, held for human. FYI: Sample Rep 1.","draft","act"],
- ["09:11","Sample Co 5 · missions merged","Open protect-revenue mission already covered the WhatsApp pause. Duplicate suppressed.","merge",""],
- ["08:59","Sample Co 9 · rate question · confidence 0.94","Matched India rate card v7. No margin exception. Sent from rep2@msg91.com. FYI: Sample Rep 2.","sent","ok"],
- ["08:40","Sample Co 10 · could not decide","Confidence 0.42 on cause of volume drop. Rules could not resolve. Escalated to Sample Rep 3.","escalated","act"],
- ["08:22","Experiment E-014 · variant B wins","+18% reply over 240 sends, significant. Promoted to default. Policy v7 → v8.","learned","ok"],
- ["07:51","Sample Co 13 · recovery complete","Volume back to 94% of baseline after 3 touches. Mission closed, outcome recorded.","acted","ok"]]},
-audit:{sys:["Anomaly","Sample Rep 3 revealed payment history on 40 accounts between 01:52 and 02:14.",
- "Outside his hours, 12× his usual volume, 31 of 40 outside his own accounts. Export blocked. Flagged 02:16."],
- f:[["09:12","Rhea Menon revealed margin on Sample Co 2","Reason: rate request below floor. Level 2, commercial.","reveal",""],
- ["09:06","Sample Rep 2 viewed Sample Co 9","Level 0 only. Her own book.","view",""],
- ["08:58","Sample Rep 4 changed the UAE office-hours window","Removed 18:00–02:00 GST from inbound routing.","config","act"],
- ["08:31","Rhea Menon approved a quote for Sample Co 4","$0.0089 per conversation, margin 11.2%. Sent.","approve",""],
- ["02:14","Sample Rep 3 attempted an export of 40 accounts","Requires a named reason and a second approver.","blocked","act"]]},
-connections:{f:[]},
-filteredSample:{f:[
- ["09:07","rahul.test@gmail.com","Free domain, no company, bounced verification, scraper user agent. Quality 4.","junk",""],
- ["08:52","Duplicate of Sample Co 1","Third signup from sampleco1.example, different department.","merged","ok"],
- ["08:41","Amrita University · student project","Named it a college assignment in the signup note. Quality 11. Sent free-tier docs.","junk",""],
- ["08:12","Competitor domain","Suppressed and flagged, not blocked.","junk",""],
- ["07:58","wecare-ngo.org re-scored","Sample Rep 2 marked it real — they run 200k SMS a year. Non-profit domains no longer lose 30 points.","learned","ok"]]}};
+/* The four Autopilot tabs, with nothing invented in them.
+   Every one of these lists used to ship with a written-out day: drafts held,
+   missions merged, a DLT desk chased, an anomaly about a rep revealing payment
+   history. The live layer replaces activity and audit on boot, so the fiction
+   was only ever meant to be a shape — but a shape made of specific, plausible
+   sentences is indistinguishable from the real thing for as long as it is on
+   screen, and it is what a failed load falls back to. The shape is all that is
+   left here. */
+activity:{f:[]},
+rules:{mo:[]},
+audit:{sys:[],f:[]},
+connections:{f:[]}};;
 
 
-const DUP={s:"me",w:0,r:"Your hands",cust:"Sample Co 1",geo:"India · Startup",
- h:"Someone new at Sample Co 1 just signed up.",
- y:'Sample Contact P, growth lead, created his own account <span class="l1">this morning</span> — Sample Co 1 is already yours through Sample Contact and Sample Contact. Either a new department is evaluating, or they are not getting what they need from you.',
- a:"Call Sample Contact",solid:1,
- rev:[["Who he is","Sample Contact P · Growth Lead · joined the account Mar 2025 · linkedin.com/in/sample-contact-2"],
-  ["What he did","Signed up on the WhatsApp trial, not SMS. Read /whatsapp-pricing twice."],
-  ["Why it matters","Sample Contact asked about WhatsApp on 22 Jul and nobody replied. This is the same department asking again."],
-  ["Already merged","Attached to Sample Co 1. No duplicate company created."],
-  ["Not contacted","I have sent him nothing. A signup from an existing customer is a conversation, not a sequence."]]};
+const DUP={};
 
 CARDS.splice(6,0,DUP);
 
-const DONE_T=[
- ["09:22","Reassigned 11 UAE accounts to Sample Rep 3","from the unassigned accounts","Unassigned"],
- ["08:47","Reverted a startup credit","Sample Co 23 · 34 staff, above the limit","Sample Co 23"],
- ["08:12","Approved the after-hours routing test","UAE inbound, four weeks","UAE inbound"]];
+const DONE_T=[];
 const DONE_C=[
  ["09:40","Told all nine customers about the UAE outage","full disclosure, as in March","OTP · UAE"],
  ["08:05","Sent the RCS ask to product","third quarter running","Product signal"]];
-const DONE=[
- ["09:31","Called Sample Contact at Sample Co 8","reached in 6 minutes · trial extended to 30 days","Sample Co 8"],
- ["09:18","Approved the WhatsApp quote for Sample Co 4","$0.0089 · sent from your mailbox","Sample Co 4"],
- ["08:54","Sent the incident note to Sample Co 3","edited the draft before sending","Sample Co 3"],
- ["08:22","Told Pulse why Sample Co 5 paused WhatsApp","cost decision · recovery play switched","Sample Co 5"]];
+const DONE=[];
 
-let STANDINGS=[
- ["Sample Rep 2","SQ",91,"+5","up",0],["Rhea Menon","RM",86,"+7","up",1],
- ["Sample Rep 4","PS",84,"+2","up",0],["Sample Rep 3","AN",81,"-3","down",0],
- ["Sample Rep 6","VM",79,"+4","up",0],["Sample Rep 5","NK",77,"+1","up",0],
- ["Sample Rep 7","FA",74,"-1","down",0],["Sample Rep 8","RS",72,"+6","up",0]];
+let STANDINGS=[];
 
 
-const FLIGHT=[
- ["Sample Co 4","Quote sent, waiting on Sample Contact","them",3,0,"I nudge on Thursday, then hand it back to you"],
- ["Sample Co 11","Renewal quote with their finance team","them",8,0,"Second reminder goes Monday"],
- ["Sample Co 14","Outbound · two touches sent","them",6,0,"Cooling until 04 Dec, then re-score"],
- ["Sample Co 7","DLT header pending with the operator","us",9,1,"Chasing daily · SPOC escalated on day 7"],
- ["Sample Co 15","Contract sitting with legal since 21 Aug","us",16,1,"I have asked legal twice. This is the oldest thing you own."],
- ["Sample Co 12","Onboarding · week 3 of 4","pulse",19,0,"Sequence running, two mails left. No human needed."],
- ["Sample Co 18","First message sent, watching activation","pulse",1,0,"Watching volume for 7 days before I say anything"]];
-
-ASK.flight={q:"What is in flight?",big:"7",
- h:"Three with them, two blocked here, two with me.",
- p:"Sorted by how long the ball has been sitting. Two are older than they should be.",
- cols:["Company","What","Ball","Days","What I am doing"],
- rows:FLIGHT.map(f=>[f[0],f[1],{them:"Them",us:"Blocked here",pulse:"Pulse"}[f[2]],f[3]+"d",f[5]]),
- act:"Chase everything over 7 days",
- st:["Rhea Menon","today 09:26","your accounts","fresh to 09:24"]};
-
+const FLIGHT=[];
 
 /* Mailboxes/Calendars rows below start as the fixed "22 of 25" copy; the
    moment the Connections tab is opened, loadTeamConnections() overwrites
@@ -548,25 +216,7 @@ function roomRows(){
  return live.length?live:ROOM;
 }
 
-const ROOM=[
- ["Claim an account","Sample Co 15 has no owner and is growing on WhatsApp.",
-  "UAE, partner-sourced, unassigned for 16 days. They asked a question on 22 August and nobody answered it. Their WhatsApp volume is up 22% anyway.",
-  "AED 96,000 RECEIVED IN 12 MONTHS · 1 OF 11 UNOWNED IN YOUR COUNTRIES","Claim it"],
- ["Sell a second product","Six of your accounts use only one MSG91 product.",
-  "Sample Co 1, Sample Co 11, Sample Co 13, Sample Co 17, Sample Co 14 and Sample Co 18. Sample Co 1 is the obvious one — 400k SMS a month and marketing already asked about WhatsApp.",
-  "MEDIAN OUTCOME FOR THIS PROFILE: +38% MESSAGING SPEND IN TWO QUARTERS","See the best three"],
- ["Meet someone new","At five of your accounts you only know one person.",
-  "If Sample Contact leaves Sample Co 5, you lose the account. Sample Contact at Sample Co 1 is the only person who has ever replied to you there. Single-thread accounts churn at roughly twice the rate.",
-  "SAMPLE CO 5 · SAMPLE CO 1 · SAMPLE CO 9 · SAMPLE CO 13 · SAMPLE CO 17","Who to meet"],
- ["New prospects","Fourteen companies look like your best customers and are not with MSG91.",
-  "Closest is Sample Co 19 — a 200-store grocery chain running order SMS through a competitor, with an app that has a phone-number login and no OTP provider I can detect.",
-  "MATCHED ON: VOLUME PROFILE · INDUSTRY · APP LOGIN · CURRENT PROVIDER","Look at them"],
- ["Wake something up","Sample Co 10 left in March. Their new CTO used us at his last company.",
-  "Sample Rep 3 still owns it and has not touched it in 94 days. Sample Contact joined in July from Sample Co 9, where he ran our OTP integration himself.",
-  "WAS ₹4,10,000 A YEAR · LEFT OVER DELIVERY LATENCY, SINCE FIXED","Read the story"],
- ["Worth ten minutes","You lose most often on rate — two of your last four.",
-  "Both times you countered once and stopped. Sample Rep 2 holds ₹0.121 on comparable pharma accounts by leading with term length instead of price.",
-  "PRIVATE · ONLY YOU SEE THIS","Ten minutes on this"]];
+const ROOM=[];
 
 /**
  * Room to grow, for a rep who has just onboarded (S.newRep). Same shape and
@@ -597,122 +247,21 @@ function roomNewRows(){
    "ASK IN YOUR OWN WORDS · NO REPORTS TO LEARN","Ask something"]];
 }
 
-let PINNED={
-team:[
- ["Response time by country","This month, high-quality inbound only","3h · 9h","IN · AE",[41,38,34,30,26,22,20],"uae"],
- ["Accounts with nobody on them","Unassigned since Sample Rep 9 left, 14 days ago","46","3 asked questions",null,"cold"],
- ["Whose accounts are flat","No new conversation in 30 days","2","Sample Rep 3 61d, Sample Rep 34d",null,"flat"]],
-company:[
- ["Payments received this month","Four entities, native currency, never converted","₹1.42Cr","+ AED 402k · $184k · S$212k",null,"partner"],
- ["Escalation rate","Signals that reached a person","3.4%","▼ from 6.1% in June",[61,58,52,47,43,38,34],"churn"],
- ["Human minutes per signal","Total human time ÷ signals handled","2.4","▼ 41% since June",[41,40,36,33,29,26,24],"flat"],
- ["Top unmet product ask","Third quarter running","RCS","16 customers · 6 named a competitor",null,"stuck"]]};
+let PINNED={};
 
-const TAGS={
-"Sample Co 1":[["High volume",0],["Order updates",0],["Startup programme",0],["Growing",1],["Single-thread risk",1]],
-"Sample Co 2":[["Rate sensitive",0],["Pharma",0],["Competitor trial",1],["Decision pending",1]],
-"Sample Co 6":[["Partner sourced",0],["Travel",0],["At risk",1],["Ghosting",1]],
-"Sample Co 3":[["Partner sourced",0],["Fintech",0],["Had an incident",1]],
-"Sample Co 4":[["Fintech",0],["Quote out",1],["Expanding",1]],
-"Sample Co 5":[["Logistics",0],["Reason unknown",1]],
-"Sample Co 7":[["Startup programme",0],["Blocked on DLT",1]],
-"Sample Co 8":[["Edtech",0],["High quality inbound",1]]};
+const TAGS={};
 
-const OPEN={
-"Sample Co 1":[["mission","Grow product · WhatsApp","Opened 12 Sep by Pulse · waiting on you to pitch Sample Contact","open"],
- ["promise","Send the WhatsApp pricing sheet","You said Friday, on the call with Sample Contact","due Fri"],
- ["watch","Volume above 400k","Pulse is watching for a plan change","auto"]],
-"Sample Co 2":[["mission","Qualify · rate decision","Opened 12 Aug · blocked on your judgment","open"],
- ["overdue","Reply to Dr. Sample Contact","Asked twice. Second request 3 Sep.","4d late"],
- ["promise","Send revised rate","You said Wednesday, on the 15:00 call","due Wed"]],
-"Sample Co 6":[["mission","Protect revenue","Opened 28 Aug by Pulse · recovery mail drafted, held for you","open"],
- ["watch","Silence 22 days","Pulse tries the partner first","auto"]],
-"Sample Co 3":[["promise","Send the incident note","You said today, 17:00","due 17:00"],
- ["mission","Repair relationship","Opened 5 Sep after the outage","open"]],
-"Sample Co 4":[["mission","Grow product · WhatsApp","Quote approved and sent 6 Sep","waiting"]],
-"Sample Co 5":[["mission","Solve issue · WhatsApp paused","Blocked — Pulse needs to know why","blocked"]],
-"Sample Co 7":[["mission","First value","Day 9 · blocked on the DLT header","blocked"]],
-"Sample Co 8":[["mission","Qualify","Opened today · call within 10 minutes","open"]]};
+const OPEN={};
 
-const APPROVALS=[
- ["02 Sep","Sample Co 16","Startup programme · ₹5,000 free credit","Sample Rep 2","Registered 2024, under 20 staff, seed stage"],
- ["31 Aug","Sample Co 18","Startup programme · ₹5,000 free credit","Rhea Menon","Registered 2025, 6 staff, pre-seed"],
- ["28 Aug","Sample Co 7","Startup programme · ₹5,000 free credit","Rhea Menon","Registered 2024, 11 staff, seed stage"],
- ["24 Aug","Sample Co 23","Startup programme · ₹10,000 free credit","Sample Rep 3","Registered 2023, 34 staff — above the usual limit"],
- ["19 Aug","Sample Co 24","Startup programme · ₹5,000 free credit","Sample Rep 5","Registered 2025, 4 staff"]];
+const APPROVALS=[];
 
-const BULK=[
- ["Sample Co 19","sampleco19.example","new","200-store grocery chain · competitor SMS detected · quality 84"],
- ["Sample Co 1","sampleco1.example","dup","Already yours — this is Sample Contact from growth, attached to the account"],
- ["Sample Co 20","sampleco20.example","new","UAE logistics · WhatsApp listed on site · quality 71"],
- ["gmail.com","rakesh.k@gmail.com","junk","Free mail domain, no company · suppressed"],
- ["Sample Co 23","sampleco23.example","dup","Already a customer under Sample Rep 3 since Aug"],
- ["Sample Co 21","sampleco21.example","new","Diagnostics chain · app with phone login, no OTP provider · quality 78"],
- ["Sample Co 22","sampleco22.example","new","US retail · Klaviyo for email, nothing for SMS · quality 66"]];
+const BULK=[];
 
-const PARTNERS=[
- ["Sample Partner 1","CB","India",14,"₹18,40,000",["SMS ₹11,20,000","OTP ₹4,80,000","WhatsApp ₹2,40,000"]],
- ["Sample Partner 2","GT","UAE",9,"AED 214,000",["OTP AED 128,000","SMS AED 61,000","WhatsApp AED 25,000"]],
- ["Sample Partner 3","MD","Singapore",7,"S$88,200",["EMAIL S$46,000","SMS S$42,200"]],
- ["Sample Partner 4","NC","United States",5,"$61,400",["EMAIL $38,900","WHATSAPP $22,500"]],
- ["Sample Partner 5","VR","India",3,"₹4,60,000",["SMS ₹4,60,000"]]];
-
-ASK.teamall={q:"Every account my team is handling",big:"486",
- h:"Across 25 people, with what is open on each.",
- p:"Sorted by what needs attention first. Forty-six have nobody on them.",
- cols:["Account","Owner","State","Open","Last touch"],
- rows:[["Sample Co 2","Sample Rep 2","rate decision pending","1 overdue","today"],
-  ["Sample Co 6","Rhea Menon","declining","recovery held","22d"],
-  ["Sample Co 10","Sample Rep 3","declining","nothing open","94d"],
-  ["Sample Co 15","unassigned","growing","contract with legal","16d"],
-  ["Sample Co 7","Rhea Menon","blocked on DLT","day 9","today"],
-  ["Sample Co 3","Rhea Menon","recovering","1 promise due","1d"],
-  ["Sample Co 11","Rhea Menon","renewal out","waiting on finance","8d"],
-  ["Sample Co 14","unassigned","outbound","cooling","6d"],
-  ["Sample Co 12","Sample Rep 4","onboarding","week 3 of 4","2d"],
-  ["Sample Co 1","Rhea Menon","growing","WhatsApp pitch","2d"]],
- act:"Open the unassigned 46",
- st:["Rhea Menon","today 09:30","Sales team","manager view","payments masked"]};
-ASK.partners={q:"Revenue by partner this month",big:"₹64.2L",
- h:"Thirty-eight accounts across five partners.",
- p:"Native currency only. Sample Partner 1 alone is 29% of partner-sourced revenue.",
- cols:["Partner","Country","Accounts","Received","First value"],
- rows:PARTNERS.map(x=>[x[0],x[2],String(x[3]),x[4],["9 days","11 days","14 days","12 days","21 days"][PARTNERS.indexOf(x)]]),
- act:"Send each partner their digest",
- st:["Rhea Menon","today 09:32","Partner motion","no conversion applied"]};
-
+const PARTNERS=[];
 
 const WRONG=["Not important","Wrong person","Already handled","Bad information","Wrong timing"];
 
-let REPS=[["Rhea Menon","RM","18 companies · India, Singapore",1],
- ["Sample Rep 2","SQ","22 companies · India",0],["Sample Rep 3","AN","64 companies · India, UAE",0],
- ["Sample Rep 4","PS","51 companies · Singapore, US",0],["Sample Rep 5","NK","19 companies · India",0]];
-
-ASK.cold={q:"Which accounts have not been touched in 60 days?",big:"7",
- h:"Seven, and four of them are still paying.",
- p:"Sorted by how long the silence has run. Three belong to the unassigned book.",
- cols:["Company","Last touch","Owner","Products","State"],
- rows:[["Sample Co 10","94 days","Sample Rep 3","SMS, OTP","declining"],
-  ["Sample Co 17","81 days","Sample Rep 4","EMAIL","quiet"],
-  ["Sample Co 14","76 days","unassigned","SMS","quiet"],
-  ["Sample Co 11","71 days","Rhea Menon","OTP","quiet"],
-  ["Sample Co 13","68 days","unassigned","SMS, CAMPAIGN","quiet"],
-  ["Sample Co 12","64 days","Sample Rep 4","EMAIL, OTP","onboarding"],
-  ["Sample Co 15","61 days","unassigned","WHATSAPP","growing"]],
- act:"Create outreach missions for all seven",
- st:["Rhea Menon","today 09:22","Sales team","fresh to 09:20"]};
-ASK.all={q:"All my companies",big:"18",
- h:"Everything you own, sorted by what needs you.",
- p:"Eight have something open. Ten are quiet and healthy.",
- cols:["Company","Country","Motion","State","Last touch"],
- rows:BOOK.map(function(b){return [b[1],b[2],b[3],b[4],["2d","today","1d","today","3w","22d","9d","today","11d","94d","71d","6d","68d","76d","61d","4d","81d","1d"][BOOK.indexOf(b)]];}),
- act:"Export is disabled — ask for a reason first",
- st:["saved lens","Rhea Menon","today 09:05","your accounts","recomputed on open"]};
-ASK.churn.cols=["Company","Signal","Owner","Silence","Effort"];
-ASK.churn.rows=[["Sample Co 6","SMS -35% / 14d","Rhea Menon","22d","3d"],
- ["Sample Co 5","WhatsApp 0 since 14 Aug","Rhea Menon","19d","1d"],
- ["Sample Co 10","SMS -28% / 21d","Sample Rep 3","31d","28d"],
- ["Sample Co 7","never sent · day 9","Rhea Menon","2d","today"]];
+let REPS=[];
 
 let HISTORY=[
  [1,"All my companies","pinned · asked 34 times by 6 people · today 09:05","all"],
@@ -784,33 +333,6 @@ function togglePin(){
 applyPins();
 
 
-ASK.mine={q:"My open promises and missions",big:"11",
- h:"Three promises, eight missions. One promise is late.",
- p:"Pulse pulled every one of these out of your mail, calls and notes. Nothing here was typed by hand.",
- cols:["Type","What","Account","Due","Status"],
- rows:[["promise","Reply to Dr. Sample Contact","Sample Co 2","2 Sep","4 days late"],
-  ["promise","Send the incident note","Sample Co 3","today 17:00","due today"],
-  ["promise","Send the WhatsApp pricing sheet","Sample Co 1","Fri","on track"],
-  ["mission","Qualify · rate decision","Sample Co 2","—","blocked on you"],
-  ["mission","Protect revenue","Sample Co 6","—","draft held"],
-  ["mission","Grow product · WhatsApp","Sample Co 1","—","open"],
-  ["mission","Grow product · WhatsApp","Sample Co 4","—","waiting on them"],
-  ["mission","Repair relationship","Sample Co 3","—","open"],
-  ["mission","First value","Sample Co 7","—","blocked on DLT"],
-  ["mission","Solve issue · WhatsApp paused","Sample Co 5","—","blocked on you"],
-  ["mission","Qualify","Sample Co 8","—","clock running"]],
- act:"Deal with the late one first",
- st:["Rhea Menon","today 09:34","your accounts","fresh to 09:33"]};
-ASK.teammine={q:"Open promises and missions across the team",big:"214",
- h:"Forty-one promises, 173 missions. Nine promises are late.",
- p:"Late promises are the one number I would watch. They are the difference between a team that is busy and a team that is trusted.",
- cols:["Owner","Late","Due this week","Missions","Blocked"],
- rows:[["Rhea Menon","1","2","8","3"],["Sample Rep 2","0","4","11","2"],
-  ["Sample Rep 3","4","1","19","7"],["Sample Rep 4","2","3","14","4"],
-  ["Sample Rep 5","1","2","9","1"],["unassigned","1","0","6","6"]],
- act:"Look at Sample Rep 3's four",
- st:["Rhea Menon","today 09:35","Sales team","manager view"]};
-
 HISTORY.splice(2,0,[1,"Every account my team is handling","pinned · asked 22 times by 5 people · today 09:30","teamall"]);
 HISTORY.splice(3,0,[1,"Revenue by partner this month","pinned · asked 9 times by 3 people · today 09:32","partners"]);
 HISTORY.splice(1,0,[1,"My open promises and missions","pinned · asked 41 times by 18 people · today 09:34","mine"]);
@@ -831,62 +353,7 @@ CARDS.push({s:"team",w:1,r:"Watch closely",cust:"Startup approvals",geo:"India �
 /* Detail behind a Live or AI-log row. The rows stay scannable; this is what
    opens in the right-hand panel. Keyed by timestamp — Live and the AI log
    describe the same events, so they share one record. */
-const LOGDET={
-"09:14":{subj:"Sample Co 6",act:"Risk detected · recovery mail drafted",conf:.81,
- src:[["SMS −35% over 14 days","reports"],["No inbound reply in 22 days","gmail"],["3 outbound attempts","gmail"]],
- pol:"Partner · protect revenue · v4",
- out:"Drafted a recovery mail and held it. The last two drafts to this account were edited before sending, so this one waits for a person.",
- fyi:"Rhea Menon",next:"Nothing goes out until you release it."},
-"09:11":{subj:"Sample Co 5",act:"Two missions merged into one",conf:.88,
- src:[["Open protect-revenue mission","pulse"],["WhatsApp volume 0 since 14 Aug","reports"]],
- pol:"Inbound · one mission per story · v2",
- out:"Both signals described the same WhatsApp pause. The duplicate was suppressed so the owner sees one card, not two.",
- fyi:"",next:"The surviving mission keeps both evidence trails."},
-"09:04":{subj:"Sample Co 7",act:"Chased the DLT desk · ninth follow-up",conf:.95,
- src:[["Header NOVAFD pending 9 days","DLT desk"],["Zero messages sent since signup","reports"]],
- pol:"Startup · chase DLT daily · v3",
- out:"Escalated to the operator SPOC on day 7. I chase this every morning until the header clears.",
- fyi:"Rhea Menon",next:"Day 12 with no first message hands this to you."},
-"08:59":{subj:"Sample Co 9",act:"Answered a rate question",conf:.94,
- src:[["Question matched India rate card v7","billing"],["No margin exception required","billing"]],
- pol:"Inbound · standard rate replies · v7",
- out:"Sent from rep2@msg91.com under her signature. Inside policy, so no approval was needed.",
- fyi:"Sample Rep 2",next:"If they push below the floor it comes back to a person."},
-"08:52":{subj:"Sample Co 1",act:"Duplicate signup merged",conf:.91,
- src:[["Third signup from sampleco1.example","signup form"],["Different department, same domain","signup form"]],
- pol:"Inbound · never create a duplicate company · v2",
- out:"Attached to the existing company. A signup from a customer is a conversation, not a new lead — no sequence was started.",
- fyi:"",next:"Shows on the account as a new contact, not a new deal."},
-"08:47":{subj:"14 new signups",act:"Scored every signup",conf:.9,
- src:[["Domain, company size, pages read, UTM","signup form"],["Stack detection","enrichment"]],
- pol:"Inbound · score within 60 seconds · v9",
- out:"One crossed the call threshold — Sample Co 8 at 91. Four were suppressed below 40. Nine entered the nurture sequence.",
- fyi:"Rhea Menon",next:"The suppressed four are reviewable under Filtered."},
-"08:40":{subj:"Sample Co 10",act:"Could not decide · escalated",conf:.42,
- src:[["SMS −28% over 30 days","reports"],["No reply in 31 days","gmail"],["No ticket, invoice paid","billing"]],
- pol:"Outbound · escalate below 0.60 · v5",
- out:"Three rules matched and disagreed on the cause of the drop. Rather than guess at a recovery play, I handed it to Sample Rep 3.",
- fyi:"Sample Rep 3",next:"Waiting on Sample Rep 3. I will not act on this account meanwhile."},
-"08:31":{subj:"Sample Co 4",act:"Set itself a follow-up timer",conf:.86,
- src:[["Quote sent 09:18 yesterday","pulse"],["No reply yet","gmail"]],
- pol:"Inbound · one nudge then hand back · v3",
- out:"If Sample Contact has not replied by Thursday I nudge once, then this comes back to you. I will not chase a quote twice.",
- fyi:"",next:"Fires Thursday 09:00 unless he replies first."},
-"08:22":{subj:"Experiment E-014",act:"Promoted variant B to default",conf:.97,
- src:[["+18% reply rate over 240 sends","pulse"],["Significant at p<0.05","pulse"]],
- pol:"Recovery mails · subject line · v7 → v8",
- out:"Variant B is now the default on recovery mails. The old subject line is kept and can be restored.",
- fyi:"",next:"Next review at 500 sends."},
-"08:04":{subj:"AE route · Etisalat",act:"Failed over to the backup route",conf:.99,
- src:[["Delivery latency above threshold","reports"],["Etisalat degraded","carrier status"]],
- pol:"Delivery · fail over above 3s latency · v6",
- out:"Switched at 08:04 with zero messages lost. No customer was contacted — there was nothing to disclose.",
- fyi:"",next:"Returns to the primary route when latency holds under 1s for an hour."},
-"07:51":{subj:"Sample Co 13",act:"Recovery complete · mission closed",conf:.93,
- src:[["Volume at 94% of baseline","reports"],["3 touches over 18 days","gmail"]],
- pol:"Inbound · close on recovery · v4",
- out:"Outcome recorded against the recovery playbook. This is the third account this quarter recovered without a person.",
- fyi:"Rhea Menon",next:"Watching volume for 14 more days before I stop looking."}};
+const LOGDET={};
 
 /* The typed question is the one string on this surface a person composed, and
    it goes straight into innerHTML. Escaped so a stray < or & renders as itself
@@ -990,44 +457,19 @@ const GAME={
   atRisk:"nine customers were hit by yesterday's UAE outage",
   mate:["Pulse played 4,180 moves this week","96.6% of everything that happened was resolved without a person touching it."]}};
 
-const POINTS=[
- ["₹22L","46 accounts have nobody on them","Eleven are in your countries and three are sending well. Whoever claims them owns the revenue. This is the single biggest pile of points on the board.","Claim three"],
- ["₹5.8L","Sample Co 1 has never touched WhatsApp","400k SMS a month, and Sample Contact asked about WhatsApp in July. Eight accounts with this profile grew messaging spend 38% within two quarters.","See the pitch"],
- ["₹4.1L","Sample Co 10 left in March, and their new CTO used us before","Sample Contact joined from Sample Co 9 in July, where he ran our OTP integration himself. Sample Rep 3 still owns it and has not touched it in 94 days.","Read the story"],
- ["protects ₹19L","Five accounts where you only know one person","If Sample Contact leaves Sample Co 5 you lose the account. Single-thread accounts churn at roughly twice the rate.","Who to meet"],
- ["₹3.2L","Fourteen companies look like your best customers","Closest is Sample Co 19 — 200 stores, competitor SMS, an app with phone login and no OTP provider I can find.","Look at them"],
- ["—","You lose most often on rate","Two of your last four. Both times you countered once and stopped. Sample Rep 2 holds ₹0.121 by leading with term length.","Ten minutes on this"]];
+const POINTS=[];
 
 /* [score, change this month, band] */
-const HEALTH={
-"Sample Co 1":[78,6,"thriving"],"Sample Co 9":[84,2,"thriving"],"Sample Co 15":[81,9,"thriving"],
-"Sample Co 13":[76,1,"thriving"],"Sample Co 18":[74,12,"thriving"],"Sample Co 3":[73,-4,"thriving"],
-"Sample Co 4":[68,5,"steady"],"Sample Co 2":[66,0,"steady"],"Sample Co 11":[61,-2,"steady"],
-"Sample Co 12":[64,7,"steady"],"Sample Co 16":[58,3,"steady"],"Sample Co 14":[57,1,"steady"],
-"Sample Co 17":[55,-1,"steady"],"Sample Co 8":[52,52,"steady"],
-"Sample Co 5":[43,-11,"wobbling"],"Sample Co 7":[41,-3,"wobbling"],"Sample Co 10":[38,-6,"wobbling"],
-"Sample Co 6":[29,-15,"risk"]};
+const HEALTH={};
 const BANDS=[
  ["thriving","Thriving","#4C7A52",2,"multi-product, more than one contact"],
  ["steady","Steady","#1E75B9",0,"healthy but single-threaded"],
  ["wobbling","Wobbling","#B79A46",-1,"something changed, nobody fixed it"],
  ["risk","At risk","#A8462A",0,"Sample Co 6 — 22 days silent"]];
 /* Playing a card moves the account. Keyed by card subject. */
-const CARDMOVE={
- "Sample Co 8":["up","52 → 66","first call inside ten minutes"],
- "Sample Co 2":["up","66 → 79","a rate answered closes the loop and unblocks 11L a month"],
- "Sample Co 3":["hold","73 → 58 if you stay quiet","an unacknowledged outage is how trust goes"],
- "Sample Co 4":["up","68 → 77","a second product is the strongest health signal there is"],
- "Sample Co 5":["up","43 → 58","knowing why turns a mystery into a fixable problem"],
- "Sample Co 1":["up","78 → 88","a second department means the account survives one person leaving"],
- "Sample Co 6":["hold","29 → 18 if nothing changes","every silent day costs about a point"],
- "Sample Co 7":["up","41 → 63","the day they send their first message"]};
-const HMOVERS=[
- ["Sample Rep 2","+21","up",0],["Sample Rep 4","+16","up",0],["Rhea Menon","+14","up",1],
- ["Sample Rep 5","+9","up",0],["Sample Rep 6","+4","up",0],["Sample Rep 3","−7","down",0]];
-const HKEPT=[
- ["Sample Rep 4","3","up",0],["Rhea Menon","3","up",1],
- ["Sample Rep 2","1","up",0],["Sample Rep 3","−2","down",0]];
+const CARDMOVE={};
+const HMOVERS=[];
+const HKEPT=[];
 
 /* The lens reads country and motion off the sample book. Live data replaces
    BOOK with the real accounts, and the board is still keyed to HEALTH's
@@ -1035,15 +477,8 @@ const HKEPT=[
 const LENS_BOOK=BOOK.map(b=>b.slice());
 
 /* ⌘K's resting state: the saved views, by state. */
-const STATEOF={"Sample Co 1":"growing","Sample Co 2":"needs","Sample Co 3":"needs",
-"Sample Co 4":"flight","Sample Co 5":"needs","Sample Co 6":"needs","Sample Co 7":"flight",
-"Sample Co 8":"needs","Sample Co 9":"quiet","Sample Co 10":"needs","Sample Co 11":"flight",
-"Sample Co 12":"setup","Sample Co 13":"quiet","Sample Co 14":"flight","Sample Co 15":"growing",
-"Sample Co 16":"setup","Sample Co 17":"quiet","Sample Co 18":"setup"};
-const LASTTOUCH={"Sample Co 1":"2d","Sample Co 2":"today","Sample Co 3":"1d","Sample Co 4":"today",
-"Sample Co 5":"3w","Sample Co 6":"22d","Sample Co 7":"9d","Sample Co 8":"today","Sample Co 9":"11d",
-"Sample Co 10":"94d","Sample Co 11":"71d","Sample Co 12":"6d","Sample Co 13":"68d","Sample Co 14":"76d",
-"Sample Co 15":"61d","Sample Co 16":"4d","Sample Co 17":"81d","Sample Co 18":"1d"};
+const STATEOF={};
+const LASTTOUCH={};
 const VIEWS=[
  ["all","Your accounts","AC",18,null],
  ["needs","Needs you now","!",6,"needs"],
@@ -2658,43 +2093,7 @@ function startClocks(){clearInterval(CT);const els=$$('[data-clk]');if(!els.leng
  go();CT=setInterval(go,1000);}
 
 /* ⌘K */
-let PAL=[
- ...BOOK.map(([mo,nm,co,mt,st])=>({g:"Companies",ic:LOGO(nm,25),t:nm,s:`${co} · ${mt} — ${st}`,rt:"↵",
-  run:()=>{S.cust=nm;S.v=CUST[nm]?"cust":"cust";render();}})),
- {g:"People",ic:AVI("Sample Contact D",25),t:"Sample Contact D",s:"Sample Co 1 · marketing · asked about WhatsApp",rt:"↵",run:()=>{S.cust="Sample Co 1";S.v="cust";render();}},
- {g:"People",ic:AVI("Sample Contact A",25),t:"Sample Contact A",s:"Sample Co 2 · decision maker · waiting on a rate",rt:"↵",run:()=>{S.cust="Sample Co 2";S.v="cust";render();}},
- {g:"People",ic:AVI("Sample Contact J",25),t:"Sample Contact J",s:"Sample Co 3 · decision maker · UAE",rt:"↵",run:()=>{S.cust="Sample Co 3";S.v="cust";render();}},
- {g:"People",ic:AVI("Sample Contact E",25),t:"Sample Contact E",s:"Sample Co 1 · technical owner",rt:"↵",run:()=>{S.cust="Sample Co 1";S.v="cust";render();}},
- {g:"Ask Pulse",ic:"?",t:"Who is most likely to churn this month?",s:"4 — Sample Co 6, Sample Co 5, Sample Co 10, Sample Co 7",rt:"↵",run:()=>{S.ask="churn";S.v="ask";render();}},
- {g:"Ask Pulse",ic:"?",t:"Partner motion, this month",s:"Saved · ₹64.2L across four entities",rt:"saved",run:()=>{S.ask="partner";S.v="ask";render();}},
- {g:"Ask Pulse",ic:"?",t:"UAE entity, this quarter",s:"Saved · AED 402k · 11 unowned",rt:"saved",run:()=>{S.ask="uae";S.v="ask";render();}},
- {g:"Ask Pulse",ic:"?",t:"What is in flight?",s:"7 — 3 with them, 2 blocked here, 2 with Pulse",rt:"↵",run:()=>{S.ask="flight";S.sel=new Set();S.v="ask";render();}},
- {g:"Ask Pulse",ic:"?",t:"Whose accounts are flat?",s:"2 — Sample Rep 3 61 days, Sample Rep 34 days",rt:"↵",run:()=>{S.ask="flat";S.v="ask";render();}},
- {g:"Ask Pulse",ic:"?",t:"Which startups are stuck before first message?",s:"3, all on the same DLT queue",rt:"↵",run:()=>{S.ask="stuck";S.v="ask";render();}},
- {g:"Go to",ic:"◆",t:"Autopilot · Activity",s:"Everything AI did, with the evidence",rt:"",run:()=>{S.tab="activity";S.act="all";S.v="auto";render();}},
- {g:"Go to",ic:"◆",t:"Autopilot · Rules",s:"Four motions, four sets of rules",rt:"",run:()=>{S.tab="rules";S.v="auto";render();}},
- {g:"Go to",ic:"◆",t:"Connections",s:"What Pulse can reach · 2 not connected",rt:"",run:()=>{S.tab="connections";S.v="auto";render();}},
- {g:"Go to",ic:"◆",t:"Audit log",s:"What people viewed, revealed and changed",rt:"",run:()=>{S.tab="audit";S.v="auto";render();}},
- {g:"Go to",ic:"◆",t:"Suppressed signups",s:"What AI filtered out, and why",rt:"",run:()=>{S.tab="activity";S.act="suppressed";S.v="auto";render();}},
- {g:"Go to",ic:"◆",t:"Drafts waiting on you",s:"Messages AI wrote, held until you release them",rt:"",run:()=>{S.tab="activity";S.act="drafted";S.v="auto";render();}},
- {g:"Go to",ic:"◆",t:"Your profile and connections",s:"Your mailbox, your calendar, how you write",rt:"",run:()=>{S.v="profile";render();}},
- {g:"Go to",ic:"◆",t:"Preview: a new teammate on day one",s:"What Sample Contact sees with no accounts yet",rt:"",run:()=>{S.newRep=1;S.v="now";render();}},
- {g:"Go to",ic:"◆",t:"Back to the normal view",s:"Leave the new-teammate preview",rt:"",run:()=>{S.newRep=0;S.v="now";render();}},
- {g:"Do",ic:"+",t:"Add a company",s:"Prospect, partner referral or outbound target",rt:"⌘N"},
- {g:"Do",ic:"+",t:"Add accounts in bulk",s:"Paste a list or drop a CSV from an event",rt:"",run:()=>openSheet("bulk")},
- {g:"Do",ic:"✎",t:"Log a call or a meeting",s:"Write or talk — I turn it into the right work",rt:"",run:()=>openSheet("log")},
- {g:"Ask Pulse",ic:"?",t:"My open promises and missions",s:"Pinned · 11 open, 1 late",rt:"saved",run:()=>{S.ask="mine";S.sel=new Set();S.askTab="ask";S.v="ask";render();}},
- {g:"Ask Pulse",ic:"?",t:"Open promises and missions across the team",s:"214 open, 9 late",rt:"↵",run:()=>{S.ask="teammine";S.sel=new Set();S.askTab="ask";S.v="ask";render();}},
- {g:"Ask Pulse",ic:"?",t:"Every account my team is handling",s:"Pinned · 486 accounts, 46 unassigned",rt:"saved",run:()=>{S.ask="teamall";S.sel=new Set();S.askTab="ask";S.v="ask";render();}},
- {g:"Ask Pulse",ic:"?",t:"Revenue by partner this month",s:"Pinned · five partners, native currency",rt:"saved",run:()=>{S.ask="partners";S.sel=new Set();S.askTab="ask";S.v="ask";render();}},
- {g:"Do",ic:"→",t:"Reassign accounts",s:"46 accounts unowned since Sample Rep 9 left",rt:""},
- /* The kill switch. It used to be a label with nothing behind it; it now writes
-    the pulse_policy row the runner reads before every pass, and the release path
-    checks before letting anything out. */
- {g:"Do",ic:"■",t:"Pause all automatic sending",s:"Global stop. Nothing goes out until you resume.",rt:"",
-  run:()=>{const paused=!(window.PulseLive&&PulseLive.state.policy&&PulseLive.state.policy.sendingPaused);
-   if(window.PulseLive&&PulseLive.setSendingPaused)
-    PulseLive.setSendingPaused(paused).then(()=>{S.v="auto";S.tab="activity";S.act="drafted";render();});}}];
+let PAL=[];
 let pS=0,pR=[];
 /* Open a company page from anywhere, the same way a [data-cust] click does. */
 function openCompany(name){
