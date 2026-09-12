@@ -57,7 +57,8 @@ export default function ToastBridge() {
     };
   }, []);
 
-  return <Toaster position="top-right" toastOptions={{ duration: 4000 }} />;
+  // Infinity: only the × dismisses it now, not a timer — see withClose above.
+  return <Toaster position="top-right" toastOptions={{ duration: Infinity }} />;
 }
 
 declare global {
