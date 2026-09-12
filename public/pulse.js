@@ -1352,7 +1352,83 @@ async function routeGo(){
 
 window.addEventListener("popstate",()=>{routeGo();});
 
+/* ---------------------------------------------------------------------------
+ * Painting, and why it is scheduled rather than immediate.
+ *
+ * Every view function replaces main.innerHTML wholesale, so a render is a full
+ * teardown and rebuild of the page. That is fine once. The problem was that
+ * render() is called from ninety-odd places and several of them fire in the
+ * same tick — boot resolves, a loader answers, a poll lands — and each call
+ * did the whole rebuild synchronously. Three rebuilds in one tick is three
+ * full layouts the reader pays for and only the last of which they ever see.
+ *
+ * render() now schedules; paint() does the work, at most once per animation
+ * frame. Nothing that calls render() reads the DOM straight afterwards (every
+ * call site was checked), so deferring by a frame changes no behaviour — it
+ * only stops the browser doing the same work three times.
+ *
+ * Two renders are never deferred, and both for the same reason — deferring
+ * them would change behaviour rather than just timing:
+ *
+ *   a navigation. ROUTING is set around a render() call and cleared the moment
+ *     it returns, and routeSync() reads it to decide whether to touch history.
+ *     Run a frame later and it would read false and push an entry for a Back
+ *     press. Painting navigations synchronously keeps ROUTING true for the
+ *     whole paint, exactly as before. They are also the rare ones — it is the
+ *     loaders and polls that fire in bursts, and those are what this batches.
+ *
+ *   the first paint, because a frame of empty <main> before the first content
+ *     is precisely the flash this is meant to remove.
+ */
+let paintQueued=false, hasPainted=false;
 function render(){
+ if(ROUTING||!hasPainted){paint();hasPainted=true;return;}
+ if(paintQueued)return;
+ paintQueued=true;
+ requestAnimationFrame(()=>{paintQueued=false;paint();});
+}
+
+/**
+ * What the caret was doing before the rebuild threw its element away.
+ *
+ * Every field in this app is recreated on every render, so focus lands back on
+ * <body> and the cursor is gone mid-word. Keyed on id because that is the one
+ * thing that survives the rebuild — an element without one cannot be found
+ * again and is left alone rather than guessed at.
+ */
+function captureFocus(){
+ const el=document.activeElement;
+ if(!el||el===document.body||!el.id||!main.contains(el))return null;
+ const f={id:el.id};
+ /* Only inputs and textareas have a selection; asking anything else throws. */
+ try{if(el.selectionStart!=null){f.start=el.selectionStart;f.end=el.selectionEnd;f.value=el.value;}}catch(e){}
+ return f;
+}
+function restoreFocus(f){
+ if(!f)return;
+ const el=document.getElementById(f.id);
+ if(!el)return;
+ try{
+  /* preventScroll: the focus call would otherwise scroll the field into view
+     and fight the scroll restore happening in the same frame. */
+  el.focus({preventScroll:true});
+  /* Some fields are not drawn from S — the "what should Autopilot do" box is
+     read off the DOM when the button is pressed, never stored — so a rebuild
+     wipes what was typed. Put it back only when the new element came up empty:
+     if the rebuild had a value of its own, that value is the state talking and
+     it wins. */
+  if(f.value!=null&&!el.value)el.value=f.value;
+  if(f.start!=null&&el.setSelectionRange)el.setSelectionRange(f.start,f.end);
+ }catch(e){}
+}
+
+/** Cross-fade a real navigation, when the browser can and the reader wants it. */
+function canViewTransition(){
+ return typeof document.startViewTransition==="function"
+  &&!window.matchMedia("(prefers-reduced-motion:reduce)").matches;
+}
+
+function paint(){
  main.className="wrap"+(S.v==="auto"||S.v==="ask"?" wide":"");
  $("#amenu").hidden=true;
  /* Until the data layer has answered once, show the shape rather than the
@@ -1362,20 +1438,49 @@ function render(){
  /* Read before the rebuild: replacing innerHTML can collapse the document to a
     height shorter than the current offset, and the browser clamps the scroll
     position on the spot. */
- const here=place(), y=window.scrollY;
- ({now:vNow,ask:vAsk,auto:vAuto,cust:vCust,profile:vProfile})[S.v]();
- /* Going somewhere new starts at the top. Staying put — loading forty more
-    accounts, applying a lens, clearing one — holds the reader where they were.
-    The old code scrolled to the top on every render, so pressing "Load 40
-    more" at the bottom of the wall threw you back to the header and you had to
-    scroll past everything you had already read to reach the new rows.
-    Restoring the offset rather than leaving it alone is what makes it work
-    both ways: the browser has already clamped by now, and this puts it back. */
- /* The reassign sheet is an overlay: it survives a re-render of the page
-    underneath it, so it is redrawn from its own state rather than being
-    rebuilt only when it is opened. */
- drawReassign();
- window.scrollTo({top:here===LASTPLACE?y:0});
+ const here=place(), y=window.scrollY, focused=captureFocus();
+
+ const swap=()=>{
+  ({now:vNow,ask:vAsk,auto:vAuto,cust:vCust,profile:vProfile})[S.v]();
+  /* Going somewhere new starts at the top. Staying put — loading forty more
+     accounts, applying a lens, clearing one — holds the reader where they were.
+     The old code scrolled to the top on every render, so pressing "Load 40
+     more" at the bottom of the wall threw you back to the header and you had to
+     scroll past everything you had already read to reach the new rows.
+     Restoring the offset rather than leaving it alone is what makes it work
+     both ways: the browser has already clamped by now, and this puts it back. */
+  /* The reassign sheet is an overlay: it survives a re-render of the page
+     underneath it, so it is redrawn from its own state rather than being
+     rebuilt only when it is opened. */
+  drawReassign();
+  window.scrollTo({top:here===LASTPLACE?y:0});
+  restoreFocus(focused);
+ };
+
+ /* Motion belongs to a navigation, not to a repaint.
+ *
+ * Every node is recreated on every render, so an entry animation on .card
+ * would re-run in full each time anything at all changed — a loader answering,
+ * a poll landing, one row being added. The whole list flickering because it
+ * gained a row is worse than no motion. So the stagger is switched on by a
+ * data attribute that is only set when the reader actually went somewhere.
+ *
+ * And only when a view transition is *not* doing the job: the cross-fade
+ * already covers the whole page, and running both animates the same change
+ * twice at two different speeds. */
+ const navigated=here!==LASTPLACE;
+ const useVT=navigated&&LASTPLACE!==null&&canViewTransition();
+ main.dataset.enter=navigated&&!useVT?"1":"0";
+ /* The fallback is not defensive habit. startViewTransition defers the swap
+    into a callback the browser runs, so anything that goes wrong there — an
+    unsupported edge in a browser that advertises the API, a transition
+    interrupted by the next one — happens outside this call stack, and the one
+    thing it must never do is leave main empty because the swap never ran. If
+    the transition cannot be started at all, paint normally. */
+ if(useVT){
+  try{document.startViewTransition(swap);}catch(e){swap();}
+ }else swap();
+
  /* And the address bar, which is the same question asked of the browser. */
  routeSync(LASTPLACE===null||here===LASTPLACE);
  LASTPLACE=here;

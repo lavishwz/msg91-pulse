@@ -1119,3 +1119,82 @@ h1 .sl{color:var(--faint)}
  .top{padding-top:calc(13px + env(safe-area-inset-top))}
  .onbar{padding-top:env(safe-area-inset-top)}
 }
+
+/* ---------------------------------------------------------------------------
+ * Motion.
+ *
+ * Every view in this app is built by replacing main.innerHTML, which means the
+ * transitions declared elsewhere in this file can never actually run: a
+ * transition animates an element from a previous value to a new one, and a
+ * brand-new node has no previous value. `.go{transition:all .13s}` has been
+ * dead code on every rebuild since it was written — it only ever fires on
+ * hover, where the element survives.
+ *
+ * So motion here is built out of the two things that do work on a node that
+ * did not exist a moment ago: an entry animation, and a view transition.
+ *
+ * All of it sits under the prefers-reduced-motion rule at the top of this
+ * file, which switches `animation` and `transition` off globally. Nothing
+ * below needs its own guard except where it sets something other than those
+ * two properties.
+ * ------------------------------------------------------------------------ */
+
+/* A real navigation — Now to Autopilot, a company page, a tab — cross-fades
+   rather than snapping. The old and new snapshots are siblings for the length
+   of the animation, so both are positioned in the same place and simply fade
+   through one another; the slight upward drift on the incoming one gives the
+   change a direction without moving anything far enough to read as a slide. */
+@keyframes vt-out{to{opacity:0}}
+@keyframes vt-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+::view-transition-old(root){animation:vt-out .16s ease both}
+::view-transition-new(root){animation:vt-in .22s cubic-bezier(.22,.61,.36,1) both}
+
+/* Content arriving, rather than appearing.
+ *
+ * `.card` is the one that matters: the Now wall is the first thing anybody
+ * sees and its rows used to pop in fully formed the instant the fetch landed.
+ * The stagger is capped at six because beyond that the last row waits long
+ * enough to feel slow rather than smooth, and a wall can hold forty. */
+@keyframes rise{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+/* Scoped to [data-enter="1"], which paint() sets only when the reader actually
+   navigated — see public/pulse.js. Unscoped, this would replay on every
+   render, and since every node is recreated on every render that means the
+   whole list re-animating because one row was added. */
+.wrap[data-enter="1"] .card,
+.wrap[data-enter="1"] .conn,
+.wrap[data-enter="1"] .ru{animation:rise .26s cubic-bezier(.22,.61,.36,1) both}
+.wrap[data-enter="1"] .card:nth-child(1){animation-delay:0ms}
+.wrap[data-enter="1"] .card:nth-child(2){animation-delay:26ms}
+.wrap[data-enter="1"] .card:nth-child(3){animation-delay:52ms}
+.wrap[data-enter="1"] .card:nth-child(4){animation-delay:78ms}
+.wrap[data-enter="1"] .card:nth-child(5){animation-delay:104ms}
+.wrap[data-enter="1"] .card:nth-child(n+6){animation-delay:130ms}
+/* Rows in a settings list are shorter and denser, so they get a quicker,
+   flatter version — the same easing, less distance. */
+.wrap[data-enter="1"] .conn,
+.wrap[data-enter="1"] .ru{animation-duration:.2s}
+
+/* The skeleton-to-content swap. Without this the shimmer is replaced by real
+   text in a single frame, which is the harshest moment in the whole load. */
+.skwrap{animation:vt-in .2s ease both}
+
+/* Long lists stop re-laying-out what nobody is looking at.
+ *
+ * The account wall renders every row it has fetched — forty, then eighty — and
+ * each rebuild laid out all of them. content-visibility lets the browser skip
+ * layout for rows outside the viewport; contain-intrinsic-size gives it a
+ * height to reserve so the scrollbar does not jump as they are skipped.
+ *
+ * Deliberately not applied to .card: the Now wall is short, the cards are tall
+ * and of wildly different heights, and a wrong intrinsic size there would cost
+ * more in scrollbar drift than it saves in layout. */
+.wall .ru,.mo4 .ru{content-visibility:auto;contain-intrinsic-size:auto 44px}
+
+/* Motion off means off. The global rule at the top of this file already kills
+   `animation` and `transition`, but an element mid-`rise` would be left at
+   opacity 0 with nothing to finish it — `both` holds the from-state. These put
+   it back to visible rather than merely stopping the animation. */
+@media (prefers-reduced-motion:reduce){
+ .card,.conn,.ru,.skwrap{opacity:1;transform:none;animation:none}
+ ::view-transition-old(root),::view-transition-new(root){animation:none}
+}
