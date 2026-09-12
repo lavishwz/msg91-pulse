@@ -56,8 +56,17 @@ if (list.status !== 200 || !list.json?.agent) {
   console.error(`could not list agents: ${list.status} ${list.text.slice(0, 200)}`);
   process.exit(1);
 }
-const agents = list.json.agent;
-console.log(`${agents.length} agent(s) in the org`);
+/* GTWY deletes softly: DELETE /agent/:id sets deletedAt and the list keeps
+   returning the row (see deleteAgentController in AI-middleware). Counting by
+   name alone therefore reports twelve orphans still present immediately after
+   deleting twelve orphans, which reads as a total failure when nothing failed.
+   Anything already carrying deletedAt is done. */
+const all = list.json.agent;
+const agents = all.filter((a) => !a.deletedAt);
+const alreadyGone = all.length - agents.length;
+console.log(
+  `${all.length} agent(s) returned — ${agents.length} live, ${alreadyGone} already deleted`,
+);
 
 /* Whatever Pulse still points at, from its own config and its own rows —
    checked rather than assumed, because the whole reason these leaked is that
