@@ -1,4 +1,5 @@
 import mysql from "mysql2/promise";
+import { withColdStartRetry } from "./dbRetry";
 
 /**
  * MySQL access for MSG91 Pulse.
@@ -136,7 +137,7 @@ export async function query<T = mysql.RowDataPacket>(
   sql: string,
   params: readonly Param[] = [],
 ): Promise<T[]> {
-  const [rows] = await pool().execute(sql, params as Param[]);
+  const [rows] = await withColdStartRetry(() => pool().execute(sql, params as Param[]));
   return rows as T[];
 }
 
@@ -155,8 +156,8 @@ export async function query<T = mysql.RowDataPacket>(
  * so this costs about what the existing dry run costs.
  */
 export async function columnsOf(sql: string): Promise<string[]> {
-  const [, fields] = await pool().query(
-    `SELECT * FROM (${sql.replace(/;\s*$/, "")}) __cols LIMIT 0`,
+  const [, fields] = await withColdStartRetry(() =>
+    pool().query(`SELECT * FROM (${sql.replace(/;\s*$/, "")}) __cols LIMIT 0`),
   );
   return ((fields ?? []) as mysql.FieldPacket[]).map((f) => String(f.name));
 }

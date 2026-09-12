@@ -1,4 +1,5 @@
 import mysql from "mysql2/promise";
+import { withColdStartRetry } from "./dbRetry";
 
 /**
  * Pulse's own database — the writable half.
@@ -137,12 +138,16 @@ export function storePool(): mysql.Pool {
 export type Param = string | number | boolean | null | Date | Buffer;
 
 export async function write(sql: string, params: Param[] = []): Promise<mysql.ResultSetHeader> {
+  /* Not retried: a connection error here can arrive after the INSERT/UPDATE
+     already reached the server, and retrying blind risks writing it twice.
+     A read hitting the same cold start (below) is what actually wakes the
+     instance in practice — writes come later in every real call path. */
   const [res] = await storePool().execute(sql, params);
   return res as mysql.ResultSetHeader;
 }
 
 export async function read<T = mysql.RowDataPacket>(sql: string, params: Param[] = []): Promise<T[]> {
-  const [rows] = await storePool().execute(sql, params);
+  const [rows] = await withColdStartRetry(() => storePool().execute(sql, params));
   return rows as T[];
 }
 

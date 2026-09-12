@@ -28,30 +28,91 @@ function apiKey(): string {
   return key;
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * How many times a rate-limited or transiently-failed call is retried, and how
+ * long it waits.
+ *
+ * cron-job.org rate-limits an account that registers jobs quickly, and Pulse
+ * registers one per scheduled rule. Building rules back to back — which is
+ * exactly what a test batch or an enthusiastic afternoon looks like — hits it:
+ * three builds inside about a minute, and the fourth and fifth came back 429.
+ *
+ * Without a retry that surfaces as a failed *build*. The rule was fine, its
+ * query was fine, the planner had already been paid for; the only thing wrong
+ * was how recently somebody else had built something. The person sees "this
+ * isn't about your rule" and loses the rule anyway.
+ *
+ * Exponential with a floor of a second, because their limit is per-minute and
+ * a tight retry just spends the budget faster. Four attempts covers roughly a
+ * minute and a half of waiting, which is longer than the window that trips it.
+ */
+const RETRY_ATTEMPTS = 4;
+const RETRY_BASE_MS = 1_500;
+
+/** Worth waiting for: their rate limit, and the transient 5xx shapes. */
+function worthRetrying(status: number | null): boolean {
+  return status === 429 || status === 408 || (status !== null && status >= 500 && status < 600);
+}
+
 async function call(
   method: "GET" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`${BASE_URL}${path}`, {
-    method,
-    headers: { authorization: `Bearer ${apiKey()}`, "content-type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const raw = await res.text();
-  let parsed: unknown;
-  try {
-    parsed = raw ? JSON.parse(raw) : {};
-  } catch {
-    throw new CronJobError(`cron-job.org returned non-JSON (${res.status}): ${raw.slice(0, 200)}`, res.status);
-  }
-  if (!res.ok) {
-    throw new CronJobError(
+  let lastErr: CronJobError | null = null;
+
+  for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(`${BASE_URL}${path}`, {
+        method,
+        headers: { authorization: `Bearer ${apiKey()}`, "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (err) {
+      /* The connection itself failed — no status to reason about, and the same
+         thing a 503 means in practice. Retried on the same schedule. */
+      lastErr = new CronJobError(`cron-job.org unreachable: ${(err as Error).message}`, null);
+      if (attempt === RETRY_ATTEMPTS) break;
+      await sleep(RETRY_BASE_MS * 2 ** (attempt - 1));
+      continue;
+    }
+
+    const raw = await res.text();
+    let parsed: unknown;
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch {
+      throw new CronJobError(
+        `cron-job.org returned non-JSON (${res.status}): ${raw.slice(0, 200)}`,
+        res.status,
+      );
+    }
+
+    if (res.ok) return parsed as Record<string, unknown>;
+
+    lastErr = new CronJobError(
       `cron-job.org error (${res.status}) on ${method} ${path}: ${JSON.stringify(parsed)}`,
       res.status,
     );
+    /* A 400 or a 401 will say the same thing however long we wait — only the
+       rate limit and the transient failures are worth another attempt. */
+    if (!worthRetrying(res.status) || attempt === RETRY_ATTEMPTS) break;
+
+    /* Their own Retry-After when they send one; otherwise back off. */
+    const after = Number(res.headers.get("retry-after"));
+    const wait = Number.isFinite(after) && after > 0
+      ? Math.min(after * 1000, 30_000)
+      : RETRY_BASE_MS * 2 ** (attempt - 1);
+    console.warn(
+      `[pulse] cron-job.org ${res.status} on ${method} ${path} — retrying in ${wait}ms (${attempt}/${RETRY_ATTEMPTS})`,
+    );
+    await sleep(wait);
   }
-  return parsed as Record<string, unknown>;
+
+  throw lastErr ?? new CronJobError(`cron-job.org call failed: ${method} ${path}`, null);
 }
 
 /**
