@@ -29,6 +29,7 @@ import { guard } from "@/lib/pulse/sqlguard";
 import { judgeRow } from "../agents";
 import { due, recordRun, deferRun, automationsForEvent, type Automation } from "./automations";
 import { check as checkBreaker } from "./breaker";
+import { bindPlaceholders, bindValues } from "./enrich";
 import type { EventName } from "./events";
 
 /**
@@ -587,6 +588,68 @@ function subjectOfPayload(payload: Record<string, unknown>): string | null {
 }
 
 /**
+ * The payload, plus whatever the rule's optional lookup found.
+ *
+ * An event payload says what happened; it rarely says whether it matters.
+ * `{ accountId, tag }` is enough to state that an account was tagged at-risk
+ * and nothing at all to decide whether that is urgent. `enrich_sql` is one
+ * SELECT stored on the rule, run here with the payload's own fields bound in,
+ * so the judge sees the account's balance and history beside the event.
+ *
+ * Three outcomes, told apart deliberately, because collapsing them is how a
+ * judge ends up inventing facts:
+ *
+ *   no enrichment  — the rule never asked for one. The judge gets the payload
+ *                    exactly as before, which is what every automation built
+ *                    before migrations/025 carries.
+ *   found nothing  — the query ran and matched no row. Said explicitly, rather
+ *                    than as an absent key or a row of nulls: "balance unknown"
+ *                    and "balance zero" must never look the same, and the
+ *                    difference decides whether a person is called.
+ *   failed         — the lookup itself broke. Also said, and the judging still
+ *                    happens on the payload alone: an event worth reacting to
+ *                    does not stop being worth reacting to because a
+ *                    supporting query timed out.
+ *
+ * Re-guarded here rather than trusted from the table, for the same reason
+ * find_sql is: the row could have been changed by a migration, a restore, or
+ * anyone with database access since it was checked at build time.
+ */
+async function withEnrichment(
+  a: Automation,
+  payload: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!a.enrichSql?.trim()) return payload;
+
+  const bound = bindPlaceholders(a.enrichSql);
+  const g = guard(bound.sql, Math.min(a.maxRows ?? 50, 50));
+  if (!g.ok) {
+    return { ...payload, lookup: { ok: false, reason: `refused by the guard: ${g.reason}` } };
+  }
+  try {
+    const rows = await query<Record<string, unknown>>(
+      withStatementTimeout(g.sql),
+      bindValues(bound.names, payload) as never,
+    );
+    if (!rows.length) {
+      return { ...payload, lookup: { ok: true, found: 0, note: "no matching record" } };
+    }
+    /* One row is handed over as an object rather than a one-element array —
+       the overwhelmingly common shape is "the account this event is about",
+       and a judge reasons about `lookup.account.user_bal` far more reliably
+       than about `lookup.rows[0].user_bal`. */
+    return {
+      ...payload,
+      lookup: rows.length === 1
+        ? { ok: true, found: 1, account: rows[0] }
+        : { ok: true, found: rows.length, rows },
+    };
+  } catch (err) {
+    return { ...payload, lookup: { ok: false, reason: (err as Error).message.slice(0, 200) } };
+  }
+}
+
+/**
  * Run one event-triggered automation against the one payload that just
  * happened. The event-mode counterpart to `runOne`: there is no query to run
  * and no watermark to advance — the payload itself is the one row to judge,
@@ -624,7 +687,8 @@ export async function runEventAutomation(
   const subject = subjectOfPayload(payload);
   const signalKey = `auto:${a.key}:${subject || "event"}`;
   try {
-    const call = await judge(a.english, a.agentTask ?? a.english, payload);
+    const input = await withEnrichment(a, payload);
+    const call = await judge(a.english, a.agentTask ?? a.english, input);
     const data = call.data;
     out.judged = 1;
     let acted = "none";

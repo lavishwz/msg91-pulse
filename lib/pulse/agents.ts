@@ -211,6 +211,10 @@ export const AutomationPlanSchema = z.object({
   when_event: z.string().optional().default(""),
   cron_schedule: z.string().optional().default(""),
   find_sql: z.string().optional().default(""),
+  /* Event rules only: one SELECT run when the event fires, with the payload's
+     fields named as :placeholders. Empty is the norm and means "judge the
+     payload alone" — see migrations/025 and autopilot/enrich.ts. */
+  enrich_sql: z.string().optional().default(""),
   subject_col: z.string().optional().default(""),
   watermark_col: z.string().optional().default(""),
   max_rows: z.number().int().positive(),
@@ -666,11 +670,46 @@ export async function planAutomation(
   motion: string,
 ): Promise<AgentCall<AutomationPlan>> {
   const { eventsCatalogueForPlanner } = await import("./autopilot/events");
+
+  /* The hand-written glossary plus the real table list.
+   *
+   * SCHEMA_GLOSSARY describes five tables. The database has 509, of which 112
+   * are allowlisted — and the machinery to introspect them already exists and
+   * is already trusted by the Ask path (lib/pulse/schema.ts, cached for thirty
+   * minutes). agents.ts simply never imported it, so the one agent that writes
+   * every automation query was working from a constant somebody typed.
+   *
+   * That is where the invented tables came from. `clonemsg.leads`,
+   * `clonemsg.signups`, `accounts`, and `industry` on ms_user were not
+   * carelessness — they are what guessing past the end of a five-table
+   * glossary looks like. The glossary itself shows the cost: it has grown
+   * defensive lines like "There is NO company-name column anywhere in this
+   * schema", patching hallucinations by hand, one at a time, forever.
+   *
+   * The glossary stays, and stays first: it carries curated meaning the
+   * schema cannot supply — that user_type 1 is an admin and 3 a customer, that
+   * user_country_code is an integer and not a country name. The index adds
+   * what exists. One says what the columns mean, the other says what there is.
+   *
+   * Best-effort. If introspection fails the planner gets the glossary alone,
+   * which is exactly what it had before this, so a database hiccup degrades
+   * the plan rather than failing the build. */
+  let tableIndex = "";
+  try {
+    const { index, renderIndex } = await import("./schema");
+    tableIndex = renderIndex(await index());
+  } catch (err) {
+    console.warn("[pulse] schema index unavailable to the planner:", (err as Error).message);
+  }
+
   return callAgent("automationPlanner", AutomationPlanSchema, "Translate this rule.", {
     today: today(),
     motion,
     english,
-    schema: SCHEMA_GLOSSARY,
+    schema: tableIndex
+      ? `${SCHEMA_GLOSSARY}\n\nEvery other table you may read. Use a column only after\n` +
+        `confirming it exists; these lines give the table and what it holds, not its columns:\n\n${tableIndex}`
+      : SCHEMA_GLOSSARY,
     fields: Object.entries(RULE_FIELDS)
       .map(([k, v]) => `- ${k} — ${v}`)
       .join("\n"),

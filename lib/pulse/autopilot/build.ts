@@ -23,6 +23,7 @@ import { saveAutomation, type Motion, type Scope } from "./automations";
 import { EVENTS, isEventName, type EventName } from "./events";
 import { publicBaseUrl } from "@/lib/pulse/baseUrl";
 import { webhookKeyFor } from "./webhookKey";
+import { bindPlaceholders, bindValues } from "./enrich";
 
 export type BuildStep = "plan" | "guard" | "dry_run" | "cron" | "save";
 
@@ -96,6 +97,51 @@ async function fail(
  */
 function stripStrings(sql: string): string {
   return sql.replace(/'(?:[^'\\]|\\.|'')*'|"(?:[^"\\]|\\.|"")*"/g, (m) => " ".repeat(m.length));
+}
+
+/**
+ * Check an event rule's optional enrichment query, or say why it cannot be
+ * stored. Returns null when there is nothing wrong — including when there is
+ * no enrichment at all, which is the ordinary case.
+ *
+ * The order matters. Placeholders are bound first so every later check sees
+ * the statement MySQL will actually receive; guarding the `:name` form would
+ * be guarding something that never runs.
+ */
+async function checkEnrichment(
+  raw: string | undefined,
+  eventInfo: { payload: string; example: Record<string, unknown> },
+): Promise<string | null> {
+  const sql = (raw ?? "").trim();
+  if (!sql) return null;
+
+  const bound = bindPlaceholders(sql);
+
+  /* Every placeholder must name a field the event actually carries. The
+     payloads are fixed (events.ts) and the example is the catalogue's own, so
+     this is a real check and not a guess about shape. */
+  const known = new Set(Object.keys(eventInfo.example));
+  const unknown = [...new Set(bound.names)].filter((n) => !known.has(n));
+  if (unknown.length) {
+    return (
+      `the lookup asks for ${unknown.map((u) => `:${u}`).join(", ")}, which this event does not carry. ` +
+      `Its payload is ${eventInfo.payload}.`
+    );
+  }
+
+  const g = guard(bound.sql, 50);
+  if (!g.ok) return `the lookup is not safe to run: ${g.reason}`;
+
+  /* Run it for real, with the catalogue's example values bound and LIMIT 0, so
+     a column that does not exist is a build error rather than a failure on
+     every fire from now on. */
+  try {
+    await query(`SELECT * FROM (${g.sql.replace(/;\s*$/, "")}) __enrich LIMIT 0`,
+      bindValues(bound.names, eventInfo.example) as never);
+  } catch (err) {
+    return `the lookup does not run against the real database: ${(err as Error).message}`;
+  }
+  return null;
 }
 
 /**
@@ -274,6 +320,19 @@ export async function buildAutomation(
 
   /* ── event automations: no query, no cron job, live the moment it saves ── */
   if (eventInfo) {
+    /* The optional enrichment. Checked properly or not stored at all: a rule
+       that saves with a broken lookup would fail on every fire, and the fires
+       are the part nobody is watching.
+         · placeholders become ? before anything else looks at the SQL, so the
+           guard and the dry run see what MySQL will see
+         · the guard applies in full — single SELECT, allowlisted tables, row
+           cap, no file or system functions
+         · every :name must be a field this event actually carries, checked
+           against the catalogue rather than hoped for
+         · it is dry-run with the event's own example payload bound, so a
+           column that does not exist is caught here and not at 3am */
+    const enrichErr = await checkEnrichment(plan.enrich_sql, eventInfo);
+    if (enrichErr) return fail(english, motion, ownerEmail, "guard", enrichErr);
     const saved = await saveAutomation({
       key,
       motion,
@@ -285,6 +344,11 @@ export async function buildAutomation(
       whenEvent: eventName,
       mode: "event",
       findSql: null,
+      /* Stored with its :placeholders intact — they are bound at run time, in
+         enrich.ts, so the payload is never SQL text. Empty stays null, which
+         is what every automation built before this carries and what makes
+         this change invisible to them. */
+      enrichSql: plan.enrich_sql?.trim() || null,
       subjectCol: null,
       watermarkCol: null,
       agentTask: plan.executor_prompt,

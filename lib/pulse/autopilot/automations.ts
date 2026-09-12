@@ -39,6 +39,9 @@ export type Automation = {
   parentKey: string | null;
   everyMinutes: number | null;
   findSql: string | null;
+  /* Event rules only: a SELECT run with the event payload bound in, judged
+     alongside it. Null on every scheduled rule and on most event ones. */
+  enrichSql: string | null;
   subjectCol: string | null;
   watermarkCol: string | null;
   agentTask: string | null;
@@ -76,6 +79,7 @@ function toAutomation(r: Row): Automation {
     parentKey: (r.parent_key as string) ?? null,
     everyMinutes: r.every_minutes == null ? null : Number(r.every_minutes),
     findSql: (r.find_sql as string) ?? null,
+    enrichSql: (r.enrich_sql as string) ?? null,
     subjectCol: (r.subject_col as string) ?? null,
     watermarkCol: (r.watermark_col as string) ?? null,
     agentTask: (r.agent_task as string) ?? null,
@@ -98,7 +102,7 @@ function toAutomation(r: Row): Automation {
 }
 
 const COLUMNS = `id, automation_key, rule_key, motion, scope, owner_email, english, summary,
-  trigger_kind, when_event, parent_key, every_minutes, find_sql, subject_col, watermark_col,
+  trigger_kind, when_event, parent_key, every_minutes, find_sql, enrich_sql, subject_col, watermark_col,
   agent_task, mode, gtwy_agent_id, cron_job_id, executor_prompt, optimized_prompt,
   max_rows, capability, blocked_reason, state, live, last_run_at, next_run_at,
   last_error, run_count, alert_count`;
@@ -171,6 +175,7 @@ export type NewAutomation = {
   parentKey?: string | null;
   everyMinutes?: number | null;
   findSql?: string | null;
+  enrichSql?: string | null;
   subjectCol?: string | null;
   watermarkCol?: string | null;
   agentTask?: string | null;
@@ -220,7 +225,7 @@ export async function saveAutomation(
   await write(
     `INSERT INTO pulse_automation
        (automation_key, rule_key, motion, scope, owner_email, english, summary,
-        trigger_kind, when_event, parent_key, every_minutes, find_sql, subject_col,
+        trigger_kind, when_event, parent_key, every_minutes, find_sql, enrich_sql, subject_col,
         watermark_col, agent_task, mode, gtwy_agent_id, cron_job_id, executor_prompt,
         optimized_prompt, max_rows, capability, blocked_reason, live, next_run_at)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())
@@ -229,6 +234,7 @@ export async function saveAutomation(
         summary=VALUES(summary), trigger_kind=VALUES(trigger_kind),
         when_event=VALUES(when_event), parent_key=VALUES(parent_key),
         every_minutes=VALUES(every_minutes), find_sql=VALUES(find_sql),
+        enrich_sql=VALUES(enrich_sql),
         subject_col=VALUES(subject_col), watermark_col=VALUES(watermark_col),
         agent_task=VALUES(agent_task), mode=VALUES(mode),
         gtwy_agent_id=VALUES(gtwy_agent_id), cron_job_id=VALUES(cron_job_id),
@@ -239,7 +245,7 @@ export async function saveAutomation(
     [
       a.key, a.ruleKey ?? null, a.motion, a.scope ?? "company", a.ownerEmail,
       a.english, a.summary ?? null, a.triggerKind, a.whenEvent ?? null,
-      a.parentKey ?? null, a.everyMinutes ?? null, a.findSql ?? null,
+      a.parentKey ?? null, a.everyMinutes ?? null, a.findSql ?? null, a.enrichSql ?? null,
       a.subjectCol ?? null, a.watermarkCol ?? null, a.agentTask ?? null,
       a.mode ?? "cron", a.gtwyAgentId ?? null, a.cronJobId ?? null,
       a.executorPrompt ?? null, a.optimizedPrompt ?? null,
