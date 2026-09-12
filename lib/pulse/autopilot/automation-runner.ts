@@ -212,11 +212,60 @@ async function writeAlert(
   confidence: number | null,
 ): Promise<boolean> {
   const key = `auto:${a.key}:${subjectId ?? "portfolio"}`;
+
+  /* What the card is doing right now decides whether this is news.
+   *
+   * pulse_signal has a unique key on signal_key and this used to upsert with
+   * `ON DUPLICATE KEY UPDATE evidence = VALUES(evidence), updated_at = NOW()`,
+   * touching everything about the row except the one column that decides
+   * whether anybody sees it. So the moment a card was resolved — somebody
+   * acted on it, which is the *success* case — that automation could never
+   * alert on that subject again: the next alert quietly overwrote the resolved
+   * row's evidence, left state = 'resolved', and the board reads
+   * state = 'open'. An account tagged at-risk, dealt with, and tagged at-risk
+   * again six weeks later raised nothing at all. `affectedRows === 1` is false
+   * on that path too, so alert_count did not move either and the counters
+   * agreed with the silence.
+   *
+   * Read first rather than upserting blind, because the four cases genuinely
+   * differ and affectedRows cannot tell a reopen from an evidence refresh —
+   * both report 2.
+   *
+   * 'suppressed' is the one state left alone. It means a person or a policy
+   * decided this should not be shown, and log.ts has `unsuppress` as the
+   * deliberate way back; an automation firing again is not consent to undo
+   * that. Every other terminal state — resolved, expired, held — describes
+   * something that *was* true and no longer is, so a fresh occurrence reopens
+   * it and clears the resolution that no longer applies. */
+  const existing = await read<{ state: string }>(
+    `SELECT state FROM pulse_signal WHERE signal_key = ? LIMIT 1`,
+    [key],
+  );
+  const was = existing[0]?.state ?? null;
+  if (was === "suppressed") {
+    await write(
+      `UPDATE pulse_signal SET evidence = ?, updated_at = NOW() WHERE signal_key = ?`,
+      [
+        JSON.stringify({ automation: a.key, rule: a.english, headline, detail, reasons, confidence }),
+        key,
+      ],
+    );
+    return false;
+  }
+
   const res = await write(
     `INSERT INTO pulse_signal
        (signal_key, kind, subject_type, subject_id, source, state, evidence)
      VALUES (?, ?, ?, ?, 'agent', 'open', ?)
-     ON DUPLICATE KEY UPDATE evidence = VALUES(evidence), updated_at = NOW()`,
+     ON DUPLICATE KEY UPDATE
+       evidence = VALUES(evidence),
+       /* These two come before state is reassigned below: MySQL evaluates the
+          assignments left to right, so reading state here still sees the old
+          value rather than the 'open' about to be written. */
+       resolved_at = IF(state = 'open', resolved_at, NULL),
+       resolution  = IF(state = 'open', resolution, NULL),
+       state = 'open',
+       updated_at = NOW()`,
     [
       key,
       "automation",
@@ -232,9 +281,14 @@ async function writeAlert(
       }),
     ],
   );
-  /* affectedRows is 1 for an insert and 2 for an update, so a repeat of the
-     same alert is not counted as a new one. */
-  return res.affectedRows === 1;
+  /* A new alert is one a person has not already got: the card did not exist,
+     or it existed in a state that means they were finished with it and this
+     is a fresh occurrence. Refreshing the evidence on a card that is still
+     open is not news, and is still not counted.
+
+     affectedRows is not enough on its own — it is 2 both for a reopen and for
+     an evidence refresh — which is why `was` was read above. */
+  return was === null ? res.affectedRows === 1 : was !== "open";
 }
 
 /** What judges one row: the shared rule-worker by default, a dynamic per-automation agent when the caller supplies one. */
