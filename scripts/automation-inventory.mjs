@@ -51,6 +51,15 @@ const rows = await read(
      FROM pulse_automation ORDER BY trigger_kind, motion, automation_key`,
 );
 
+/* "on its event" was an assumption, not a check. emitEvent only ever reaches
+   what automationsForEvent() returns, and that has its own conditions —
+   live, active, capability ready — so the honest answer is to ask it. */
+const { automationsForEvent } = await import("../lib/pulse/autopilot/automations.ts");
+const listening = new Set();
+for (const name of new Set(rows.filter((r) => r.when_event && r.trigger_kind === 'event').map((r) => r.when_event))) {
+  for (const a of await automationsForEvent(name)) listening.add(a.key);
+}
+
 const jobs = await cronJobs();
 const jobById = new Map((jobs ?? []).map((j) => [String(j.jobId), j]));
 const tickScheduled = (jobs ?? []).some((j) => String(j.url).includes("/autopilot/tick"));
@@ -63,7 +72,9 @@ for (const r of rows) {
   const job = r.cron_job_id ? jobById.get(String(r.cron_job_id)) : null;
   const runnable =
     r.trigger_kind === "event"
-      ? "on its event"
+      ? listening.has(r.automation_key)
+        ? `on ${r.when_event}`
+        : `NOT LISTENING for ${r.when_event}`
       : r.trigger_kind !== "schedule"
         ? "never (by design)"
         : job?.enabled
@@ -74,7 +85,8 @@ for (const r of rows) {
               ? "the internal tick"
               : "NOTHING";
 
-  if (runnable === "NOTHING" || runnable.includes("MISSING")) stranded.push({ ...r, runnable });
+  if (runnable === "NOTHING" || runnable.includes("MISSING") || runnable.startsWith("NOT LISTENING"))
+    stranded.push({ ...r, runnable });
 
   console.log(
     `${String(r.trigger_kind).padEnd(9)} ${String(r.motion).padEnd(9)} ${r.live ? "live" : "off "} ` +
@@ -88,7 +100,7 @@ for (const r of rows) {
 }
 
 if (stranded.length) {
-  console.log(`\n${stranded.length} scheduled automation(s) that nothing will ever run:`);
+  console.log(`\n${stranded.length} automation(s) that nothing will ever run:`);
   for (const s of stranded) console.log(`  · ${s.automation_key} (${s.runnable})`);
 }
 

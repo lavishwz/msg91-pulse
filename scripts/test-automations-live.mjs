@@ -133,9 +133,28 @@ const ROW_COLUMNS = `automation_key, motion, scope, trigger_kind, when_event, mo
   every_minutes, find_sql, subject_col, watermark_col, agent_task, cron_job_id, live, state,
   capability, max_rows, run_count, alert_count, last_run_at, next_run_at, last_error`;
 
-async function row(key) {
-  const rows = await read(`SELECT ${ROW_COLUMNS} FROM pulse_automation WHERE automation_key = ?`, [key]);
-  return rows[0] ?? null;
+/**
+ * One automation row, tolerant of a connection that went stale.
+ *
+ * The watch phase sleeps two minutes between polls and can run for hours, so
+ * it holds a pooled connection idle far longer than any request path does —
+ * long enough for the server to drop it, which surfaces as `write ETIMEDOUT`
+ * on the next read. The first run of this script died that way at 00:38 after
+ * catching three of five fires, and lost the rest of the night for a reason
+ * that has nothing to do with what it was measuring. A dropped connection is
+ * a retry, not the end of the watch.
+ */
+async function row(key, attempts = 3) {
+  for (let i = 1; ; i++) {
+    try {
+      const rows = await read(`SELECT ${ROW_COLUMNS} FROM pulse_automation WHERE automation_key = ?`, [key]);
+      return rows[0] ?? null;
+    } catch (err) {
+      if (i >= attempts) throw err;
+      say(`   (store read failed: ${(err).message} — retrying)`);
+      await sleep(2000 * i);
+    }
+  }
 }
 
 async function decisionsFor(key, limit = 5) {
@@ -387,6 +406,20 @@ async function watch(minutes) {
   const fired = new Set();
 
   while (Date.now() < deadline && fired.size < state.schedule.length) {
+    try {
+      await poll();
+    } catch (err) {
+      /* Same reasoning as row()'s retry: whatever went wrong with the store
+         this minute, the schedules being watched are still running and the
+         next poll is two minutes away. Losing the watch loses the night. */
+      say(`${stamp()}  poll failed (${(err).message}) — carrying on`);
+    }
+    if (fired.size >= state.schedule.length) break;
+    say(`${stamp()}  ${fired.size}/${state.schedule.length} fired, still waiting…`);
+    await sleep(120_000);
+  }
+
+  async function poll() {
     for (const s of state.schedule) {
       if (fired.has(s.key)) continue;
       const r = await row(s.key);
@@ -414,14 +447,11 @@ async function watch(minutes) {
         }
       }
     }
-    if (fired.size >= state.schedule.length) break;
-    say(`${stamp()}  ${fired.size}/${state.schedule.length} fired, still waiting…`);
-    await sleep(120_000);
   }
 
   for (const s of state.schedule) {
     if (!fired.has(s.key)) {
-      const r = await row(s.key);
+      const r = await row(s.key).catch(() => null);
       finding(s.key, `never fired in ${minutes} minutes — registered as "${s.cronSchedule}" with cron-job.org job ${s.cronJobId}; run_count is still ${r?.run_count}`);
     }
   }
