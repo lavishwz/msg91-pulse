@@ -1456,7 +1456,32 @@ function vAsk(){
 function vAuto(){
  const t=AUTO[S.tab];
  const dt=(S.tab==="live"||S.tab==="ailog");
- const feed=f=>`<div class="feed">${f.map(([tm,a,b,tag,k])=>{
+ /**
+  * An empty feed says so, rather than rendering an empty box.
+  *
+  * Every one of these lists used to arrive pre-filled with a written-out day,
+  * so "no rows" was a state that could not happen and was never designed for.
+  * With the invented rows gone it happens constantly, and an empty <div> is the
+  * one answer that tells a reader nothing — indistinguishable from a feed still
+  * loading, a feed that failed, and a genuinely quiet morning.
+  *
+  * Three states, the same three the Now surface already distinguishes: still
+  * coming, came back empty, and did not come back.
+  */
+ const emptyFeed=()=>{
+  const st=window.PulseLive&&PulseLive.state;
+  if(st&&(st.autopilotError||st.error))
+   return `<div class="zero" style="padding:26px 0">
+    <h2 style="font-weight:600;font-size:19px;letter-spacing:-.02em;margin:0 0 8px">Could not load what Autopilot did.</h2>
+    <p>This is not "nothing happened" — it is not known. ${esc(st.autopilotError||st.error||"")}</p></div>`;
+  if(st&&!st.loaded)
+   return `<div style="margin-top:14px">${[0,1,2].map(()=>
+    '<div class="sk" style="height:14px;margin-top:10px"></div>').join("")}</div>`;
+  return `<div class="zero" style="padding:26px 0">
+   <h2 style="font-weight:600;font-size:19px;letter-spacing:-.02em;margin:0 0 8px">Nothing here yet.</h2>
+   <p>Autopilot has not recorded anything on this tab. When it acts, it appears here.</p></div>`;
+ };
+ const feed=f=>!f||!f.length?emptyFeed():`<div class="feed">${f.map(([tm,a,b,tag,k])=>{
   const hasd=dt&&LOGDET[tm];
   /* Audit and Filtered rows carry their own detail, so they open a panel
      directly instead of relying on the prototype's sample decision map. */
