@@ -686,8 +686,14 @@ export async function runEventAutomation(
 
   const subject = subjectOfPayload(payload);
   const signalKey = `auto:${a.key}:${subject || "event"}`;
+  /* Declared out here so the decision row can record what the judge was
+     actually given, including on the failure path. A log that shows the bare
+     payload when the judge saw the payload plus a lookup is a log that
+     misrepresents the evidence a decision was made on — and the whole purpose
+     of pulse_decision is to be able to answer "why did it do that?" later. */
+  let input: Record<string, unknown> = payload;
   try {
-    const input = await withEnrichment(a, payload);
+    input = await withEnrichment(a, payload);
     const call = await judge(a.english, a.agentTask ?? a.english, input);
     const data = call.data;
     out.judged = 1;
@@ -698,13 +704,13 @@ export async function runEventAutomation(
       acted = "alerted";
     }
     await writeDecision(
-      a, signalKey, call.agentId, call.model, payload, data,
+      a, signalKey, call.agentId, call.model, input, data,
       data.should_alert ? "alert" : "quiet",
       data.confidence, acted, null, call.usage,
     );
   } catch (err) {
     await writeDecision(
-      a, signalKey, "", null, payload, null, "failed", null, "none",
+      a, signalKey, "", null, input, null, "failed", null, "none",
       (err as Error).message.slice(0, 40), {},
     ).catch(() => {});
     out.error = (err as Error).message;
