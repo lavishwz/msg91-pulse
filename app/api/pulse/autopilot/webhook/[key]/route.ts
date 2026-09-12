@@ -3,6 +3,7 @@ import { NextResponse, after } from "next/server";
 import { acquireLock, releaseLock } from "@/lib/store";
 import { getAutomation } from "@/lib/pulse/autopilot/automations";
 import { runOne } from "@/lib/pulse/autopilot/automation-runner";
+import { webhookKeyMatches } from "@/lib/pulse/autopilot/webhookKey";
 
 /**
  * POST /api/pulse/autopilot/webhook/[key] — what cron-job.org calls.
@@ -14,10 +15,13 @@ import { runOne } from "@/lib/pulse/autopilot/automation-runner";
  * find_sql and its executor_prompt (stored as agent_task) are what make it
  * itself, not a dedicated agent.
  *
- * Authenticated by middleware.ts's isMachineCall(): the URL cron-job.org is
- * given (see build.ts) carries ?secret=AUTOPILOT_TICK_SECRET, the same secret
- * the internal tick requires. A request that reaches this handler has already
- * presented it — this route does not re-check it.
+ * Authenticated by this route itself, on the ?k= it is called with — a key
+ * derived for this one automation (lib/pulse/autopilot/webhookKey.ts), not the
+ * shared AUTOPILOT_TICK_SECRET the URL used to carry. middleware.ts lets the
+ * path through unauthenticated precisely so that check can happen here, where
+ * the automation being addressed is known; it used to rely on isMachineCall(),
+ * which could only ever ask "does this caller hold the secret that opens every
+ * machine endpoint".
  *
  * runOne() itself refuses to run a retired or non-live automation, so a
  * lingering copy of this URL (browser history, a queued cron-job.org retry)
@@ -51,8 +55,34 @@ import { runOne } from "@/lib/pulse/autopilot/automation-runner";
  * overlapping fires of the same automation from double-processing rows if a
  * pass ever runs longer than the interval between schedule ticks.
  */
-export async function POST(_req: Request, { params }: { params: Promise<{ key: string }> }) {
+export async function POST(req: Request, { params }: { params: Promise<{ key: string }> }) {
   const { key } = await params;
+
+  /* Authenticated here, not only by middleware.
+   *
+   * The URL build.ts registers now carries ?k=<per-automation key> instead of
+   * ?secret=AUTOPILOT_TICK_SECRET. cron-job.org stores that URL forever and
+   * shows it in its dashboard, and the shared secret also opens /tick, /run,
+   * /monthly, /store/migrate and the nightly digest — every job in a third
+   * party's account held the key to every machine endpoint in the product.
+   * See lib/pulse/autopilot/webhookKey.ts.
+   *
+   * The shared secret is still accepted, because jobs registered before this
+   * change still send it and must not all break the moment this deploys.
+   * scripts/repoint-cron-jobs.mjs rewrites them; once no job sends ?secret=
+   * any more, the second half of this condition can go. */
+  const params_ = new URL(req.url).searchParams;
+  const sharedSecret = (process.env.AUTOPILOT_TICK_SECRET ?? "").trim();
+  const viaSharedSecret =
+    Boolean(sharedSecret) &&
+    (params_.get("secret") === sharedSecret ||
+      req.headers.get("x-autopilot-secret") === sharedSecret);
+  if (!webhookKeyMatches(key, params_.get("k")) && !viaSharedSecret) {
+    /* Deliberately the same answer an unknown automation gets, so a caller
+       with a wrong key cannot use this to learn which automations exist. */
+    return NextResponse.json({ ok: false, error: "no such automation" }, { status: 404 });
+  }
+
   const a = await getAutomation(key);
   if (!a) return NextResponse.json({ ok: false, error: "no such automation" }, { status: 404 });
 

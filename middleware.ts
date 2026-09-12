@@ -50,11 +50,22 @@ function isPublic(pathname: string): boolean {
     // handler looks up and refuses when unknown. That scopes a leak to one
     // subscription, and revoking it is a row delete rather than a rotation
     // that would break every other machine endpoint at once.
-    pathname.startsWith("/api/pulse/viasocket/hook/")
-    // The per-automation webhook (/api/pulse/autopilot/webhook/[key]) is NOT
-    // listed here: cron-job.org's outgoing calls now carry the same shared
-    // secret the tick uses (see build.ts), so it is authenticated via
-    // isMachineCall() below instead of being a public route.
+    pathname.startsWith("/api/pulse/viasocket/hook/") ||
+    // The per-automation webhook, for the same reason and by the same means.
+    //
+    // It used to be authenticated here by isMachineCall(), which could only
+    // ask "does this caller hold AUTOPILOT_TICK_SECRET" — so every job in
+    // cron-job.org's dashboard had to carry the one secret that also opens
+    // /tick, /run, /monthly, /store/migrate and the nightly digest.
+    //
+    // The URL now carries a key derived for that one automation
+    // (lib/pulse/autopilot/webhookKey.ts), which this layer cannot check
+    // because it does not know which automation is being addressed until the
+    // path is parsed. So the path is let through and the route checks it,
+    // where a wrong key is refused with the same 404 an unknown automation
+    // gets. isMachineCall() below still passes the older jobs that send
+    // ?secret=, until they are repointed.
+    pathname.startsWith("/api/pulse/autopilot/webhook/")
   );
 }
 

@@ -7,14 +7,15 @@
  * cron-job.org gets a connection error, the webhook is never reached, and the
  * automation just stops running with no error anywhere in the product.
  *
- * Only the origin is rewritten. The path and query string — which carry the
- * automation key and the tick secret — are preserved exactly.
+ * The origin is rewritten, and a webhook still carrying ?secret= is rekeyed to
+ * the per-automation ?k= it should have (see lib/pulse/autopilot/webhookKey.ts).
  *
- *   node scripts/repoint-cron-jobs.mjs          # dry run: show what would change
- *   node scripts/repoint-cron-jobs.mjs --apply  # actually change them
+ *   node --experimental-strip-types scripts/repoint-cron-jobs.mjs          (dry run)
+ *   node --experimental-strip-types scripts/repoint-cron-jobs.mjs --apply  (do it)
  */
 
 import { readFileSync } from "node:fs";
+import { webhookKeyFor } from "../lib/pulse/autopilot/webhookKey.ts";
 
 for (const line of readFileSync(new URL("../.env.local", import.meta.url), "utf8").split("\n")) {
   const m = /^([A-Z_][A-Z0-9_]*)=(.*)$/.exec(line.trim());
@@ -55,6 +56,22 @@ for (const job of jobs) {
     console.log(`  -  ${id}  not a Pulse job, left alone: ${url.pathname}`);
     skipped++;
     continue;
+  }
+
+  /* Swap the shared secret for this automation's own key.
+   *
+   * Jobs built before that change carry ?secret=AUTOPILOT_TICK_SECRET — the
+   * one secret that also opens /tick, /run, /monthly, /store/migrate and the
+   * nightly digest, sitting in a third party's dashboard. The webhook route
+   * still accepts it so nothing broke on deploy, but it should not stay there.
+   *
+   * Only automation webhooks are rekeyed. The tick, the health tick and the
+   * nightly digest are single endpoints with no automation to derive a key
+   * from, and the shared secret is genuinely what they authenticate with. */
+  const m = /^\/api\/pulse\/autopilot\/webhook\/([^/?]+)$/.exec(url.pathname);
+  if (m && url.searchParams.has("secret")) {
+    url.searchParams.delete("secret");
+    url.searchParams.set("k", webhookKeyFor(decodeURIComponent(m[1])));
   }
 
   const next = BASE + url.pathname + url.search;

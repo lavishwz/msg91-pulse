@@ -22,6 +22,7 @@ import { createCronJob, deleteCronJob, cronIntervalMinutes } from "@/lib/pulse/c
 import { saveAutomation, type Motion, type Scope } from "./automations";
 import { EVENTS, isEventName, type EventName } from "./events";
 import { publicBaseUrl } from "@/lib/pulse/baseUrl";
+import { webhookKeyFor } from "./webhookKey";
 
 export type BuildStep = "plan" | "guard" | "dry_run" | "cron" | "save";
 
@@ -381,7 +382,11 @@ export async function buildAutomation(
         "AUTOPILOT_TICK_SECRET is not set — the webhook refuses to be provisioned unprotected.",
       );
     }
-    webhookUrl = `${base}/api/pulse/autopilot/webhook/${key}?secret=${encodeURIComponent(secret)}`;
+    /* A key derived for this automation alone, not AUTOPILOT_TICK_SECRET.
+       cron-job.org stores this URL forever and shows it in its dashboard; the
+       shared secret also opens /tick, /run, /monthly, /store/migrate and the
+       nightly digest, and had no business being there. See webhookKey.ts. */
+    webhookUrl = `${base}/api/pulse/autopilot/webhook/${key}?k=${webhookKeyFor(key)}`;
     try {
       cronJobId = await createCronJob(`pulse: ${english.slice(0, 60)}`, webhookUrl, cronSchedule);
     } catch (err) {
