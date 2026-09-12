@@ -34,6 +34,9 @@ function safeNext(value: string | null): string {
 
 export default function LoginForm({ referenceId }: { referenceId: string }) {
   const params = useSearchParams();
+  /* "working" covers the token exchange only. A fresh arrival starts at
+     "widget" so the container the MSG91 script renders into is in the layout,
+     with a size, before initVerification() is ever called — see below. */
   const [status, setStatus] = useState<"working" | "widget" | "error">("working");
   const [error, setError] = useState<string | null>(null);
   const started = useRef(false);
@@ -98,7 +101,23 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
       const timer = setInterval(() => {
         if (typeof window.initVerification === "function") {
           clearInterval(timer);
-          window.initVerification({
+          /* Unhide the container first, and let the browser lay it out, before
+             handing it to the widget.
+             The container is `hidden` while status is "working", and this used
+             to call initVerification() and only then setStatus("widget") — so
+             the widget was initialised into a box with no layout and no size.
+             A widget that measures its container at init gets zero, renders
+             nothing, and reports no error: the page sits there with a heading
+             and an empty space where the sign-in should be. That is the
+             intermittent blank /login, and it is intermittent because it
+             depends on whether the script was already cached and how quickly
+             it defined initVerification. */
+          /* Captured before the frame callback: the narrowing from the
+             typeof check above does not survive into a closure. */
+          const init = window.initVerification;
+          setStatus("widget");
+          requestAnimationFrame(() => {
+          init({
             referenceId,
             type: "authorization",
             addInfo: { redirect_path: `/login${next === "/" ? "" : `?next=${encodeURIComponent(next)}`}` },
@@ -109,7 +128,7 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
               setStatus("error");
             },
           });
-          setStatus("widget");
+          });
           return;
         }
         waited += 100;

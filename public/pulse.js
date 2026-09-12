@@ -257,13 +257,13 @@ function roomNewRows(){
    unowned!=null?`${unowned.toLocaleString("en-IN")} UNOWNED · COUNTED JUST NOW`:"UNOWNED ACCOUNTS",
    "Show me the unowned ones"],
   ["Read before you call","Three accounts are worth understanding first.",
-   "Sample Co 1, Sample Co 2 and Sample Co 3. Each one is a different shape of MSG91 customer — a startup growing on volume, an outbound deal stuck on rate, and a partner account recovering from an outage.",
+   "Open the first three on your list. They will be different shapes of MSG91 customer — a startup growing on volume, an outbound deal stuck on rate, a partner account recovering from an outage — and the differences are the job.",
    "ABOUT 20 MINUTES","Open the first"],
   ["See how the team works","Watch how your colleagues are working the open situations.",
    "Team scope shows you what your colleagues are handling and how. The fastest way to learn the job here is to watch it happen.",
    "NOTHING IS HIDDEN FROM YOU","Open Team"],
   ["Ask me anything","I know every account, every payment and every conversation.",
-   "Try: which of our customers use WhatsApp? What does a good Indian inbound signup look like? Who should I talk to at Sample Co 1?",
+   "Try: which of our customers use WhatsApp? What does a good Indian inbound signup look like? Who should I talk to at my largest account?",
    "ASK IN YOUR OWN WORDS · NO REPORTS TO LEARN","Ask something"]];
 }
 
@@ -465,7 +465,7 @@ const BANDS=[
  ["thriving","Thriving","#4C7A52",2,"multi-product, more than one contact"],
  ["steady","Steady","#1E75B9",0,"healthy but single-threaded"],
  ["wobbling","Wobbling","#B79A46",-1,"something changed, nobody fixed it"],
- ["risk","At risk","#A8462A",0,"Sample Co 6 — 22 days silent"]];
+ ["risk","At risk","#A8462A",0,"silent long enough that somebody should call"]];
 /* Playing a card moves the account. Keyed by card subject. */
 const CARDMOVE={};
 const HMOVERS=[];
@@ -492,11 +492,10 @@ VIEWS.forEach(function(v){
  const key=v[0],label=v[1],st=v[4];
  let rows;
  if(st==="__unowned"){
-  rows=[["Sample Co 15","UAE","Partner","growing on WhatsApp","61d"],
-   ["Sample Co 14","US","Outbound","first invoice paid","76d"],
-   ["Sample Co 13","India","Inbound","campaign heavy","68d"],
-   ["Sample Co 10","India","Outbound","volume dropped","94d"],
-   ["Sample Co 20","UAE","Inbound","new from the event list","2d"]];
+  /* No invented rows. The unowned list is a real query (the reassign sheet
+     reads it); until that is wired to this view it shows nothing rather than
+     five companies that do not exist. */
+  rows=[];
  } else if(st==="__all"){
   rows=LENS_BOOK.slice(0,10).map(b=>[b[1],b[2],b[3],b[4],LASTTOUCH[b[1]]||"—"]);
  } else {
@@ -504,7 +503,7 @@ VIEWS.forEach(function(v){
  }
  ASK["v_"+key]={q:label,big:String(v[3]),
   h:key==="all"?"Everything you own, sorted by what needs you.":
-    key==="unowned"?"Unassigned since Sample Rep 9 left, fourteen days ago.":
+    key==="unowned"?"Accounts with nobody on them.":
     key==="everything"?"Across 25 people and four entities.":label+".",
   p:key==="unowned"?"Three of them asked a question in that time and nobody answered. Anyone can claim one.":
     key==="everything"?"Showing the first ten. Narrow it by asking a question instead of scrolling.":
@@ -1147,7 +1146,9 @@ function vNow(){
  /* 3 · what to do now */
  let body;
  if(S.newRep){
-  body=`<h1>Welcome, Sample Contact.</h1>
+  /* The signed-in person's own name, or a greeting with no name at all —
+     never an invented one. state.signedInAs is who holds the session. */
+  body=`<h1>Welcome${(n=>n?", "+esc(n):"")(((window.PulseLive&&PulseLive.state.signedInAs)||{}).name||"")}.</h1>
    <p class="why" style="margin-top:18px;max-width:52ch">Nothing needs you yet — you have no accounts. Four things are worth doing today, and the first one gives you something real to work on.</p>`;
  } else if(cardsFailed){
   /* The cards request failed. "Board cleared" would be a lie — nothing was
@@ -1970,7 +1971,7 @@ function vProfile(){
      :"The defaults everybody starts with. Change any of them in first-run setup and the list becomes yours.")(
       window.PulseLive&&PulseLive.state.voice)}</p>
    <div class="vt">${VOICE.map(v=>`<span>${esc(v)}</span>`).join("")}</div>
-   <blockquote>“Sample Contact — yesterday was on us. The Etisalat route failed at 3:02 and we moved you across twelve minutes later. Here is what we are changing so it does not happen again.”</blockquote>
+   <blockquote>“Yesterday was on us. The route failed at 3:02 and we moved you across twelve minutes later. Here is what we are changing so it does not happen again.”</blockquote>
    <p style="font-size:12.5px;color:var(--faint);margin:12px 0 0">Edited in first-run setup. Nothing reads it yet: Pulse has no mailbox connection, so this is not learned from your mail and no draft is shaped by it — both are wired to this list the day either lands.</p>
    <div class="row" style="margin-top:14px"><button class="go" id="startonb2">Edit how you write</button></div></div></div>
  <div class="sec"><h5>Where I tell you things</h5>
@@ -2117,9 +2118,23 @@ function vCust(){
 }
 
 function vPartner(){
+ /* PARTNERS is empty until a real partner list is wired up, so there may be
+    no row at all. Every line below indexes `pt`, which used to be guaranteed
+    by the sample data — without a guard this throws and takes the whole page
+    with it. */
  const pt=PARTNERS.find(x=>x[0]===S.partner)||PARTNERS[0];
- const accts=[["Sample Co 3","OTP AED 128,000","growing"],["Sample Co 15","WHATSAPP AED 25,000","growing"],
-  ["Sample Co 20","SMS AED 61,000","active"]];
+ if(!pt){
+  main.innerHTML=`<div class="cpg"><button class="back" data-q="partners">← Back to partners</button>
+   <div class="zero" style="padding:40px 0">
+    <h2 style="font-weight:600;font-size:22px;letter-spacing:-.02em;margin:0 0 8px">No partner to show.</h2>
+    <p>Partner accounts are not wired to live data yet, so there is nothing here to read.</p>
+   </div></div>`;
+  return;
+ }
+ /* No invented accounts. A partner's sourced accounts are a real query that
+    does not exist yet, so this lists nothing rather than three companies that
+    are not theirs. */
+ const accts=[];
  main.innerHTML=`<div class="cpg"><button class="back" data-q="partners">← Back to partners</button>
   <div class="chead">${LOGO(pt[0],52)}<div><h1>${pt[0]}</h1>
    <span class="m">${pt[2]} · reseller · ${pt[3]} accounts sourced</span></div></div>
@@ -2850,7 +2865,7 @@ function drawOnb(){
       <button class="go solid" id="addacctgo" style="padding:8px 13px;font-size:13px">Add</button>
       <button class="go" id="addacctcancel" style="padding:8px 13px;font-size:13px">Cancel</button>`
      :`<button class="go" id="addacctopen">＋ Add an account I own</button>`}
-    <span style="font-size:13px;color:var(--faint)">${keep.length} of ${18+ONBSTATE.added.length} · nine came across when Sample Rep 9 left${
+    <span style="font-size:13px;color:var(--faint)">${keep.length} of ${18+ONBSTATE.added.length} · some came across when a colleague left${
      ONBSTATE.dropped.size?` · ${ONBSTATE.dropped.size} removed`:""}</span></div>`;
   cta="Save and continue →";skip=0;}
  if(kind==="voice"){
@@ -2864,7 +2879,7 @@ function drawOnb(){
      border-radius:8px;background:var(--raise);color:var(--ink)">
     <div class="row" style="margin-top:9px"><button class="go solid" id="traitsave">Add it →</button>
      <button class="go" id="traitx">Cancel</button></div></div>
-   <blockquote>“Sample Contact — yesterday was on us. The Etisalat route failed at 3:02 and we moved you across twelve minutes later.”</blockquote>
+   <blockquote>“Yesterday was on us. The route failed at 3:02 and we moved you across twelve minutes later.”</blockquote>
    <p style="font-size:12.5px;color:var(--faint);margin:12px 0 0">${
      V&&V.error?`Not saving: ${esc(V.error)} — changes here will be lost.`
      :V&&V.edited?"Yours, saved against your sign-in. Only you can see or change this list."
@@ -3159,8 +3174,8 @@ const RULEDEF={
   ["ACT","Send an FYI on Slack","the owner and their manager"]],
  stops:["The customer replies first","Nobody owns the account — route to the team queue instead",
   "It is outside working hours in that country"],
- who:"Sample Rep 1, Sample Rep 2, Sample Rep 3 · 312 accounts",
- ver:"v8 · changed by Sample Rep 4 today 08:58 · 7 earlier versions"};
+ who:"",
+ ver:""};
 
 /**
  * The rule sheet.
@@ -3577,8 +3592,16 @@ function openPanel(kind,arg){
  }
  if(kind==="partner"){
   const pt=PARTNERS.find(x=>x[0]===arg)||PARTNERS[0];
-  const accts=[["Sample Co 3","OTP AED 128,000","growing"],["Sample Co 15","WHATSAPP AED 25,000","growing"],
-   ["Sample Co 20","SMS AED 61,000","active"]];
+  /* PARTNERS is empty until partner data is wired up, and every line below
+     indexes pt. Say so rather than throwing inside a panel. */
+  if(!pt){
+   B.innerHTML=`<div class="pkh"><div class="t4"><b>No partner to show</b></div>
+    <button class="cx2" data-pkx>✕</button></div>
+    <div class="zero" style="padding:24px 16px"><p>Partner accounts are not wired to live data yet.</p></div>`;
+   return;
+  }
+  /* See vPartner: no invented accounts. */
+  const accts=[];
   B.innerHTML=`<div class="pkh">${LOGO(pt[0],40)}<div class="t4"><div class="lb2">Partner · ${pt[2]}</div>
    <b>${pt[0]}</b></div><button class="cx2" data-pkx>✕</button></div>
    <div class="pkbig">${pt[4]}</div>
@@ -3612,6 +3635,14 @@ function openPanel(kind,arg){
      here because there is no contacts table to read them from — the same
      reason the person panel says so. */
   const pt=PARTNERS.find(x=>x[0]===arg)||PARTNERS[0];
+  /* PARTNERS is empty until partner data is wired up, and every line below
+     indexes pt. Say so rather than throwing inside a panel. */
+  if(!pt){
+   B.innerHTML=`<div class="pkh"><div class="t4"><b>No partner to show</b></div>
+    <button class="cx2" data-pkx>✕</button></div>
+    <div class="zero" style="padding:24px 16px"><p>Partner accounts are not wired to live data yet.</p></div>`;
+   return;
+  }
   const mine=BOOK.filter(b=>b[2]===pt[2]&&b[3]==="Partner").slice(0,8);
   B.innerHTML=`<div class="pkh">${LOGO(pt[0],40)}<div class="t4"><div class="lb2">Partner · ${pt[2]} · ${
      GEO[pt[2]]?GEO[pt[2]].flag+" "+GEO[pt[2]].cur:""}</div>
@@ -3766,7 +3797,7 @@ function openSheet(kind,arg){
     <div class="ex2"><b>Decision</b><span>₹0.119 with a 24-month term — closes the rate card, margin 9.4%</span></div>
     <div class="ex2"><b>Interest</b><span>WhatsApp for refill reminders — new mission, grow product</span></div>
     <div class="ex2"><b>Risk</b><span>Competitor trial ends 30 Sep — I will chase you on the 26th</span></div>
-    <div class="ex2"><b>Person</b><span>Sample Contact A marked as the decision maker</span></div></div>
+    <div class="ex2"><b>Person</b><span>A contact marked as the decision maker</span></div></div>
    <div class="row" style="margin-top:18px"><button class="go solid" id="ovdo">Save all five →</button>
     <button class="go" id="ovx">Cancel</button></div>`;
  }
