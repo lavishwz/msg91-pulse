@@ -200,6 +200,36 @@ export const AutomationPlanSchema = z.object({
 });
 export type AutomationPlan = z.infer<typeof AutomationPlanSchema>;
 
+/**
+ * A confidence the worker reported, read as generously as it can honestly be.
+ *
+ * `z.number()` rejects Infinity and NaN, and JSON.parse turns an oversized
+ * exponent — `1e999`, which a model does emit — straight into Infinity. That
+ * made one unreadable field cost the entire pass: the schema threw, runOne
+ * recorded the row as failed, `last_error` landed on the automation, and the
+ * row was left to be re-judged and fail the same way on the next fire. Seen
+ * live, on the first real cron fire of a rule built for this test:
+ * "confidence Invalid input: expected number, received Infinity".
+ *
+ * Confidence gates nothing — `should_alert` decides whether an alert is
+ * written, and this is recorded beside it — so a number that cannot be read
+ * is not worth discarding a judgement over. In range it is kept, out of range
+ * it is clamped, and unreadable it becomes null: pulse_decision.confidence is
+ * already nullable and the Log already renders that as "no confidence given",
+ * which is the true statement. Guessing a number here would be the one
+ * outcome worse than not having one.
+ */
+const Confidence = z.preprocess((v) => {
+  /* Explicitly before Number(): Number(null) and Number("") are both 0, and
+     zero confidence is a claim — "certain, and certain it is not worth
+     alerting on" — not the absence of one. A worker that said nothing about
+     its confidence must not be recorded as having said zero. */
+  if (v === null || v === undefined || v === "") return null;
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(1, Math.max(0, n));
+}, z.number().min(0).max(1).nullable());
+
 /** What the worker says about one row an automation found. */
 export const RuleWorkerSchema = z.object({
   subject_id: z.string().nullable(),
@@ -207,7 +237,7 @@ export const RuleWorkerSchema = z.object({
   headline: z.string().nullable(),
   detail: z.string().nullable(),
   reasons: z.array(z.string()),
-  confidence: z.number(),
+  confidence: Confidence,
   needs: z.array(z.string()),
 });
 export type RuleWorkerResult = z.infer<typeof RuleWorkerSchema>;

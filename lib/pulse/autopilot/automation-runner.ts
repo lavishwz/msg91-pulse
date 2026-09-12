@@ -206,7 +206,10 @@ async function writeAlert(
   headline: string,
   detail: string,
   reasons: string[],
-  confidence: number,
+  /* Null when the worker's own number could not be read — see Confidence in
+     agents.ts. The card says nothing about confidence rather than inventing
+     one for it. */
+  confidence: number | null,
 ): Promise<boolean> {
   const key = `auto:${a.key}:${subjectId ?? "portfolio"}`;
   const res = await write(
