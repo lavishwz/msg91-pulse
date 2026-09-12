@@ -25,7 +25,20 @@ export async function POST(req: Request) {
     );
   }
 
-  const given = req.headers.get("x-autopilot-secret") ?? "";
+  /* Header or ?secret=, the same two places middleware.ts's isMachineCall
+     looks and the same two every other machine endpoint accepts — the health
+     tick, the nightly digest, /run, /monthly, /store/migrate.
+
+     This route accepting only the header is why nothing has ever been
+     scheduled to call it. createCronJob() (lib/pulse/cronjob.ts) registers a
+     job as a bare URL and has no way to attach a custom header, so a job
+     pointed here would clear middleware on ?secret= and then be refused 401
+     by this handler. The result was not a visible failure but a silent
+     absence: signup triage and every scheduled automation without its own
+     cron-job.org job — auto.partner.silence among them, live and never run —
+     simply never happened in production, with nothing anywhere saying so. */
+  const given =
+    req.headers.get("x-autopilot-secret") ?? new URL(req.url).searchParams.get("secret") ?? "";
   if (given !== expected) {
     return NextResponse.json({ ok: false, error: "bad or missing secret" }, { status: 401 });
   }

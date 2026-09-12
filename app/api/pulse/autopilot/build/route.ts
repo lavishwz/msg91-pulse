@@ -4,6 +4,9 @@ import { buildAutomation } from "@/lib/pulse/autopilot/build";
 import { EVENTS, isEventName } from "@/lib/pulse/autopilot/events";
 import type { Motion } from "@/lib/pulse/autopilot/automations";
 
+/** The ENUM in migrations/006, in one place the route can check against. */
+const MOTIONS: Motion[] = ["inbound", "outbound", "startup", "partner", "any"];
+
 /**
  * GET /api/pulse/autopilot/build — the fixed event catalogue, for the Rules
  * page's "when this happens" dropdown. Served from here rather than baked
@@ -38,6 +41,18 @@ export async function POST(req: Request) {
   if (!b.english?.trim() || !b.motion) {
     return NextResponse.json({ ok: false, error: "english and motion are required" }, { status: 400 });
   }
+  /* Checked against the list rather than trusted from the client, for the
+     same reason eventName is below: it goes straight into an ENUM column
+     (migrations/006), so an unknown value is not a validation message but a
+     failed INSERT surfacing as "saving it failed" after the planner has
+     already been paid for. */
+  if (!MOTIONS.includes(b.motion)) {
+    return NextResponse.json(
+      { ok: false, error: `unknown motion "${b.motion}". One of: ${MOTIONS.join(", ")}.` },
+      { status: 400 },
+    );
+  }
+
   const eventName = b.eventName;
   if (eventName !== undefined && !isEventName(eventName)) {
     return NextResponse.json({ ok: false, error: `unknown event "${eventName}"` }, { status: 400 });

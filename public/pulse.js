@@ -1981,10 +1981,34 @@ function vAuto(){
        rules list alone barely shrank it. Clipping the whole box's height
        shrinks whatever is actually long, rules or automations or both,
        without having to know which. */
+    /* One row shape for an automation, used in two places now — under its
+       own motion, and under "Not tied to a motion" below for the ones whose
+       motion is not one of these four columns. */
+    const autoRow=a=>`<div class="ru" data-openautomation="${a.key}" style="cursor:pointer" role="button" tabindex="0">
+            <em data-k="${a.live?"ACT":"CARD"}" style="opacity:${a.live?1:.5}">${a.mode==="cron"?"CRON":"EVENT"}</em>
+            <span${a.live?"":' style="color:var(--faint)"'}>${esc(a.summary||a.english)}
+             ${a.live?"":`<em style="font-style:normal;font-size:11px;color:var(--watch);margin-left:6px">not scheduled</em>`}
+             <span style="display:block;font-size:11px;color:var(--faint);margin-top:4px">${a.runCount} run${a.runCount===1?"":"s"} · ${a.alertCount} alert${a.alertCount===1?"":"s"}${a.lastError?" · <span style='color:var(--danger,#a8462a)'>failing</span>":""}</span></span>
+            ${canEditRules()?`<span class="pen" data-automation-retire="${a.key}" style="cursor:pointer;white-space:nowrap">turn off</span>
+             <span class="pen" data-automation-delete="${a.key}" style="cursor:pointer;color:var(--danger,#a8462a);margin-left:10px;white-space:nowrap">delete</span>`:""}</div>`;
+    /* Event automations are left out of the motion columns: they have their
+       own card below (see eventAutomationCard), and listing them in both
+       places meant every one of them appeared on this page twice. */
+    const scheduled=((window.PulseLive&&PulseLive.state.automations)||[])
+     .filter(a=>a.state!=="retired"&&a.triggerKind!=="event");
+    /* An automation's motion is one of five values (see lib/pulse/autopilot/
+       automations.ts) and this page has four columns, so anything saved as
+       "any" — which is also the column default in migrations/006 — landed in
+       no column at all and was invisible here. Two live automations were in
+       that state, the monthly and nightly signup digests: running every day,
+       shown nowhere. They get their own section rather than being forced
+       into a motion they were deliberately not given. */
+    const MOKEYS=new Set(MO.map(([k])=>k));
+    const orphans=scheduled.filter(a=>!MOKEYS.has(a.motion));
     return `<div class="mo4">${MO.map(([key,label])=>{
      const list=mr[key]||[];
      const liveN=list.filter(r=>r.live).length;
-     const auto=((window.PulseLive&&PulseLive.state.automations)||[]).filter(a=>a.motion===key&&a.state!=="retired");
+     const auto=scheduled.filter(a=>a.motion===key);
      const open=S.moOpen.has(key);
      return `<div class="mo${open?"":" mo-clamped"}" data-mokey="${key}"><h4>${label}</h4>
       <p class="sb">${liveN} of ${list.length} running today</p>
@@ -1997,19 +2021,17 @@ function vAuto(){
          ${canEditRules()?`<span class="pen">edit</span>`:""}</div>`).join("")}
        ${auto.length?`<div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)">
           <p class="sb" style="margin:0 0 6px">Built automations</p>
-          ${auto.map(a=>`<div class="ru" data-openautomation="${a.key}" style="cursor:pointer" role="button" tabindex="0">
-            <em data-k="${a.live?"ACT":"CARD"}" style="opacity:${a.live?1:.5}">${a.mode==="cron"?"CRON":"EVENT"}</em>
-            <span${a.live?"":' style="color:var(--faint)"'}>${esc(a.summary||a.english)}
-             ${a.live?"":`<em style="font-style:normal;font-size:11px;color:var(--watch);margin-left:6px">not scheduled</em>`}
-             <span style="display:block;font-size:11px;color:var(--faint);margin-top:4px">${a.runCount} run${a.runCount===1?"":"s"} · ${a.alertCount} alert${a.alertCount===1?"":"s"}${a.lastError?" · <span style='color:var(--danger,#a8462a)'>failing</span>":""}</span></span>
-            ${canEditRules()?`<span class="pen" data-automation-retire="${a.key}" style="cursor:pointer;white-space:nowrap">turn off</span>
-             <span class="pen" data-automation-delete="${a.key}" style="cursor:pointer;color:var(--danger,#a8462a);margin-left:10px;white-space:nowrap">delete</span>`:""}</div>`).join("")}
+          ${auto.map(autoRow).join("")}
          </div>`:""}
       </div>
       ${(list.length+auto.length)>0?`<button class="add mo-toggle" data-mo-toggle="${key}" style="font-size:12.5px;color:var(--muted);
         padding:8px 0 0;width:100%;text-align:left">${open?"Show less ↑":"Show all →"}</button>`:""}
       ${canEditRules()?`<button class="add" style="font-size:13px;color:var(--br);padding:9px 0 0;border-top:1px solid var(--line);width:100%"
-       data-newrule="${key}">＋ Add a rule to ${label}</button>`:""}</div>`;}).join("")}</div>`;
+       data-newrule="${key}">＋ Add a rule to ${label}</button>`:""}</div>`;}).join("")}</div>
+    ${orphans.length?`<div class="lab" style="margin:26px 0 0">Not tied to a motion</div>
+     <p class="sb" style="margin:0 0 8px">These run on a schedule like the rest, but they were saved without one of
+      the four motions, so they belong to none of the sets above.</p>
+     ${orphans.map(autoRow).join("")}`:""}`;
    })(window.PulseLive&&PulseLive.state.motionRules)}
    ${(canEditRules()?t.pr:[]).filter(([h])=>!S.prDone.has(h)).map(([h,p,a,b])=>`<div class="prop"><h4>${h}</h4><p>${p}</p>
     <div class="row" style="margin-top:0"><button class="go solid" data-prop="yes" data-propq="${esc(h)}">${a} →</button>
