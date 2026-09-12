@@ -27,7 +27,7 @@ import { query } from "@/lib/db";
 import { read, write, acquireLock, releaseLock } from "@/lib/store";
 import { guard } from "@/lib/pulse/sqlguard";
 import { judgeRow } from "../agents";
-import { due, recordRun, automationsForEvent, type Automation } from "./automations";
+import { due, recordRun, deferRun, automationsForEvent, type Automation } from "./automations";
 import { check as checkBreaker } from "./breaker";
 import type { EventName } from "./events";
 
@@ -353,6 +353,12 @@ export async function runOne(
      custom rule, and for the unauthenticated-by-key webhook) did not. */
   const breaker = await checkBreaker(breakerAgent(a.key));
   if (breaker.tripped) {
+    /* Move the next attempt out of the past before returning. Without this the
+       row keeps its old next_run_at, due() sorts it to the front of every pass,
+       and a tripped automation holds one of the ten slots for as long as it
+       stays tripped — starving healthy rules behind it. deferRun rather than
+       recordRun because nothing actually ran. */
+    await deferRun(a.key, a.everyMinutes ?? 5).catch(() => {});
     out.skipped = `stopped — ${breaker.reason}. A person has to clear it before it runs again.`;
     out.ms = Date.now() - started;
     return out;

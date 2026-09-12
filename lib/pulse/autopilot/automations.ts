@@ -314,6 +314,29 @@ export async function setLive(key: string, live: boolean): Promise<boolean> {
   return res.affectedRows > 0;
 }
 
+/**
+ * Push an automation's next attempt out without counting it as a run.
+ *
+ * runOne() returns early when the breaker is tripped, and every early return
+ * skips recordRun — so next_run_at keeps its old value and stays in the past.
+ * due() orders by next_run_at and takes the first `limit`, so a permanently
+ * overdue automation sorts to the front of every pass and holds one of the ten
+ * slots for as long as its breaker stays tripped, starving healthy rules
+ * behind it.
+ *
+ * Deliberately not recordRun: nothing ran, so run_count must not move and
+ * last_run_at must not claim otherwise. Only the next attempt moves — which
+ * also gives the breaker time to clear instead of being re-checked every tick.
+ */
+export async function deferRun(key: string, minutes: number): Promise<void> {
+  await write(
+    `UPDATE pulse_automation
+        SET next_run_at = DATE_ADD(NOW(), INTERVAL ? MINUTE)
+      WHERE automation_key = ?`,
+    [Math.max(1, minutes), key],
+  );
+}
+
 /** After a pass: when to look again, and what happened. */
 export async function recordRun(
   key: string,
