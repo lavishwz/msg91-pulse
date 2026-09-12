@@ -13,14 +13,32 @@
  * payload reaches the driver as a bind parameter and never reaches the SQL
  * string at all. That is the property this file attacks.
  *
- * Two checks below record bugs that are really there rather than the behaviour
- * anyone wanted — they are labelled "the bug", the same way watermark.test.mjs
- * pins the naive String(date) comparison it was written to prove wrong. If
- * enrich.ts is fixed, those two go red and should be rewritten, not deleted.
+ * This file was first written against an enrich.ts carrying two defects, and
+ * pinned both as "the bug" checks. Both are now fixed — a :name inside a SQL
+ * comment is no longer treated as a placeholder, and bindValues does an
+ * own-property lookup — so those checks have been turned round to assert what
+ * is now correct. They are kept rather than deleted: each is a shape that got
+ * through once already, and a regression in either would be silent.
+ *
+ * The end of the file imports the guard too, because the property that
+ * actually mattered for the comment bug is invisible in bindPlaceholders
+ * alone. Both call sites bind first and guard second, and the guard rewrites
+ * the statement; only the two run together show whether the slot count MySQL
+ * receives still matches the value count handed to the driver.
  */
 
+import { register } from "node:module";
+import { pathToFileURL } from "node:url";
 import { bindPlaceholders, bindValues, placeholderNames } from "../lib/pulse/autopilot/enrich.ts";
 import { EVENTS } from "../lib/pulse/autopilot/events.ts";
+
+/* sqlguard imports its siblings without a file extension — webpack resolves
+   that, bare Node does not — so the loader the other tests use is registered
+   here and the guard imported dynamically after it, exactly as
+   sqlguard.test.mjs does. enrich.ts and events.ts import nothing at all, so
+   they stay static above. */
+register(new URL("../scripts/event-check-loader.mjs", import.meta.url), pathToFileURL("./"));
+const { guard } = await import("../lib/pulse/sqlguard.ts");
 
 let pass = 0, fail = 0;
 const check = (cond, label) => (cond ? pass++ : (fail++, console.log("FAIL " + label)));
@@ -201,23 +219,54 @@ check(bindValues(["x"], { x: null })[0] === null, "an explicit null binds null")
 check(bindValues(["x"], { x: undefined })[0] === null, "an explicit undefined is normalised to null");
 check(bindValues([], { a: 1 }).length === 0, "no names means no values");
 
-/* THE BUG. `payload[n]` is a plain property read, so a placeholder naming
-   anything on Object.prototype finds an inherited member instead of missing.
-   `:constructor` finds a function; JSON.stringify of a function returns
-   undefined, so the guard clauses are all skipped and `undefined` is what
-   comes back — the one value the signature promises never to return and the
-   one mysql2 refuses. `:__proto__` is the milder version: it binds the string
-   "{}" instead of null. Both should be null. Reachability is limited today
-   because checkEnrichment in build.ts rejects any name not in the event's
-   example payload, but withEnrichment does not re-check names at runtime, so
-   an edited row reaches this. The fix is a hasOwnProperty test on the payload
-   before the lookup; enrich.ts is not modified here. */
-check(bindValues(["constructor"], { accountId: "1" })[0] === undefined,
-  "the bug: :constructor finds Object.prototype.constructor and binds undefined");
-check(bindValues(["__proto__"], { accountId: "1" })[0] === "{}",
-  "the bug: :__proto__ binds \"{}\" instead of null");
-check(bindValues(["toString"], {})[0] === undefined, "the bug: so does :toString");
-check(bindValues(["hasOwnProperty"], {})[0] === undefined, "the bug: and :hasOwnProperty");
+/* A name that collides with Object.prototype is still a missing name.
+   `payload[n]` used to be a bare read, so `:constructor` found a function —
+   and JSON.stringify of a function is `undefined`, so every guard clause was
+   skipped and `undefined` came back: the one value the signature promises
+   never to return, and the one mysql2 refuses outright. `:__proto__` was the
+   milder version, binding the string "{}" as though the payload carried it.
+   bindValues now does hasOwnProperty first, so all of them are null.
+
+   Reachability was never through the planner — checkEnrichment rejects any
+   name not in the event's example payload at build time — but withEnrichment
+   does not re-check names at run time, and its own comment says the row may
+   have been changed by a migration or a restore since it was checked. */
+check(bindValues(["constructor"], { accountId: "1" })[0] === null,
+  ":constructor does not reach Object.prototype.constructor — it binds null");
+check(bindValues(["__proto__"], { accountId: "1" })[0] === null,
+  ":__proto__ binds null, not the string \"{}\"");
+check(bindValues(["toString"], {})[0] === null, "so does :toString");
+check(bindValues(["hasOwnProperty"], {})[0] === null, "and :hasOwnProperty");
+
+/* The invariant stated directly, over every name that used to slip through
+   plus a couple that never did. `undefined` is the value that matters: mysql2
+   rejects it with "Bind parameters must not contain undefined", which kills
+   the enrichment on every fire of the rule, so it must not be reachable by any
+   spelling of a name. */
+const PROTO_NAMES = [
+  "constructor", "toString", "toLocaleString", "valueOf", "hasOwnProperty",
+  "isPrototypeOf", "propertyIsEnumerable", "__proto__", "__defineGetter__",
+  "nosuchfield", "accountId",
+];
+const protoBound = bindValues(PROTO_NAMES, { accountId: "12345" });
+check(protoBound.length === PROTO_NAMES.length, "one value per name, prototype collisions included");
+for (let i = 0; i < PROTO_NAMES.length; i++) {
+  const v = protoBound[i];
+  check(v !== undefined, `:${PROTO_NAMES[i]} never binds undefined, which mysql2 refuses`);
+  check(v === null || typeof v === "string" || typeof v === "number",
+    `:${PROTO_NAMES[i]} returns string | number | null as the signature says (got ${typeof v})`);
+}
+check(protoBound.slice(0, -2).every((v) => v === null), "every inherited name is treated as missing");
+check(protoBound[PROTO_NAMES.length - 1] === "12345", "and the real own property beside them still resolves");
+
+/* An own property that happens to shadow a prototype member is a real field
+   and must bind — the check is "does the payload carry it", not "is the name
+   on a denylist". emitEvent builds payloads from plain object literals, but a
+   payload round-tripped through JSON.parse can carry any key at all. */
+check(bindValues(["toString"], { toString: "a real value" })[0] === "a real value",
+  "an own property shadowing a prototype member still binds its own value");
+check(bindValues(["inherited"], Object.create({ inherited: "leak" }))[0] === null,
+  "a value on a custom prototype is not the payload's and binds null");
 
 /* ------------------------------------------------------------------ *
  * 8. Everything that comes back must be something mysql2 can bind.
@@ -381,31 +430,152 @@ for (const sql of [
   check(qmarks(b.sql) === b.names.length, `slot/name parity holds for ${JSON.stringify(sql.slice(0, 48))}`);
 }
 
-/* THE OTHER BUG. A comment is not a literal, so the scanner walks straight
-   into it and rewrites the :name inside — but the guard strips comments
-   afterwards (checkEnrichment and withEnrichment both bind first, then
-   guard), so that `?` disappears from the statement MySQL receives while its
-   name stays in the value list. Parity breaks, and the rule's enrichment fails
-   on every fire with "Incorrect arguments to EXECUTE". It fails closed rather
-   than mis-binding, because pool().execute is a real prepared statement and
-   the server counts the slots — nothing is injected, the lookup is just dead.
-   A perfectly ordinary commented SELECT out of the planner is rejected at
-   build time for a reason nobody reading the message would guess. The fix is
-   to skip line comments and block comments the way literals are skipped; enrich.ts
-   is not modified here. */
+/* ------------------------------------------------------------------ *
+ * A :name inside a SQL comment is not a placeholder.
+ * ------------------------------------------------------------------ */
+
+/* This was the second bug. A comment is not a literal, so the scanner used to
+   walk into it and rewrite the :name inside — and the guard strips comments
+   afterwards, so that `?` vanished from the statement MySQL received while its
+   name stayed in the value list. The rule's enrichment then failed on every
+   fire with "Incorrect arguments to EXECUTE", and an ordinary commented SELECT
+   out of the planner was rejected at build time for a reason nobody reading
+   the message would guess. Comments are now copied through untouched, the same
+   as literals, and all three of MySQL's forms are skipped. */
 const lineComment = bindPlaceholders("SELECT user_bal FROM ms_user WHERE user_id = :accountId -- by :addedBy");
-check(lineComment.names.length === 2, "the bug: a :name inside a -- comment is counted as a placeholder");
-check(lineComment.sql.includes("-- by ?"), "the bug: and is rewritten to a ? the guard will then strip");
+check(lineComment.names.join(",") === "accountId", "a :name inside a -- comment is not a placeholder");
+check(lineComment.sql.includes("-- by :addedBy"), "the comment is copied through untouched, not rewritten");
+check(qmarks(lineComment.sql) === 1, "only the real placeholder becomes a slot");
+
+const hashComment = bindPlaceholders("SELECT user_bal FROM ms_user WHERE user_id = :accountId # by :addedBy");
+check(hashComment.names.join(",") === "accountId", "a :name inside a # comment is not a placeholder either");
+check(hashComment.sql.includes("# by :addedBy"), "the # comment is copied through untouched");
 
 const blockComment = bindPlaceholders("SELECT /* :addedBy */ user_bal FROM ms_user WHERE user_id = :accountId");
-check(blockComment.names.join(",") === "addedBy,accountId", "the bug: a :name inside a block comment is counted too");
-check(blockComment.sql.includes("/* ? */"), "the bug: and rewritten, ahead of the real one, so the order shifts");
+check(blockComment.names.join(",") === "accountId", "a :name inside a block comment is not a placeholder");
+check(blockComment.sql.includes("/* :addedBy */"), "the block comment is copied through untouched");
+check(qmarks(blockComment.sql) === 1, "a leading block comment does not shift the slot order");
 
-/* The saving grace, and the reason this is a correctness bug and not a
-   security one: even in the broken case the payload never reaches the sql. */
-const commentValues = bindValues(blockComment.names, { addedBy: DROP, accountId: "12345" });
-check(!blockComment.sql.includes(DROP), "even so, the hostile value is still nowhere in the sql");
-check(commentValues[0] === DROP, "it is still only ever a bound value");
+/* Comments above and below the real placeholders, which is how a planner-written
+   query is usually annotated, and the case where an order shift would have been
+   hardest to spot. */
+const annotated = bindPlaceholders(
+  "SELECT user_bal FROM ms_user\n-- :one\n WHERE user_id = :accountId\n# :two\n AND user_fname = :accountName",
+);
+check(annotated.names.join(",") === "accountId,accountName", "comments between placeholders do not join the name list");
+check(qmarks(annotated.sql) === 2, "two comments, two real slots");
+
+/* An apostrophe inside a comment used to open a phantom string literal that
+   swallowed everything after it, including real placeholders. Skipping the
+   comment outright closes that too — which is why this pair is here and not
+   only in the escaping section. */
+const apostropheInComment = bindPlaceholders(
+  "SELECT user_bal FROM ms_user WHERE user_id = :accountId -- it's :addedBy\n AND user_fname = :accountName",
+);
+check(apostropheInComment.names.join(",") === "accountId,accountName",
+  "an apostrophe inside a comment no longer hides the placeholder on the next line");
+check(qmarks(apostropheInComment.sql) === 2, "and both real slots survive it");
+
+/* The reverse: a comment marker inside a literal is text, and must not start a
+   comment. Nothing after it may be skipped. */
+const markerInLiteral = bindPlaceholders("SELECT 1 FROM ms_user WHERE note = '/* :them */' AND user_id = :accountId");
+check(markerInLiteral.names.join(",") === "accountId", "a block-comment marker inside a literal starts no comment");
+check(markerInLiteral.sql.includes("'/* :them */'"), "and the literal is returned verbatim");
+
+/* An unterminated block comment runs to the end of the statement rather than
+   being re-scanned as SQL. MySQL rejects the statement outright, so the only
+   requirement here is that nothing after it is silently bound. */
+const unclosed = bindPlaceholders("SELECT user_bal FROM ms_user WHERE user_id = :accountId /* oops :addedBy");
+check(unclosed.names.join(",") === "accountId", "an unterminated block comment binds nothing after it");
+
+/* ------------------------------------------------------------------ *
+ * End to end: bind, then guard, then count. The property that mattered.
+ * ------------------------------------------------------------------ */
+
+/* Neither half tells the truth alone. bindPlaceholders can produce matching
+   counts and the guard can then remove a slot, which is exactly how the
+   comment bug killed live rules: `?` count in the *guarded* sql is what MySQL
+   prepares, `names.length` is what lib/db.ts passes to execute(), and the
+   server compares them. */
+for (const sql of [
+  "SELECT user_bal FROM ms_user WHERE user_id = :accountId -- by :addedBy",
+  "SELECT user_bal FROM ms_user WHERE user_id = :accountId # by :addedBy",
+  "SELECT /* :addedBy */ user_bal FROM ms_user WHERE user_id = :accountId",
+  "SELECT user_bal FROM ms_user WHERE user_id = :accountId -- don't :addedBy",
+  "SELECT user_bal FROM ms_user\n-- :one\n WHERE user_id = :accountId\n# :two\n AND user_fname = :accountName",
+  "SELECT user_bal FROM ms_user WHERE user_id = :accountId AND user_fname = :accountName",
+  sixSql,
+]) {
+  const b = bindPlaceholders(sql);
+  const g = guard(b.sql, 50);
+  check(g.ok, `the guard accepts the bound form of ${JSON.stringify(sql.slice(0, 44))}`);
+  if (g.ok) {
+    check(qmarks(g.sql) === b.names.length,
+      `bind-then-guard parity: ${qmarks(g.sql)} slots for ${b.names.length} values in ${JSON.stringify(sql.slice(0, 44))}`);
+    check(!/:[a-z_]/i.test(g.sql.replace(/'[^']*'/g, "")),
+      `no raw :name is left outside a literal in ${JSON.stringify(sql.slice(0, 44))}`);
+  }
+}
+
+/* And the whole point of the file, restated at the end of the real pipeline:
+   run a hostile payload through bind, guard and value-binding together, and
+   the SQL that reaches MySQL still has nothing of the payload in it. */
+const endToEnd = bindPlaceholders("SELECT user_bal FROM ms_user WHERE user_fname = :accountName -- checked by :addedBy");
+const endGuarded = guard(endToEnd.sql, 50);
+const endValues = bindValues(endToEnd.names, { accountName: DROP, addedBy: DROP });
+check(endGuarded.ok, "the guard accepts a commented hostile-payload query");
+check(endToEnd.names.join(",") === "accountName", "the commented :addedBy is not bound");
+check(endValues.length === 1 && endValues[0] === DROP, "the hostile value is the one bound value");
+check(endGuarded.ok && !endGuarded.sql.includes(DROP), "and it is nowhere in the sql MySQL will prepare");
+check(endGuarded.ok && qmarks(endGuarded.sql) === endValues.length, "one slot, one value, all the way through");
+
+/* ------------------------------------------------------------------ *
+ * Where the scanner still reads SQL differently from MySQL.
+ * ------------------------------------------------------------------ */
+
+/* Three known divergences remain. None of them can mis-bind a value into the
+   wrong slot, which is the only outcome that would matter: in each case the
+   :name is left in the statement as written, MySQL rejects it, and
+   withEnrichment reports a failed lookup while the judging still happens on
+   the payload. They are pinned so that if one ever starts failing *open* —
+   binding something rather than refusing — it is seen here first. */
+
+/* One: backslash is treated as an escape inside a backtick-quoted identifier.
+   MySQL has no backslash escapes there at all; it ends the identifier at the
+   next backtick and doubles backticks to embed one. So MySQL reads `a\` as a
+   complete identifier and the :tag after it as SQL, while the scanner reads
+   the backtick as escaped and keeps going. Result: :tag is never rewritten and
+   the statement fails to parse. */
+const backtickEscape = bindPlaceholders("SELECT `a\\` , :tag FROM ms_user");
+check(backtickEscape.names.length === 0, "backslash inside a backtick identifier swallows the rest — fails closed");
+check(backtickEscape.sql.includes(":tag"), "the :tag is left as written rather than bound to a slot MySQL will not have");
+
+/* Two: MySQL only starts a `--` comment when the dashes are followed by
+   whitespace or a control character, so `5--3` is arithmetic — five minus
+   minus three. The scanner comments out the rest of the line regardless. Same
+   shape of failure: the placeholder after it stays as written. Nothing is
+   deleted from the statement, because comments are copied through rather than
+   stripped, so the only effect is a placeholder that does not bind. */
+const tightDashes = bindPlaceholders("SELECT 5--3 AS x, :accountId FROM ms_user");
+check(tightDashes.names.length === 0, "5--3 is read as a comment, not as arithmetic — fails closed");
+check(tightDashes.sql === "SELECT 5--3 AS x, :accountId FROM ms_user", "and the statement is still returned byte-for-byte");
+
+/* Three: a `--` inside a string literal. bindPlaceholders gets this right —
+   the literal is a literal and the placeholder after it binds — but the guard
+   that runs next does not respect literals when it strips comments, and cuts
+   the statement at the marker. That is a defect in lib/pulse/sqlguard.ts, not
+   in enrich.ts, and it predates the comment fix; it is recorded here because
+   this is the path that reaches it. It returns ok:true on a statement whose
+   string literal is now unterminated and whose `?` is gone, so MySQL refuses
+   the prepare — loud, not silent, and nothing of the payload is in it. */
+const dashInLiteral = "SELECT user_bal FROM ms_user WHERE note = '-- :them' AND user_id = :accountId";
+const dashBound = bindPlaceholders(dashInLiteral);
+check(dashBound.names.join(",") === "accountId", "enrich reads a -- inside a literal correctly: one placeholder");
+check(dashBound.sql.includes("'-- :them'"), "and leaves the literal intact");
+const dashGuarded = guard(dashBound.sql, 50);
+check(dashGuarded.ok && qmarks(dashGuarded.sql) === 0,
+  "sqlguard's bug: it strips from the -- inside the literal and loses the slot");
+check(dashGuarded.ok && !dashGuarded.sql.includes(DROP), "even there, nothing of a payload is in the sql");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

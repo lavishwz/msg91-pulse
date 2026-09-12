@@ -38,6 +38,25 @@
 
 import { ALLOWED_TABLE_NAMES } from "./schema-notes";
 
+/**
+ * The allowlist, lower-cased once, for comparison.
+ *
+ * disallowedTable() lower-cases the name it extracts and then tested it against
+ * the Set built from ALLOWED_TABLES' keys verbatim. Six of those keys carry
+ * capitals — ms_Onlinetransaction, cashfreeWebhookLogs, ms_dialplanPrefix,
+ * WhiteListIp, IpLogsSecrty, loginLogNew — so they could never match, and Pulse
+ * refused six of the tables it is explicitly allowed to read. A closed door
+ * rather than an open one, which is why nobody noticed.
+ *
+ * Comparing lower-cased is right for the check even though MySQL on Linux is
+ * case-sensitive about table names: the question here is "is this one of ours",
+ * and a query that gets the case wrong fails at the database with a clear
+ * error. Refusing it here would answer a different, less useful question.
+ */
+const ALLOWED_LOWER: ReadonlySet<string> = new Set(
+  [...ALLOWED_TABLE_NAMES].map((t) => t.toLowerCase()),
+);
+
 export const MAX_ROWS = 200;
 
 /** Statements that are never allowed, whatever the privileges say. */
@@ -83,9 +102,17 @@ const FORBIDDEN_PATTERNS: [RegExp, string][] = [
   [/\bload_file\s*\(/i, "reads a file"],
   [/\bsleep\s*\(/i, "sleeps"],
   [/\bbenchmark\s*\(/i, "runs a benchmark loop"],
-  [/\binformation_schema\.(user_privileges|schema_privileges)\b/i, "reads privilege tables"],
-  [/\bmysql\s*\.\s*\w+/i, "reads the mysql system database"],
-  [/\bperformance_schema\s*\.\s*\w+/i, "reads performance_schema"],
+  /* `?\s*\.\s*` on every one of these, because a backtick is neither \s nor \w:
+     `mysql`.`user` slipped past a pattern written \bmysql\s*\.\s*\w+ , and
+     `information_schema . user_privileges` slipped past one written with a bare
+     dot and no surrounding \s*. Both were reported by tests/sqlguard-allowlist. */
+  [/\binformation_schema`?\s*\.\s*`?(user_privileges|schema_privileges)\b/i, "reads privilege tables"],
+  [/`?\bmysql`?\s*\.\s*`?\w+/i, "reads the mysql system database"],
+  [/`?\bperformance_schema`?\s*\.\s*`?\w+/i, "reads performance_schema"],
+  /* information_schema at large is the schema-enumeration primitive; only two
+     of its tables were named before, and everything else leaned on the
+     allowlist — which the comma-join hole then removed. */
+  [/\binformation_schema`?\s*\.\s*`?\w+/i, "reads information_schema"],
   [/\bget_lock\s*\(/i, "takes a lock"],
   [/@@\s*\w+/, "reads a server variable"],
 ];
@@ -164,32 +191,101 @@ function statements(sql: string): string[] {
  * says nothing at all.
  */
 function disallowedTable(stmt: string): string | null {
-  /* Literals blanked so a table name inside a string cannot be read as SQL,
-     and backticks dropped so `ms_user` and ms_user are the same name. */
+  /* Literals blanked so a table name inside a string cannot be read as SQL.
+     Backticks become spaces so `ms_user` and ms_user are one name — which also
+     means a quoted identifier is read exactly like a bare one, including the
+     ones that start with a digit. */
   const sql = stmt
     .replace(/'(?:[^'\\]|\\.|'')*'/g, (m) => " ".repeat(m.length))
     .replace(/"(?:[^"\\]|\\.|"")*"/g, (m) => " ".repeat(m.length))
     .replace(/`/g, " ");
 
   const ctes = new Set<string>();
-  /* `WITH a AS (...), b AS (...)` — every name bound before a SELECT can use
-     it. RECURSIVE is allowed through the same shape. */
   const cteRe = /(?:\bwith\b|,)\s*(?:recursive\s+)?([a-z_][\w$]*)\s+as\s*\(/gi;
   let c: RegExpExecArray | null;
   while ((c = cteRe.exec(sql))) ctes.add(c[1].toLowerCase());
 
-  const tableRe =
-    /\b(?:from|(?:(?:inner|cross|left|right|full)\s+)?(?:outer\s+)?join)\s+([a-z_][\w$]*(?:\s*\.\s*[a-z_][\w$]*)?)/gi;
+  /* One identifier per FROM or JOIN was not enough.
+   *
+   * `FROM ms_user, secret_table` is an ordinary comma join — the oldest join
+   * syntax there is, and one a model writes without being asked. Capturing a
+   * single name per keyword meant every table after the comma was invisible,
+   * so the allowlist covered the first table in a list and nothing else. On a
+   * root connection that made all 397 non-allowlisted tables readable with a
+   * one-character detour, and `FROM ms_user, mysql.user` readable with two.
+   *
+   * So a FROM or JOIN now opens a *table-reference list*, and the list is read
+   * to its end: every comma-separated item, each of which may be a name, a
+   * parenthesised subquery, or a parenthesised name. It ends at the first
+   * keyword that cannot appear inside one.
+   *
+   * STRAIGHT_JOIN is matched explicitly: \bjoin does not match it, because the
+   * underscore before JOIN is a word character and leaves no boundary there. */
+  const OPENERS = /\b(?:from|straight_join|(?:(?:inner|cross|left|right|full)\s+)?(?:outer\s+)?join)\b/gi;
+  /* Where a table-reference list stops. ON and USING end a join clause; the
+     rest end the FROM clause outright. */
+  const STOP = /^(?:on|using|where|group|having|order|limit|union|into|for|window|straight_join|inner|cross|left|right|full|outer|join|procedure|lock)$/i;
+
   let m: RegExpExecArray | null;
-  while ((m = tableRe.exec(sql))) {
-    const raw = m[1].replace(/\s+/g, "");
-    /* Take the table half of db.table; the database half is already
-       constrained by FORBIDDEN_PATTERNS. */
-    const name = (raw.includes(".") ? raw.split(".").pop()! : raw).toLowerCase();
-    if (ctes.has(name)) continue;
-    if (!ALLOWED_TABLE_NAMES.has(name)) return name;
+  while ((m = OPENERS.exec(sql))) {
+    let i = m.index + m[0].length;
+
+    for (;;) {
+      while (i < sql.length && /\s/.test(sql[i])) i++;
+
+      /* A parenthesised reference: either a subquery, whose own FROM/JOIN this
+         loop reaches on its own, or a bare table name in brackets, which MySQL
+         allows and which used to be read as a subquery and skipped. */
+      if (sql[i] === "(") {
+        let depth = 0, j = i;
+        for (; j < sql.length; j++) {
+          if (sql[j] === "(") depth++;
+          else if (sql[j] === ")") { depth--; if (!depth) break; }
+        }
+        const inner = sql.slice(i + 1, j);
+        /* Only a bare name is checked here — anything containing a SELECT is a
+           subquery and is covered by the outer scan of the whole statement. */
+        const bare = inner.trim();
+        if (bare && !/\bselect\b/i.test(bare)) {
+          const name = tableName(bare);
+          if (name && !ctes.has(name) && !ALLOWED_LOWER.has(name)) return name;
+        }
+        i = j + 1;
+      } else {
+        const idRe = /^[\w$]+(?:\s*\.\s*[\w$]+)?/;
+        const hit = idRe.exec(sql.slice(i));
+        if (!hit) break;
+        const raw = hit[0];
+        if (STOP.test(raw.trim())) break;
+        const name = tableName(raw);
+        if (name && !ctes.has(name) && !ALLOWED_LOWER.has(name)) return name;
+        i += raw.length;
+      }
+
+      /* Skip an alias, with or without AS, then continue only if a comma says
+         the list does. */
+      while (i < sql.length && /\s/.test(sql[i])) i++;
+      const aliasRe = /^(?:as\s+)?[\w$]+/i;
+      const alias = aliasRe.exec(sql.slice(i));
+      if (alias && !STOP.test(alias[0].replace(/^as\s+/i, "").trim())) i += alias[0].length;
+      while (i < sql.length && /\s/.test(sql[i])) i++;
+      if (sql[i] !== ",") break;
+      i++;
+    }
   }
   return null;
+}
+
+/**
+ * The table half of a reference, lower-cased. `clonemsg.ms_user` is checked as
+ * `ms_user`; the database half is already constrained by FORBIDDEN_PATTERNS.
+ * Returns null for something that cannot be a table name at all.
+ */
+function tableName(raw: string): string | null {
+  const cleaned = raw.replace(/\s+/g, "");
+  if (!cleaned) return null;
+  const last = cleaned.includes(".") ? cleaned.split(".").pop()! : cleaned;
+  return last ? last.toLowerCase() : null;
 }
 
 /**
