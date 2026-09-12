@@ -90,8 +90,15 @@ for (const [when, subjects] of ordered) {
 
 const all = new Set();
 for (const [, s] of passes) for (const x of s) all.add(x);
-console.log(`\n  ${all.size} distinct rows reached across ${ordered.length} pass(es).`);
-if (ordered.length > 1 && all.size <= Math.max(...[...passes.values()].map((s) => s.size))) {
-  console.log("  Every pass judged the same set — the rule is not making progress through its result.");
+
+/* Distinct subjects against run_count, not against the number of passes this
+   script could see. pulse_decision dedupes on signal_key, so a rule that
+   judges the same rows every pass leaves one row per subject no matter how
+   many times it ran — the passes collapse and only their `at` moves. That
+   collapse is itself the symptom: a hundred runs and three subjects means the
+   rule has been re-judging the same three rows since the day it was built. */
+console.log(`\n  ${all.size} distinct row(s) ever judged, across ${a.run_count} recorded run(s).`);
+if (Number(a.run_count) > ordered.length + 1 && all.size <= Math.max(...[...passes.values()].map((s) => s.size))) {
+  console.log("  Every run judged the same set — the rule is not making progress through its result.");
 }
 process.exit(0);
