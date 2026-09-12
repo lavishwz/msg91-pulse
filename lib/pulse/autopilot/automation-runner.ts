@@ -176,6 +176,17 @@ async function writeDecision(
          output_json, verdict, confidence, action_taken, held, hold_reason, error_code, usage_json)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
      ON DUPLICATE KEY UPDATE
+        /* The input too, and its digest. Without these a second decision on the
+           same signal kept the first one's input_json forever: the verdict, the
+           output and the timestamp all moved on while the evidence column still
+           described a judgement made hours earlier. Caught while verifying
+           event enrichment — the row said the judge had seen a bare payload
+           when it had been given the payload plus an account's balance, because
+           the row predated the lookup and was only ever updated in part.
+           pulse_decision is the answer to "why did it do that?", and an input
+           that belongs to a different decision than the verdict beside it is
+           worse than no row at all. */
+        input_json = VALUES(input_json), input_digest = VALUES(input_digest),
         output_json = VALUES(output_json), verdict = VALUES(verdict),
         confidence = VALUES(confidence), action_taken = VALUES(action_taken),
         error_code = VALUES(error_code), usage_json = VALUES(usage_json),
