@@ -21,6 +21,21 @@ register(new URL("./event-check-loader.mjs", import.meta.url), pathToFileURL("./
 
 const { read } = await import("../lib/store.ts");
 
+/* --counts also runs each live scheduled automation's stored find_sql, so the
+   report can tell "ran and found nothing" apart from "ran and lost its rows".
+   Off by default: it is one real query per automation against MSG91. */
+const COUNTS = process.argv.includes("--counts");
+async function countRows(sql) {
+  if (!sql) return null;
+  try {
+    const { query } = await import("../lib/db.ts");
+    const rows = await query(`SELECT COUNT(*) AS n FROM (${String(sql).replace(/;\s*$/, "")}) __count`);
+    return Number(rows[0]?.n ?? 0);
+  } catch (err) {
+    return `error: ${(err).message.slice(0, 90)}`;
+  }
+}
+
 const KEY = (process.env.CRONJOB_API_KEY ?? "").trim();
 async function cronJobs() {
   if (!KEY) return null;
@@ -32,7 +47,7 @@ async function cronJobs() {
 
 const rows = await read(
   `SELECT automation_key, motion, trigger_kind, mode, every_minutes, cron_job_id, live, state,
-          capability, run_count, alert_count, last_run_at, last_error
+          capability, run_count, alert_count, last_run_at, last_error, find_sql
      FROM pulse_automation ORDER BY trigger_kind, motion, automation_key`,
 );
 
@@ -67,6 +82,9 @@ for (const r of rows) {
     `${runnable.padEnd(34)} ${r.automation_key}`,
   );
   if (r.last_error) console.log(`${" ".repeat(10)}last_error: ${String(r.last_error).slice(0, 140)}`);
+  if (COUNTS && r.trigger_kind === "schedule" && r.live && r.find_sql) {
+    console.log(`${" ".repeat(10)}its query matches ${await countRows(r.find_sql)} rows right now`);
+  }
 }
 
 if (stranded.length) {
@@ -83,6 +101,31 @@ const orphanJobs = (jobs ?? []).filter(
 if (orphanJobs.length) {
   console.log(`\n${orphanJobs.length} cron job(s) firing at an automation that no longer exists:`);
   for (const j of orphanJobs) console.log(`  · ${j.jobId} ${j.title}`);
+}
+
+/* Running is not the same as working. An automation whose every pass ends in
+   a failed verdict still moves run_count, still looks alive on the Rules page,
+   and is producing nothing — pulse_decision is the only place that difference
+   is written down. */
+const recent = await read(
+  `SELECT policy_version AS automation_key,
+          COUNT(*) AS decisions,
+          SUM(verdict = 'alert') AS alerts,
+          SUM(verdict = 'quiet') AS quiet,
+          SUM(verdict = 'failed') AS failed,
+          MAX(at) AS last_at
+     FROM pulse_decision
+    WHERE at >= NOW() - INTERVAL 24 HOUR
+    GROUP BY policy_version
+    ORDER BY failed DESC, decisions DESC`,
+);
+console.log(`\nlast 24h of decisions — ${recent.length} automation(s) actually judged something:`);
+for (const r of recent) {
+  const bad = Number(r.failed) > 0 ? "  ← failing" : "";
+  console.log(
+    `  ${String(r.decisions).padStart(5)} decisions  ${String(r.alerts).padStart(4)} alert ` +
+    `${String(r.quiet).padStart(4)} quiet ${String(r.failed).padStart(4)} failed   ${r.automation_key}${bad}`,
+  );
 }
 
 process.exit(0);

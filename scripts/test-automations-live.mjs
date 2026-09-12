@@ -149,6 +149,22 @@ async function decisionsFor(key, limit = 5) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * How many rows a stored find_sql matches right now, on the same read-only
+ * connection the runner uses. Null when it cannot be counted at all — an
+ * unknown is reported as an unknown rather than as a zero.
+ */
+async function countRows(sql) {
+  if (!sql) return null;
+  try {
+    const { query } = await import("../lib/db.ts");
+    const rows = await query(`SELECT COUNT(*) AS n FROM (${String(sql).replace(/;\s*$/, "")}) __count`);
+    return Number(rows[0]?.n ?? 0);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Wait for an automation's run_count to move past what it was.
  *
  * Every trigger here is asynchronous on the far side: a route answers before
@@ -382,7 +398,20 @@ async function watch(minutes) {
         if (r.last_error) finding(s.key, `cron fire ran with an error: ${r.last_error}`);
         const d = await decisionsFor(s.key, 3);
         say(`          decisions: ${d.length} (${d.map((x) => x.verdict).join(", ") || "none"})`);
-        if (!d.length) finding(s.key, "cron fired it but no pulse_decision row was written");
+        /* No decision row is only a problem if there was something to decide.
+           A rule whose query legitimately matched nothing writes none, and
+           that is the rule working — so the query is re-counted here rather
+           than reading the absence as a failure. */
+        if (!d.length && !r.last_error) {
+          const matched = await countRows(r.find_sql);
+          if (matched === null) {
+            say("          (its query could not be re-counted, so no decision row is not conclusive)");
+          } else if (matched === 0) {
+            say("          no decision row, and its query currently matches 0 rows — nothing to decide");
+          } else {
+            finding(s.key, `cron fired it and its query matches ${matched} rows, but no pulse_decision row was written`);
+          }
+        }
       }
     }
     if (fired.size >= state.schedule.length) break;
