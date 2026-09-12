@@ -259,10 +259,22 @@ export async function eventsSince(
   }));
 }
 
-export async function latestEventId(memberEmail: string): Promise<number> {
+/**
+ * Where a fresh tab's cursor starts — not literally "everything that already
+ * happened", but everything older than `recentSeconds`. A plain MAX(id) meant
+ * sending an email and reloading the page a moment later (ViaSocket's
+ * delivery itself runs a couple of minutes behind the real event, not
+ * instant) landed the toast-worthy event before the cursor did, so it was
+ * never announced — indistinguishable from the trigger not having fired at
+ * all. Anything within the window still counts as new and gets toasted on
+ * the next poll; anything older is exactly the "do not replay a week of
+ * mail" behaviour this always had.
+ */
+export async function latestEventId(memberEmail: string, recentSeconds = 180): Promise<number> {
   const row = await readOne<{ id: number | null }>(
-    `SELECT MAX(id) AS id FROM pulse_trigger_event WHERE member_email = ?`,
-    [memberEmail],
+    `SELECT MAX(id) AS id FROM pulse_trigger_event
+      WHERE member_email = ? AND received_at < DATE_SUB(NOW(), INTERVAL ? SECOND)`,
+    [memberEmail, recentSeconds],
   );
   return Number(row?.id ?? 0);
 }
