@@ -88,6 +88,69 @@ async function fail(
  * run against the real read-only connection is the only check that does,
  * and it is cheap: LIMIT 0 means MySQL plans the query and returns no rows.
  */
+/**
+ * Start a watermarked rule at "everything that already exists has been seen".
+ *
+ * Without this, a rule's first pass has no watermark — loadMark() returns null
+ * and runOne() skips the freshness filter entirely — so it judges and alerts on
+ * whatever its query happens to return first. For a query with no recency
+ * filter ordered oldest-first, that is the oldest rows in the table, announced
+ * as though they had just happened.
+ *
+ * That is not a hypothetical. A rule written as "whenever a new sign up comes,
+ * check if the profile is filled" was planned as
+ * `WHERE user_date IS NOT NULL ORDER BY user_date ASC LIMIT 50` — safe, legal,
+ * passes the guard and the dry run — and raised eight alerts about the oldest
+ * accounts on the system, none of which was a new signup.
+ *
+ * Seeding from the query's own current maximum rather than from NOW() keeps
+ * this honest about types: the watermark column is usually a datetime but
+ * nothing guarantees it, and markOf() compares as strings, so writing an ISO
+ * timestamp into a rule watermarked on a numeric id would filter every row out
+ * forever. Taking the max *of the same expression the rule will compare
+ * against* cannot have that mismatch.
+ *
+ * The trailing LIMIT is stripped because the query has one (the guard appends
+ * it) and the maximum of the first fifty oldest rows is not the maximum — it
+ * is the fiftieth oldest, which would leave the rule to walk forward from
+ * there exactly as before, just starting later.
+ *
+ * Best-effort: a rule that saved is a rule that exists, and failing to seed it
+ * is the old behaviour rather than a new failure, so it is logged and not
+ * raised.
+ */
+async function seedWatermark(
+  key: string,
+  findSql: string,
+  watermarkCol: string | null,
+): Promise<void> {
+  if (!watermarkCol) return;
+  const unlimited = findSql
+    .replace(/;\s*$/, "")
+    .replace(/\blimit\s+\d+\s*(?:,\s*\d+\s*)?$/i, "");
+  try {
+    const rows = await query<{ m: unknown }>(
+      `SELECT MAX(\`${watermarkCol}\`) AS m FROM (${unlimited}) __seed`,
+    );
+    const max = rows[0]?.m;
+    /* Nothing there yet: leave the watermark unset. An empty table means the
+       first real row is genuinely new, which is the answer we want anyway. */
+    if (max === null || max === undefined) return;
+    const position = max instanceof Date ? max.toISOString() : String(max);
+    await write(
+      `INSERT INTO pulse_watermark (stream, position, last_run_at, last_count)
+       VALUES (?, ?, NOW(), 0)
+       ON DUPLICATE KEY UPDATE position = GREATEST(position, VALUES(position))`,
+      ["automation:" + key, position],
+    );
+  } catch (err) {
+    console.warn(
+      `[pulse] could not seed the watermark for ${key} — its first pass will judge whatever ` +
+        `its query returns: ${(err as Error).message}`,
+    );
+  }
+}
+
 async function dryRun(sql: string): Promise<{ ok: true; columns: string[] } | { ok: false; error: string }> {
   const wrapped = `SELECT * FROM (${sql.replace(/;\s*$/, "")}) __dry_run LIMIT 0`;
   try {
@@ -301,6 +364,8 @@ export async function buildAutomation(
      what this leak leaves behind. The job is torn down on a failed save so the
      failure is total rather than half-committed. */
 
+  const watermarkCol = columnNamed(plan.watermark_col, dry.columns);
+
   const saved = await saveAutomation({
     key,
     motion,
@@ -323,7 +388,7 @@ export async function buildAutomation(
     everyMinutes: cronIntervalMinutes(cronSchedule),
     findSql: plan.find_sql,
     subjectCol: columnNamed(plan.subject_col, dry.columns) ?? idColumn(dry.columns),
-    watermarkCol: columnNamed(plan.watermark_col, dry.columns),
+    watermarkCol,
     agentTask: plan.executor_prompt,
     executorPrompt: plan.executor_prompt,
     optimizedPrompt: plan.optimized_rule_prompt,
@@ -349,6 +414,8 @@ export async function buildAutomation(
     }
     return fail(english, motion, ownerEmail, "save", saved.error + orphan);
   }
+
+  await seedWatermark(key, plan.find_sql, watermarkCol);
 
   return {
     ok: true,
