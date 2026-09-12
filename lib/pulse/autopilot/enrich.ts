@@ -54,10 +54,48 @@ export function bindPlaceholders(sql: string): BoundQuery {
       }
       continue;
     }
-    /* Outside a literal: take the longest run up to the next quote and swap
-       placeholders within it. */
+    /* Comments are copied through untouched, for the same reason literals are.
+     *
+     * A :name inside one is not a placeholder, and rewriting it was worse than
+     * merely wrong: both call sites bind first and guard second, and the guard
+     * strips comments — so the ? vanished from the statement MySQL received
+     * while its name stayed in the value list. lib/db.ts uses a real prepared
+     * statement, so the server counted the slots and refused the call with
+     * "Incorrect arguments to EXECUTE". Nothing was injected; the enrichment
+     * was simply dead on every fire, rejected with a message nobody would
+     * connect to a trailing comment on an otherwise ordinary SELECT. */
+    if (sql[i] === "-" && sql[i + 1] === "-") {
+      const nl = sql.indexOf("\n", i);
+      const end = nl === -1 ? sql.length : nl;
+      out += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (sql[i] === "#") {
+      const nl = sql.indexOf("\n", i);
+      const end = nl === -1 ? sql.length : nl;
+      out += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (sql[i] === "/" && sql[i + 1] === "*") {
+      const close = sql.indexOf("*/", i + 2);
+      const end = close === -1 ? sql.length : close + 2;
+      out += sql.slice(i, end);
+      i = end;
+      continue;
+    }
+
+    /* Outside a literal or a comment: take the run up to the next thing that
+       starts one, and swap placeholders within it. */
     let j = i;
-    while (j < sql.length && sql[j] !== "'" && sql[j] !== '"' && sql[j] !== "`") j++;
+    while (
+      j < sql.length &&
+      sql[j] !== "'" && sql[j] !== '"' && sql[j] !== "`" &&
+      !(sql[j] === "-" && sql[j + 1] === "-") &&
+      sql[j] !== "#" &&
+      !(sql[j] === "/" && sql[j + 1] === "*")
+    ) j++;
     const chunk = sql.slice(i, j);
     out += chunk.replace(PLACEHOLDER, (_m, name: string) => {
       names.push(name);
@@ -87,7 +125,16 @@ export function bindValues(
   payload: Record<string, unknown>,
 ): Array<string | number | null> {
   return names.map((n) => {
-    const v = payload[n];
+    /* An own-property check, not a bare read. `payload[n]` reaches
+       Object.prototype, so a name like "constructor" or "toString" returned a
+       function — and JSON.stringify of a function is `undefined`, the one value
+       this function promises never to produce and the one mysql2 rejects
+       outright ("Bind parameters must not contain undefined"). `__proto__`
+       was worse: it returned "{}" as though the payload carried it.
+       checkEnrichment rejects unknown names at build time, but withEnrichment
+       does not re-check them at run time — and its own comment says the row may
+       have been changed by a migration or a restore since. */
+    const v = Object.prototype.hasOwnProperty.call(payload, n) ? payload[n] : undefined;
     if (v === undefined || v === null) return null;
     if (typeof v === "number") return Number.isFinite(v) ? v : String(v);
     if (typeof v === "string") return v;

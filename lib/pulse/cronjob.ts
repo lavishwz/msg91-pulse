@@ -56,6 +56,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const RETRY_ATTEMPTS = 5;
 const RETRY_BASE_MS = 4_000;
 
+/**
+ * How long to wait before the next attempt: their own Retry-After when they
+ * send a usable one, otherwise the exponential ladder. Capped at 30s so a
+ * hostile or mistaken header cannot park a build for an hour.
+ */
+function retryDelay(res: Response, attempt: number): number {
+  const after = Number(res.headers.get("retry-after"));
+  return Number.isFinite(after) && after > 0
+    ? Math.min(after * 1000, 30_000)
+    : RETRY_BASE_MS * 2 ** (attempt - 1);
+}
+
 /** Worth waiting for: their rate limit, and the transient 5xx shapes. */
 function worthRetrying(status: number | null): boolean {
   return status === 429 || status === 408 || (status !== null && status >= 500 && status < 600);
@@ -105,7 +117,10 @@ async function call(
         res.status,
       );
       if (!worthRetrying(res.status) || attempt === RETRY_ATTEMPTS) throw lastErr;
-      await sleep(RETRY_BASE_MS * 2 ** (attempt - 1));
+      /* Honour Retry-After here too. The parsed-body branch below reads it, and
+         two paths that disagree about a header one of them respects will drift
+         apart the first time anyone edits either. */
+      await sleep(retryDelay(res, attempt));
       continue;
     }
 
@@ -119,11 +134,7 @@ async function call(
        rate limit and the transient failures are worth another attempt. */
     if (!worthRetrying(res.status) || attempt === RETRY_ATTEMPTS) break;
 
-    /* Their own Retry-After when they send one; otherwise back off. */
-    const after = Number(res.headers.get("retry-after"));
-    const wait = Number.isFinite(after) && after > 0
-      ? Math.min(after * 1000, 30_000)
-      : RETRY_BASE_MS * 2 ** (attempt - 1);
+    const wait = retryDelay(res, attempt);
     console.warn(
       `[pulse] cron-job.org ${res.status} on ${method} ${path} — retrying in ${wait}ms (${attempt}/${RETRY_ATTEMPTS})`,
     );
