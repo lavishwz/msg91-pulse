@@ -1,4 +1,13 @@
-import { guard, MAX_ROWS } from "../lib/pulse/sqlguard.ts";
+/* sqlguard enforces the table allowlist now, so it imports schema-notes. Tests
+   name TS files with their extension, but lib/ imports its siblings without one
+   — webpack resolves that, bare Node does not — so the loader the scripts
+   already use is registered here to bridge the hop. It has to run before the
+   module is evaluated, which is why the import below is dynamic. */
+import { register } from "node:module";
+import { pathToFileURL } from "node:url";
+register(new URL("../scripts/event-check-loader.mjs", import.meta.url), pathToFileURL("./"));
+
+const { guard, MAX_ROWS } = await import("../lib/pulse/sqlguard.ts");
 
 const cases = [
   // [sql, shouldPass, label]
@@ -8,7 +17,10 @@ const cases = [
   ["SELECT * FROM ms_user LIMIT 999", true, "limit lowered to cap"],
   ["SELECT * FROM ms_user LIMIT 10, 999", true, "offset form lowered"],
   ["SELECT * FROM ms_user LIMIT 20", true, "limit under cap kept"],
-  ["SELECT name FROM t WHERE x = 'a;b' LIMIT 5", true, "semicolon inside string"],
+  /* A real table, because the guard checks them now. What this case is for is
+     the semicolon inside the string literal not being read as a statement
+     separator; the table it selects from was never the point. */
+  ["SELECT user_fname FROM ms_user WHERE user_email = 'a;b' LIMIT 5", true, "semicolon inside string"],
   ["DROP TABLE ms_user", false, "drop"],
   ["DELETE FROM ms_user", false, "delete"],
   ["UPDATE ms_user SET user_bal = 0", false, "update"],
