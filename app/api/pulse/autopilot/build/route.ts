@@ -68,4 +68,19 @@ export async function POST(req: Request) {
   return NextResponse.json(result, { status: result.ok ? 200 : 502 });
 }
 
+/**
+ * Building a rule is the slowest thing a person waits on in this product, and
+ * this was the only route in autopilot/ without a ceiling raised to match —
+ * /run, /tick and /monthly all set 300 while this took the platform default.
+ *
+ * It fitted while a build was one planner call of twenty to thirty seconds. It
+ * stopped fitting when two things landed together: the planner's prompt grew
+ * by the real table index (~2k tokens), and callAgent gained up to three
+ * attempts on an unparseable reply. Three attempts at thirty seconds is ninety,
+ * and the invocation was being killed partway — which surfaces as a 500 with an
+ * empty body and nothing in pulse_automation_build_failure, because the process
+ * died before it could write the row explaining itself.
+ */
+export const maxDuration = 300;
+
 export const dynamic = "force-dynamic";
