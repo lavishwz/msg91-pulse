@@ -47,7 +47,7 @@ async function cronJobs() {
 
 const rows = await read(
   `SELECT automation_key, motion, trigger_kind, mode, every_minutes, cron_job_id, live, state,
-          capability, run_count, alert_count, last_run_at, last_error, find_sql
+          capability, when_event, run_count, alert_count, last_run_at, last_error, find_sql
      FROM pulse_automation ORDER BY trigger_kind, motion, automation_key`,
 );
 
@@ -71,10 +71,15 @@ const stranded = [];
 for (const r of rows) {
   const job = r.cron_job_id ? jobById.get(String(r.cron_job_id)) : null;
   const runnable =
+    /* An automation that is switched off is not listening, and that is what
+       "off" means — flagging it would bury the case worth seeing: one that is
+       live and ready and still does not come back from automationsForEvent. */
     r.trigger_kind === "event"
       ? listening.has(r.automation_key)
         ? `on ${r.when_event}`
-        : `NOT LISTENING for ${r.when_event}`
+        : r.live && r.state === "active" && r.capability === "ready"
+          ? `NOT LISTENING for ${r.when_event}`
+          : `on ${r.when_event} once switched on`
       : r.trigger_kind !== "schedule"
         ? "never (by design)"
         : job?.enabled
