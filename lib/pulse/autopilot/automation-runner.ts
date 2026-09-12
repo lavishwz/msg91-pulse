@@ -384,6 +384,34 @@ export async function runOne(
   }
   out.rows = rows.length;
 
+  /* Put the rows in watermark order before anything reads them that way.
+   *
+   * Everything below assumes ascending order by the watermark column: the cap
+   * takes fresh.slice(0, maxRows) as though it were the oldest maxRows, the
+   * tie-trimming compares fresh[cut - 1] against fresh[cut] as neighbours, and
+   * the mark advances to the highest value judged. None of that is true of an
+   * arbitrary order.
+   *
+   * And the order was never ours to assume. It comes from whatever ORDER BY
+   * the planner happened to write, which nothing checks — the guard is about
+   * safety and the dry run only asks whether the query executes. A rule
+   * ordered by anything else, or not ordered at all, judges an arbitrary
+   * maxRows of its matches, advances the mark past the highest of those, and
+   * every unjudged row below that value is then excluded by the strict `>` on
+   * every pass after it. Silently, permanently, and precisely contrary to this
+   * module's claim that nothing is skipped.
+   *
+   * Sorting here rather than demanding an ORDER BY at build time makes it true
+   * for the rules already saved as well as the next one, and costs nothing:
+   * the guard caps the result at 200 rows. */
+  if (a.watermarkCol) {
+    const col = a.watermarkCol;
+    rows.sort((x, y) => {
+      const l = markOf(x[col]), r = markOf(y[col]);
+      return l < r ? -1 : l > r ? 1 : 0;
+    });
+  }
+
   /* Only what is new since last time, when the rule said which column moves.
      Without one, every row is judged every pass — which is why the compiler is
      asked for a watermark column and the UI says so when there is none. */
