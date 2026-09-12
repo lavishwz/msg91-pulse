@@ -296,7 +296,7 @@ async function resolveSubjectNames(rows: Raw[]): Promise<Map<string, string>> {
 }
 
 /** The Live and AI log feeds: every decision, newest first. */
-export async function decisions(limit = 40, before?: string): Promise<LogRow[]> {
+export async function decisions(limit = 40, before?: string, automationKey?: string): Promise<LogRow[]> {
   // Everything Autopilot did on its own, whether that was an LLM call or a
   // plain rule match (daily.ts's `agent = 'rules'` rows) — `shape()` sets
   // `isAI` per row so the feed can tell the two apart instead of implying
@@ -305,15 +305,28 @@ export async function decisions(limit = 40, before?: string): Promise<LogRow[]> 
   // log's question — "are the people behaving?" — not Activity's. The rows
   // still exist; they are read by a different surface with a different
   // audience and retention.
-  const rows = before
+  //
+  // automationKey narrows to one automation's own history — the Automations
+  // tab's "execution history", read via the same agent column every custom
+  // automation's rows already carry (`rule-worker:<automation key>`, see
+  // automation-runner.ts's breakerAgent()) rather than a second table.
+  const agentFilter = automationKey ? `rule-worker:${automationKey}` : null;
+  const rows = agentFilter
     ? await read<Raw>(
-        `${SELECT} WHERE d.agent <> 'human' AND d.at < ? ORDER BY d.at DESC, d.id DESC LIMIT ?`,
-        [before, limit],
+        before
+          ? `${SELECT} WHERE d.agent = ? AND d.at < ? ORDER BY d.at DESC, d.id DESC LIMIT ?`
+          : `${SELECT} WHERE d.agent = ? ORDER BY d.at DESC, d.id DESC LIMIT ?`,
+        before ? [agentFilter, before, limit] : [agentFilter, limit],
       )
-    : await read<Raw>(
-        `${SELECT} WHERE d.agent <> 'human' ORDER BY d.at DESC, d.id DESC LIMIT ?`,
-        [limit],
-      );
+    : before
+      ? await read<Raw>(
+          `${SELECT} WHERE d.agent <> 'human' AND d.at < ? ORDER BY d.at DESC, d.id DESC LIMIT ?`,
+          [before, limit],
+        )
+      : await read<Raw>(
+          `${SELECT} WHERE d.agent <> 'human' ORDER BY d.at DESC, d.id DESC LIMIT ?`,
+          [limit],
+        );
   const names = await resolveSubjectNames(rows);
   for (const r of rows) if (!r.subject_name && r.subject_id) r.subject_name = names.get(r.subject_id) ?? null;
   return rows.map(shape);

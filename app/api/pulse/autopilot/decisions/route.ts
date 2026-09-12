@@ -16,6 +16,7 @@ export async function GET(req: Request) {
   const view = url.searchParams.get("view");
   const limit = Math.min(Number(url.searchParams.get("limit") ?? 40), 200);
   const before = url.searchParams.get("before") ?? undefined;
+  const automation = url.searchParams.get("automation") ?? undefined;
 
   try {
     if (view === "filtered") {
@@ -31,7 +32,7 @@ export async function GET(req: Request) {
     if (view === "human") {
       return NextResponse.json({ ok: true, rows: await humanActs(limit) });
     }
-    const [rows, summary] = await Promise.all([decisions(limit, before), logSummary()]);
+    const [rows, summary] = await Promise.all([decisions(limit, before, automation), logSummary()]);
     return NextResponse.json({
       ok: true,
       rows,

@@ -290,6 +290,7 @@ const TABTIP={
  connections:["Connections","What Pulse can reach. Everything AI can do depends on this list — an amber dot means something is switched off."],
  activity:["Activity","Everything AI did, newest first. Every row opens to show the evidence, the confidence and the policy behind it."],
  rules:["Rules","The policies AI follows, one set per motion. This is where you change its behaviour."],
+ automations:["Automations","Every automation that exists right now, scheduled or event-driven, with its own run history."],
  audit:["Audit log","Every action a person took — viewed, revealed, changed, exported. Separate from the AI log."],
  };
 
@@ -1026,7 +1027,9 @@ VIEWS.forEach(function(v){
   st:["Rhea Menon","today 09:40",key==="everything"?"all teams":"your accounts","recomputed on open"]};
 });
 
-const S={v:"now",scope:"me",tab:"activity",ask:"mine",teamTab:"won",from:null,cust:null,doneOpen:0,flightOpen:1,roomOpen:0,newRep:0,askTab:"ask",ostep:0,editRule:null,addingTo:null,act:"all",openRow:null,sel:new Set(),doneIds:new Set(),snoozeIds:new Map(),lensAll:0,C:new Set(),M:new Set(),eaEvent:"",moOpen:new Set()};
+const S={v:"now",scope:"me",tab:"activity",ask:"mine",teamTab:"won",from:null,cust:null,doneOpen:0,flightOpen:1,roomOpen:0,newRep:0,askTab:"ask",ostep:0,editRule:null,addingTo:null,act:"all",openRow:null,sel:new Set(),doneIds:new Set(),snoozeIds:new Map(),lensAll:0,C:new Set(),M:new Set(),eaEvent:"",moOpen:new Set(),autoHist:null};
+/** Per-automation execution history, fetched on demand and cached by key. */
+const AUTOHIST={};
 const main=$("#main");
 /* Opportunities dismissed with "Not now", by their headline. Keyed by text
    rather than index because the list is rebuilt from live data on every load
@@ -1258,7 +1261,7 @@ let LASTPLACE=null;
  * into.
  */
 
-const AUTOTABS=["activity","rules","connections","audit"];
+const AUTOTABS=["activity","rules","connections","automations","audit"];
 const SCOPES=["me","team","company"];
 
 /** Where the current state lives, as a path. */
@@ -2057,6 +2060,47 @@ function vAuto(){
       <span class="chev">→</span></div>`).join("")}</div>`
      :`<p style="margin:22px 0 0;color:var(--ink2)">Nothing under this filter.</p>`}`;
   }
+ } else if(S.tab==="automations"){
+  /* Every automation that exists right now, flat across all motions — the
+     per-motion "Built automations" lists under Rules show the same rows
+     split up; this is the one place that shows all of them together with
+     their own run history, which is what "where do I go to see everything
+     that's running" actually needs. */
+  const autos=(window.PulseLive&&PulseLive.state.automations)||null;
+  if(!autos){
+   body=`<div class="feed" style="margin-top:22px">${[0,1,2].map(()=>
+    '<div class="item"><div class="sk" style="width:60px;height:12px"></div><div class="bd">'+
+    '<div class="sk" style="width:50%;height:14px"></div><div class="sk" style="width:80%;margin-top:6px"></div></div></div>').join("")}</div>`;
+  }else if(!autos.length){
+   body=`<p style="margin:22px 0 0;color:var(--ink2)">No automations right now — nothing scheduled, nothing event-driven.</p>`;
+  }else{
+   const rel=(iso)=>{if(!iso)return "never";const s=(Date.now()-new Date(iso).getTime())/1000;
+    if(s<60)return "just now";if(s<3600)return Math.round(s/60)+"m ago";
+    if(s<86400)return Math.round(s/3600)+"h ago";return Math.round(s/86400)+"d ago";};
+   body=`<div class="feed" style="margin-top:22px">${autos.map(a=>{
+    const hist=AUTOHIST[a.key];
+    const open=S.autoHist===a.key;
+    return `<div class="item" style="flex-direction:column;align-items:stretch">
+     <div style="display:flex;align-items:center;gap:10px">
+      <em data-k="${a.live?"ACT":"CARD"}" style="opacity:${a.live?1:.5}">${a.mode==="cron"?"CRON":"EVENT"}</em>
+      <div class="bd"><b>${esc(a.summary||a.english)}
+        ${a.live?"":`<em style="font-style:normal;font-size:11px;color:var(--watch);margin-left:6px">not scheduled</em>`}</b>
+       <span>${a.motion} · ${a.mode==="cron"?(a.everyMinutes?"every "+a.everyMinutes+" min":"scheduled"):"on "+(a.whenEvent||"?")}
+        · ${a.runCount} run${a.runCount===1?"":"s"} · ${a.alertCount} alert${a.alertCount===1?"":"s"}
+        · last run ${rel(a.lastRunAt)}${a.lastError?` · <span style="color:var(--danger,#a8462a)">${esc(a.lastError)}</span>`:""}</span></div>
+      <span class="pen" data-auto-hist="${a.key}" style="cursor:pointer;white-space:nowrap">${open?"hide history":"history"}</span>
+      ${canEditRules()?`<span class="pen" data-automation-retire="${a.key}" style="cursor:pointer">turn off</span>
+       <span class="pen" data-automation-delete="${a.key}" style="cursor:pointer;color:var(--danger,#a8462a)">delete</span>`:""}
+     </div>
+     ${open?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">${
+       hist===undefined?`<div class="sk" style="width:70%;height:12px"></div><div class="sk" style="width:50%;height:12px;margin-top:6px"></div>`
+       :hist===null?`<p style="color:var(--watch)">Could not load its history.</p>`
+       :!hist.length?`<p style="color:var(--ink2)">No runs recorded yet.</p>`
+       :hist.map(h=>`<div style="padding:6px 0;font-size:13px"><b>${h.when}</b> — ${esc(h.title)}
+         <span style="color:var(--ink2)"> · ${esc(h.detail||"")}</span></div>`).join("")
+      }</div>`:""}
+     </div>`;}).join("")}</div>`;
+  }
  } else {
   /* The audit log. Not backed by the prototype's seed object any more —
      state.audit is null until the real fetch answers, so "still loading"
@@ -2088,9 +2132,9 @@ function vAuto(){
   :null;
  main.innerHTML=`<p class="greet" style="margin-top:34px">Autopilot</p>
   <h1>${ahead!==null?ahead:'<span class="sk" style="display:inline-block;width:280px;height:34px;vertical-align:middle"></span>'}</h1>
-  <div class="tabs">${["activity","rules","connections","audit"].map(k=>`<button data-tab="${k}" aria-selected="${k===S.tab}"
+  <div class="tabs">${AUTOTABS.map(k=>`<button data-tab="${k}" aria-selected="${k===S.tab}"
    data-tip="${TABTIP[k][0]}||${TABTIP[k][1]}">${
-   {activity:"Activity",rules:"Rules",connections:"Connections",audit:"Audit log"}[k]}</button>`).join("")}</div>
+   {activity:"Activity",rules:"Rules",connections:"Connections",automations:"Automations",audit:"Audit log"}[k]}</button>`).join("")}</div>
   ${((sys)=>{
    /* The machinery talking about itself: a breaker that tripped, decisions the
       gateway could not answer, the kill switch left on. Same rows as Now shows
@@ -2851,6 +2895,16 @@ document.addEventListener("click",e=>{
    if(!out.ok){alert(out.error||"Could not delete it.");adel.textContent="delete";return;}
    $("#ov").hidden=true;
    PulseLive.loadAutomations(render);});
+  return;}
+ const ahist=t.closest("[data-auto-hist]");
+ if(ahist){
+  const key=ahist.dataset.autoHist;
+  S.autoHist=S.autoHist===key?null:key;
+  if(S.autoHist&&AUTOHIST[key]===undefined&&window.PulseLive&&PulseLive.loadAutomationHistory){
+   AUTOHIST[key]=undefined;
+   PulseLive.loadAutomationHistory(key,(rows)=>{AUTOHIST[key]=rows;render();});
+  }
+  render();
   return;}
  /* A built automation's own row had no click at all — the compiled rules
     beside it open a popup, this just sat there. Checked after retire/delete

@@ -916,6 +916,16 @@ window.PulseLive = (function () {
     }
   }
 
+  /** One automation's own recent decisions — the Automations tab's execution history. */
+  async function loadAutomationHistory(key, cb) {
+    try {
+      const d = await get("/api/pulse/autopilot/decisions?automation=" + encodeURIComponent(key) + "&limit=20");
+      cb(d.rows || []);
+    } catch (err) {
+      cb(null);
+    }
+  }
+
   /** Delete an automation entirely — tears down its cron job/agent and removes the row. */
   async function deleteAutomation(key, then) {
     try {
@@ -1923,6 +1933,7 @@ window.PulseLive = (function () {
     loadEventCatalogue,
     retireAutomation,
     deleteAutomation,
+    loadAutomationHistory,
     loadAutomations,
     loadAccountById,
     loadMotionRules,
