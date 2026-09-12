@@ -89,6 +89,15 @@ async function fail(
  * and it is cheap: LIMIT 0 means MySQL plans the query and returns no rows.
  */
 /**
+ * Blank out quoted string literals so a scan for SQL syntax cannot be fooled
+ * by an email address inside one — `WHERE user_email = 'a@b.com'` is not a
+ * variable reference. Length is preserved so any offset still lines up.
+ */
+function stripStrings(sql: string): string {
+  return sql.replace(/'(?:[^'\\]|\\.|'')*'|"(?:[^"\\]|\\.|"")*"/g, (m) => " ".repeat(m.length));
+}
+
+/**
  * Start a watermarked rule at "everything that already exists has been seen".
  *
  * Without this, a rule's first pass has no watermark — loadMark() returns null
@@ -314,6 +323,33 @@ export async function buildAutomation(
         "or pick an event instead if it should react to something happening inside Pulse.",
     );
   }
+  /* A query that refers to a variable nobody sets can never match a row.
+   *
+   * The planner writes `AND user_date > @watermark` often enough to matter —
+   * it is what the SQL for an incremental rule looks like everywhere else in
+   * the world. But Pulse does not filter by watermark in SQL; runOne() fetches
+   * the rows and filters them in JavaScript against pulse_watermark. Nothing
+   * ever binds `@watermark`, so MySQL reads it as an unset session variable,
+   * which is NULL — and `user_date > NULL` is NULL, so the rule matches
+   * nothing on every pass for the rest of its life.
+   *
+   * Neither existing check catches it. guard() is about safety and this is
+   * perfectly safe; dryRun() wraps the query in LIMIT 0 and asks only whether
+   * it parses and executes, which it does. The rule then saves, gets a cron
+   * job, fires on schedule and reports "ran, found nothing" forever — the one
+   * outcome that looks identical to a healthy rule with a quiet week.
+   *
+   * Caught here rather than repaired, because the fix is to write the query
+   * without the variable and only the planner can do that. */
+  const variableRef = /(?<![\w@])@[a-z_][\w$]*/i.exec(stripStrings(plan.find_sql));
+  if (variableRef) {
+    return fail(
+      english, motion, ownerEmail, "guard",
+      `the planner's query refers to ${variableRef[0]}, which nothing ever sets — it would match no rows on every run. ` +
+        `Pulse applies the watermark itself after fetching, so the query must not mention one.`,
+    );
+  }
+
   const g = guard(plan.find_sql, Math.min(plan.max_rows || 50, 200));
   if (!g.ok) {
     return fail(english, motion, ownerEmail, "guard", "the planner's query is not safe to run: " + g.reason);
