@@ -72,10 +72,22 @@ const FLIGHT=[];
    moment the Connections tab is opened, loadTeamConnections() overwrites
    those two rows in place from pulse_connection (migrations/012) — the real
    count across everyone's own Profile connect, not a demo number. */
+/* Two different questions, wearing what used to be one flag: "has the
+   request been sent" (so a re-render mid-flight doesn't fire a second one)
+   and "has it answered" (so connRow below knows whether row[1]/[2] are real
+   yet). Collapsing them meant the guard against a duplicate fetch — set the
+   instant the request goes out, long before it can have an answer — was
+   also standing in as proof of an answer that had not arrived: connRow's
+   skeleton check read true from the moment loadTeamConnections was first
+   called and never saw false again, so it never once fired in practice and
+   every load showed the unpatched "part" placeholder as if it were real
+   status for however long the fetch took. */
 let teamConnLoaded=false;
+let teamConnReady=false;
 function loadTeamConnections(){
  if(teamConnLoaded)return;teamConnLoaded=true;
  fetch("/api/pulse/connections?view=team").then(r=>r.json()).then(d=>{
+  teamConnReady=true;
   if(!d.ok||!d.team)return;
   const patch=(row,key,gap)=>{
    const t=d.team[key];if(!t||!t.total)return;
@@ -89,7 +101,15 @@ function loadTeamConnections(){
   patch(CONN[1],"cal","Same people, so meeting prep and capture are off for their accounts too.");
   patch(CONN[2],"slack","I cannot DM them an FYI or their daily digest — only the team channel sees it.");
   if(S.v==="auto"&&S.tab==="connections")render();
- }).catch(()=>{});
+ }).catch(()=>{
+  /* A failed fetch used to leave connRow's skeleton up forever, since
+     nothing ever set the flag it was waiting on — silence read as "still
+     loading" no matter how long it had actually been dead. teamConnReady
+     flips regardless of outcome, so the tab falls through to the CONN
+     rows' own unpatched state instead of hanging. */
+  teamConnReady=true;
+  if(S.v==="auto"&&S.tab==="connections")render();
+ });
 }
 
 /* Every row here is backed by pulse_connection (migrations/012) and patched
@@ -263,15 +283,13 @@ const WRONG=["Not important","Wrong person","Already handled","Bad information",
 
 let REPS=[];
 
-let HISTORY=[
- [1,"All my companies","pinned · asked 34 times by 6 people · today 09:05","all"],
- [1,"Partner motion, this month","pinned · asked 12 times by 3 people · today 09:15","partner"],
- [0,"Which accounts have not been touched in 60 days?","asked 6 times by 2 people · today 09:22","cold"],
- [0,"Who is most likely to churn this month?","asked 9 times by 4 people · today 09:12","churn"],
- [0,"UAE entity, this quarter","asked 4 times by 2 people · yesterday","uae"],
- [0,"Whose accounts are flat?","asked 3 times by 1 person · yesterday","flat"],
- [0,"Which startups are stuck before their first message?","asked 2 times by 1 person · 04 Sep","stuck"]];
-HISTORY.splice(2,0,[0,"What is in flight?","asked 11 times by 4 people · today 09:26","flight"]);
+/* The question catalogue, empty until the real one arrives.
+   These eight rows were invented down to the usage counts — "asked 34 times by
+   6 people · today 09:05" — and they are what the command palette and the Ask
+   chips read. pulse-live.js replaces the whole array from data.askCatalogue, so
+   the fiction only ever showed before that landed or when it failed, which is
+   exactly when a reader cannot tell it from the real catalogue. */
+let HISTORY=[];
 
 /* ── pinned questions ──────────────────────────────────────────────────────
    A pin is the one thing on this surface a person changes and expects to find
@@ -331,24 +349,6 @@ function togglePin(){
  savePins();applyPins();render();
 }
 applyPins();
-
-
-HISTORY.splice(2,0,[1,"Every account my team is handling","pinned · asked 22 times by 5 people · today 09:30","teamall"]);
-HISTORY.splice(3,0,[1,"Revenue by partner this month","pinned · asked 9 times by 3 people · today 09:32","partners"]);
-HISTORY.splice(1,0,[1,"My open promises and missions","pinned · asked 41 times by 18 people · today 09:34","mine"]);
-HISTORY.splice(4,0,[0,"Open promises and missions across the team","asked 14 times by 4 people · today 09:35","teammine"]);
-PINNED.me=[["Your open promises and missions","Three promises, eight missions","11","1 late",null,"mine"]];
-PINNED.team.splice(1,0,["Promises across the team","Late promises, by owner","9 late","41 open",null,"teammine"]);
-PINNED.team.unshift(["Every account your team handles","486 accounts, 46 with nobody on them","486","46 unassigned",null,"teamall"]);
-PINNED.company.splice(1,0,["Revenue by partner","Five partners, native currency","₹64.2L","+ AED 214k · $61k · S$88k",null,"partners"]);
-CARDS.push({s:"team",w:1,r:"Watch closely",cust:"Startup approvals",geo:"India · Startup",
- h:"34 startup approvals since 1 August.",
- y:'Your team approved them and the credits are already live. Nothing needs you — but <span class="l1">one</span> was above the usual staff limit.',
- a:"Look through them",solid:0,
- rev:[["Why you are seeing this","Monthly FYI. Approvals do not wait for a manager."],
-  ["Total credit granted","₹1,85,000 across 34 accounts"],
-  ["Worth a look","Sample Co 23 · 34 staff · ₹10,000 · approved by Sample Rep 3 on 24 Aug"],
-  ["Reverting","Not wired up yet — there is no revert endpoint behind it."]]});
 
 /* Detail behind a Live or AI-log row. The rows stay scannable; this is what
    opens in the right-hand panel. Keyed by timestamp — Live and the AI log
@@ -1073,14 +1073,29 @@ function vNow(){
     machinery — a gateway that stopped answering, a runaway rule — belongs to
     whoever runs the system, so it appears at Team and Company only. */
  const alerts=allAlerts.filter(a=>a.audience==="work"||S.scope!=="me");
- const sysband=alerts.length?`<div style="margin:26px 0 0">${alerts.map(a=>
-   `<div class="sys">
+ /* Every alert names a specific kind of thing — decisions on hold, drafts
+    waiting for a person, one runaway automation, a tripped breaker — and
+    every one of them used to open on Activity with no filter, which is to
+    say it opened on everything and left finding the actual thing named in
+    the card to whoever clicked it. Autopilot's own tabs already have a
+    place for each of these; this is just naming which one instead of
+    defaulting all of them to the same tab. */
+ const alertDest=(key)=>{
+  if(key==="held")return{v:"auto",tab:"activity",act:"drafted"};
+  if(key==="stale-drafts")return{v:"auto",tab:"activity",act:"drafted"};
+  if(key==="waiting")return{v:"auto",tab:"activity",act:"drafted"};
+  if(key==="automations")return{v:"auto",tab:"rules"};
+  if(key.startsWith("runaway:")||key.startsWith("breaker:"))return{v:"auto",tab:"automations"};
+  return{v:"auto",tab:"activity"};};
+ const sysband=alerts.length?`<div style="margin:26px 0 0">${alerts.map(a=>{
+   const dest=alertDest(a.key);
+   return `<div class="sys">
      <div class="eb"><span class="dot"></span>${a.eyebrow}</div>
      <h4>${a.headline}</h4><p>${a.detail}</p>
      ${a.key==="paused"?`<div class="row"><button class="go solid" data-resume="1">Resume sending →</button></div>`
-      :a.audience==="work"?`<div class="row"><button class="go solid" data-nav="auto" data-tab2="activity">Review →</button></div>`
-      :`<div class="row"><button class="go" data-nav="auto" data-tab2="activity">See what happened →</button></div>`}
-    </div>`).join("")}</div>`:"";
+      :a.audience==="work"?`<div class="row"><button class="go solid" data-nav="${dest.v}" data-tab2="${dest.tab}"${dest.act?` data-act2="${dest.act}"`:""}>Review →</button></div>`
+      :`<div class="row"><button class="go" data-nav="${dest.v}" data-tab2="${dest.tab}"${dest.act?` data-act2="${dest.act}"`:""}>See what happened →</button></div>`}
+    </div>`;}).join("")}</div>`:"";
 
  /* 2 · where you stand, and what it protects */
  /* The board is scored per scope and arrives after the first paint. Until it
@@ -1531,15 +1546,16 @@ function vAuto(){
      it). This is the no-op that covers the case where that request had not
      landed yet when the tab was opened. */
   if(window.PulseLive)PulseLive.loadTriggers(PULSE_BAG,render);
-  /* Rows 0 and 1 (Mailboxes, Calendars) are the two the real team count
-     replaces — see loadTeamConnections(). Until that answers, a skeleton bar
-     stands in for the count rather than showing "22 of 25" (or whatever the
-     seed copy says) and then silently swapping it for the truth a moment
-     later — the flash-then-correct that looks like the number was wrong. */
+  /* All three rows (Mailboxes, Calendars, Slack) are what the real team
+     count replaces — see loadTeamConnections(). Until that answers, a
+     skeleton bar stands in for the count rather than showing the row's own
+     unpatched "part" state as if it were a confirmed answer and then
+     silently swapping it for the truth a moment later — the flash-then-
+     correct that looks like the number was wrong. */
   const connRow=(row,i)=>{
    const [n,st,who,unlocks,breaks]=row;
-   const isTeamCount=i===0||i===1;
-   if(isTeamCount&&!teamConnLoaded){
+   const isTeamCount=i===0||i===1||i===2;
+   if(isTeamCount&&!teamConnReady){
     return `<div class="conn" data-st="part"><span class="sd"></span><div class="cb"><b>${n}</b>
      <div class="sk" style="width:64%;height:12px;margin-top:7px"></div>
      <div class="sk" style="width:80%;height:12px;margin-top:6px"></div></div>
@@ -1666,7 +1682,7 @@ function vAuto(){
       the four motions, so they belong to none of the sets above.</p>
      ${orphans.map(autoRow).join("")}`:""}`;
    })(window.PulseLive&&PulseLive.state.motionRules)}
-   ${(canEditRules()?t.pr:[]).filter(([h])=>!S.prDone.has(h)).map(([h,p,a,b])=>`<div class="prop"><h4>${h}</h4><p>${p}</p>
+   ${(canEditRules()&&t.pr?t.pr:[]).filter(([h])=>!S.prDone.has(h)).map(([h,p,a,b])=>`<div class="prop"><h4>${h}</h4><p>${p}</p>
     <div class="row" style="margin-top:0"><button class="go solid" data-prop="yes" data-propq="${esc(h)}">${a} →</button>
      <button class="go" data-prop="no" data-propq="${esc(h)}">${b}</button></div></div>`).join("")}
    ${canEditRules()?eventAutomationCard():""}`;
@@ -1695,7 +1711,17 @@ function vAuto(){
      per-motion "Built automations" lists under Rules show the same rows
      split up; this is the one place that shows all of them together with
      their own run history, which is what "where do I go to see everything
-     that's running" actually needs. */
+     that's running" actually needs.
+
+     The boot sequence already fetches this in the background (tier 3, so
+     it's ready by the time anyone's first click could want it), and its
+     own callback re-renders when it lands — but that render only reaches
+     the screen if this tab happens to be open at that exact moment, and
+     racing that is how this tab has shown "No automations right now" with
+     four of them actually sitting in state.automations. Asking again on
+     open, same as the Connections tab already does for its own load, means
+     this screen is never depending on a background fetch it can't see. */
+  if(window.PulseLive&&PulseLive.loadAutomations&&!PulseLive.state.automations)PulseLive.loadAutomations(render);
   const autos=(window.PulseLive&&PulseLive.state.automations)||null;
   if(!autos){
    body=`<div class="feed" style="margin-top:22px">${[0,1,2].map(()=>
@@ -2252,7 +2278,21 @@ function pD(){
    <span class="vt2">${r.t}</span><span class="vc">${r.vc}</span></button>`
   :`<button class="prw" data-p="${i}" aria-selected="${i===pS}">${(""+r.ic).startsWith("<")?r.ic:`<span class="ic">${r.ic}</span>`}
   <span class="tx"><b>${r.t}</b><span>${r.s}</span></span><span class="rt">${r.rt||""}</span></button>`;});
- $("#pres").innerHTML=o||`<div class="pg">No match</div>`;}
+ $("#pres").innerHTML=o||`<div class="pg">No match</div>`;
+ /* Keep the selected row visible.
+  *
+  * pD() rewrites #pres wholesale on every keystroke and every arrow press, so
+  * the selected row is a brand-new element each time and the container's scroll
+  * position is whatever it already was. Marking a row aria-selected moves the
+  * highlight and nothing else: arrowing past the fifth or sixth match
+  * highlighted rows below the fold, so the list looked frozen and Enter chose
+  * something the reader could not see.
+  *
+  * block:"nearest" rather than "center", so it scrolls only when the row is
+  * genuinely out of view — walking through matches that are already visible
+  * must not jerk the list around under the reader. */
+ const sel=$("#pres").querySelector('[aria-selected="true"]');
+ if(sel&&sel.scrollIntoView)sel.scrollIntoView({block:"nearest"});}
 function pO(){$("#pal").hidden=false;$("#pq").value="";pF("");$("#pq").focus();}
 function pC(){$("#pal").hidden=true;}
 function pRun(){const r=pR[pS];pC();if(r&&r.run)r.run();}
@@ -2299,6 +2339,11 @@ document.addEventListener("click",e=>{
     second time to the value it already has. */
  const nv=t.closest("[data-nav]");if(nv){S.v=nv.dataset.nav;
   if(nv.dataset.tab2)S.tab=nv.dataset.tab2;
+  /* An alert card names a specific kind of thing (decisions on hold, drafts
+     waiting, a runaway automation) — landing on Activity with whatever
+     filter was left over from the last visit buried it back in "everything"
+     for anyone who followed the card here to see that one kind of thing. */
+  if(nv.dataset.act2)S.act=nv.dataset.act2;
   render();return;}
  const sc=t.closest("[data-sc]");if(sc){S.scope=sc.dataset.sc;
   /* Each scope scores a different set of accounts, so the board is per scope.
@@ -4106,15 +4151,25 @@ if (window.PulseLive) {
   /* Paint the skeleton before asking for anything. boot() awaits the first
      response before it calls render, so without this the page sits blank for
      however long the database takes — and the host is 200ms away on a good
-     day. ROUTING guards it (and every render boot() fires internally) so a
-     screen that already matches the URL never rewrites it as a side effect
-     of merely being drawn. */
+     day. ROUTING is meant to guard every render boot() fires internally, not
+     just this first one: boot() calls render() again itself as each of its
+     own tier's loaders answers (loadAlerts, loadBoard, loadCards, and a
+     dozen more), every one of them with S.v still at its bare "now" default
+     for the one case applyRouteBeforeFirstPaint() could not resolve — a
+     /company/<name> not yet fetched. Resetting ROUTING back to false right
+     after this one render, before any of those had a chance to run, meant
+     the very first of them called routeSync() unguarded, saw "now" against
+     a URL that still said /company/<name>, and rewrote the address bar to
+     "/" — while routeGo() below, the thing meant to resolve that company
+     name, hadn't even read the URL yet. Every deep link into an account
+     landed on Now before it was ever looked up. ROUTING now stays up for
+     boot()'s entire run, and drops only once routeGo() has had its own
+     correctness pass. */
   ROUTING = true;
-  try { render(); } finally { ROUTING = false; }
-  /* Still called: the one case applyRouteBeforeFirstPaint() could not
-     resolve (a /company/<name> not yet fetched), and a final correctness
-     pass now that real data is in hand. */
-  window.PulseLive.boot(PULSE_BAG, render).then(routeGo, routeGo);
+  try { render(); } finally { /* left up on purpose — see above */ }
+  window.PulseLive.boot(PULSE_BAG, render)
+   .then(routeGo, routeGo)
+   .then(()=>{ ROUTING = false; });
   /* Triggers are loaded at boot rather than when the Connections tab opens,
      even though that is the only tab that draws them. A subscribed trigger is
      supposed to toast wherever you happen to be, and the poll cannot start
