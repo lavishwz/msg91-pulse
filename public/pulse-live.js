@@ -1634,6 +1634,133 @@ window.PulseLive = (function () {
     render();
   }
 
+  /* ── triggers ─────────────────────────────────────────────────────────────
+     The listening half of ViaSocket: Gmail tells Pulse something happened
+     rather than Pulse asking. `catalogue` is what could be subscribed to,
+     `subscriptions` is what this member already subscribed to, and `since` is
+     the event-id high-water mark the poll below carries.
+
+     `since` starts at whatever the server says is current rather than at 0, so
+     opening the page announces what arrives from now on instead of replaying
+     every mail already in the table as a burst of toasts. */
+  state.triggers = {
+    loaded: false, loading: false, error: null,
+    configured: true, connected: false,
+    catalogue: [], subscriptions: [],
+    since: 0, busy: null,
+  };
+
+  async function loadTriggers(bag, render, force) {
+    const t = state.triggers;
+    if (t.loading || (t.loaded && !force)) return;
+    t.loading = true;
+    try {
+      const data = await get("/api/pulse/triggers?service=gmail");
+      t.catalogue = data.catalogue || [];
+      t.subscriptions = data.subscriptions || [];
+      t.connected = Boolean(data.connected);
+      t.configured = data.configured !== false;
+      /* Only ever moved forward. A refresh mid-session must not rewind the
+         cursor and re-toast what has already been shown. */
+      if (!t.since) t.since = Number(data.since || 0);
+      t.error = null;
+    } catch (err) {
+      /* Cleared, not left holding the last good answer: a stale catalogue
+         rendered after a failed refresh is a list of triggers that may no
+         longer exist, with nothing on screen saying the refresh failed. */
+      t.catalogue = [];
+      t.subscriptions = [];
+      t.error = err.message;
+      console.warn("[pulse] triggers failed:", err.message);
+    }
+    t.loading = false;
+    t.loaded = true;
+    render();
+  }
+
+  async function subscribeTrigger(triggerId, bag, render) {
+    const t = state.triggers;
+    t.busy = triggerId;
+    t.error = null;
+    render();
+    const loadingId = window.pulseToast ? window.pulseToast.loading("Subscribing…") : null;
+    try {
+      const data = await post("/api/pulse/triggers", { triggerId, service: "gmail" });
+      if (window.pulseToast) {
+        if (loadingId) window.pulseToast.dismiss(loadingId);
+        window.pulseToast.success("Now listening for " + (data.label || "that event") + ".");
+      }
+      await loadTriggers(bag, render, true);
+    } catch (err) {
+      t.error = err.message;
+      if (window.pulseToast) {
+        if (loadingId) window.pulseToast.dismiss(loadingId);
+        window.pulseToast.error(err.message);
+      }
+    }
+    t.busy = null;
+    render();
+  }
+
+  async function unsubscribeTrigger(id, bag, render) {
+    const t = state.triggers;
+    t.busy = "sub-" + id;
+    render();
+    const loadingId = window.pulseToast ? window.pulseToast.loading("Stopping…") : null;
+    try {
+      await send("DELETE", "/api/pulse/triggers", { id });
+      if (window.pulseToast) {
+        if (loadingId) window.pulseToast.dismiss(loadingId);
+        window.pulseToast.success("Stopped listening.");
+      }
+      await loadTriggers(bag, render, true);
+    } catch (err) {
+      t.error = err.message;
+      if (window.pulseToast) {
+        if (loadingId) window.pulseToast.dismiss(loadingId);
+        window.pulseToast.error(err.message);
+      }
+    }
+    t.busy = null;
+    render();
+  }
+
+  /**
+   * Ask what has landed, and toast it.
+   *
+   * Started once and left running for the life of the page. It polls rather
+   * than holding a socket open because Pulse runs on serverless compute where
+   * a long-lived connection has nowhere to live — and a toast a few seconds
+   * late is not a defect.
+   *
+   * A failed poll is swallowed on purpose. This runs every fifteen seconds
+   * forever; a network blip must not put an error toast on screen, and nothing
+   * is lost because the cursor only advances on a successful read.
+   */
+  let triggerPollTimer = null;
+  function startTriggerPolling(render, everyMs) {
+    if (triggerPollTimer) return;
+    const tick = async () => {
+      const t = state.triggers;
+      /* Nothing subscribed means nothing can arrive — skip the round trip
+         rather than polling an endpoint that can only ever answer empty. */
+      if (!t.since || !t.subscriptions.some((s) => s.state === "active")) return;
+      try {
+        const data = await get("/api/pulse/triggers/events?since=" + encodeURIComponent(t.since));
+        (data.events || []).forEach((e) => {
+          if (window.pulseToast) {
+            window.pulseToast.success(e.summary ? e.label + ": " + e.summary : e.label);
+          }
+        });
+        if (data.since) t.since = Number(data.since);
+        if (data.events && data.events.length) render();
+      } catch {
+        /* See above: a blip is not news. */
+      }
+    };
+    triggerPollTimer = setInterval(tick, everyMs || 15000);
+  }
+
   async function addVoiceTrait(trait, bag, render) {
     const value = (trait || "").trim();
     if (value.length < 2) return;
@@ -1973,6 +2100,11 @@ window.PulseLive = (function () {
     addVoiceTrait,
     removeVoiceTrait,
     loadGmailRecent,
+    /* Triggers — the listening half of ViaSocket. */
+    loadTriggers,
+    subscribeTrigger,
+    unsubscribeTrigger,
+    startTriggerPolling,
     openReassign,
     closeReassign,
     pickRep,

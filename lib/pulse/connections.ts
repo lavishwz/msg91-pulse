@@ -63,6 +63,25 @@ export async function scriptIdFor(memberEmail: string, service: ConnectionServic
   return rows[0]?.script_id ?? null;
 }
 
+/**
+ * The ViaSocket `auth_id` for one member's connection — the connection itself,
+ * as opposed to `script_id`, which is the enabled app built on top of it.
+ *
+ * Subscribing to a trigger needs this one and not the script_id: enabling buys
+ * the right to run actions, while a watch only needs to know whose mailbox it
+ * is. Stored as `viasocket_id` because that is what the connect popup calls it
+ * on the way in (public/pulse.js), long before it is used as an auth_id.
+ */
+export async function authIdFor(memberEmail: string, service: ConnectionService): Promise<string | null> {
+  const rows = await read<{ viasocket_id: string | null }>(
+    `SELECT viasocket_id
+       FROM pulse_connection
+      WHERE member_email = ? AND service = ? AND connected_at IS NOT NULL AND disconnected_at IS NULL`,
+    [memberEmail, service],
+  );
+  return rows[0]?.viasocket_id ?? null;
+}
+
 /** Record a disconnect. The row is kept, not deleted — see migrations/012. */
 export async function recordDisconnected(memberEmail: string, service: ConnectionService): Promise<void> {
   await write(

@@ -107,3 +107,129 @@ export async function runViasocketAction(
   }
   return body?.success === true ? body.data : body;
 }
+
+/* ── triggers ──────────────────────────────────────────────────────────────
+ *
+ * Everything above is Pulse asking ViaSocket a question. A trigger is the
+ * other direction: ViaSocket watches the mailbox and POSTs to us when
+ * something happens there.
+ */
+
+export type ViasocketTrigger = {
+  /** ViaSocket's trigger_version_id — what /embed/subscribe-event takes. */
+  id: string;
+  label: string;
+  description: string;
+};
+
+/**
+ * The triggers a service offers.
+ *
+ * These are configuration, not discovery, and that is not a shortcut — it is
+ * what ViaSocket leaves us. Nothing lists a service's triggers: `/embed/*`
+ * serves enable, subscribe, list-options and the flow list and 404s
+ * ("Route does not exist") on every plausible catalogue route; plug-service's
+ * /plugins/search answers the same upstream 400 whatever it is asked; and the
+ * published embed docs describe the SDK rather than any such API. The
+ * action_version_ids already in lib/pulse/gmail.ts (rowgko0n0edh and friends)
+ * have exactly this provenance too — read off the ViaSocket dashboard and
+ * pasted in.
+ *
+ * So the ids live in the environment rather than in this file: adding a
+ * trigger becomes a config change rather than a deploy, and a wrong id can be
+ * corrected without touching code.
+ *
+ *   VIASOCKET_GMAIL_TRIGGERS=[{"id":"row…","label":"New mail received",
+ *                              "description":"Fires when a message arrives"}]
+ */
+function triggersFromEnv(varName: string): ViasocketTrigger[] {
+  const raw = (process.env[varName] ?? "").trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((t) => t && typeof t.id === "string" && t.id.trim())
+      .map((t) => ({
+        id: String(t.id).trim(),
+        label: String(t.label ?? t.id).trim(),
+        description: String(t.description ?? "").trim(),
+      }));
+  } catch {
+    // A malformed value is a misconfiguration, not a reason to fail the page:
+    // the UI renders "none configured" and says why, same as an unset variable.
+    return [];
+  }
+}
+
+export function gmailTriggers(): ViasocketTrigger[] {
+  return triggersFromEnv("VIASOCKET_GMAIL_TRIGGERS");
+}
+
+/**
+ * Every flow this identifier owns — one per enabled app, one per trigger
+ * subscription. The only way to recover a script_id we failed to store.
+ */
+export async function listViasocketFlows(
+  uniqueIdentifier: string,
+): Promise<Array<Record<string, unknown>>> {
+  const token = await signViasocketToken(uniqueIdentifier);
+  const res = await fetch(`${API_URL}/projects/${PROJECT_ID}/integrations`, {
+    headers: { authorization: token },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body?.success === false) {
+    throw new Error(body?.message || `ViaSocket flow list failed with ${res.status}`);
+  }
+  return body?.data?.flows ?? [];
+}
+
+/**
+ * Start listening. Returns the subscription's own script_id, which is the
+ * handle `setViasocketFlowStatus` needs to stop it again.
+ *
+ * There is deliberately no `enable` step here: enabling buys the right to run
+ * *actions*, and a subscription needs only the connection. An integration
+ * that merely listens never calls /embed/enable at all.
+ */
+export async function subscribeViasocketEvent(
+  uniqueIdentifier: string,
+  triggerVersionId: string,
+  authId: string,
+  webhook: string,
+  inputData: Record<string, unknown> = {},
+  meta: Record<string, unknown> = {},
+): Promise<{ scriptId: string; hookUrl: string | null }> {
+  const token = await signViasocketToken(uniqueIdentifier);
+  const res = await fetch(`${API_URL}/embed/subscribe-event/${triggerVersionId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", authorization: token },
+    body: JSON.stringify({ auth_id: authId, inputData, webhook, meta }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body?.success === false) {
+    throw new Error(body?.message || `ViaSocket subscribe failed with ${res.status}`);
+  }
+  const scriptId = body?.data?.script_id;
+  if (!scriptId) {
+    throw new Error("ViaSocket did not return a script_id for this subscription.");
+  }
+  return { scriptId, hookUrl: body?.data?.inputData?.hookUrl ?? null };
+}
+
+/** status=0 stops a subscription (or disables an enabled app); status=1 resumes it. */
+export async function setViasocketFlowStatus(
+  uniqueIdentifier: string,
+  scriptId: string,
+  status: 0 | 1,
+): Promise<void> {
+  const token = await signViasocketToken(uniqueIdentifier);
+  const res = await fetch(`${API_URL}/embed/updatestatus/${scriptId}?status=${status}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", authorization: token },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body?.success === false) {
+    throw new Error(body?.message || `ViaSocket status change failed with ${res.status}`);
+  }
+}

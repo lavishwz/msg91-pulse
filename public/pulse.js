@@ -1902,6 +1902,10 @@ function vAuto(){
 
  if(S.tab==="connections"){
   loadTeamConnections();
+  /* Already requested at boot (see the bottom of this file — the poll needs
+     it). This is the no-op that covers the case where that request had not
+     landed yet when the tab was opened. */
+  if(window.PulseLive)PulseLive.loadTriggers(PULSE_BAG,render);
   /* Rows 0 and 1 (Mailboxes, Calendars) are the two the real team count
      replaces — see loadTeamConnections(). Until that answers, a skeleton bar
      stands in for the count rather than showing "22 of 25" (or whatever the
@@ -1923,7 +1927,8 @@ function vAuto(){
   body=`<p style="margin:26px 0 0;color:var(--ink2);max-width:62ch">Everything AI can do depends on this list.
    Where a dot is amber, something is switched off and I have said what it costs you.</p>
    <div style="margin-top:20px">${CONN.map(connRow).join("")}</div>
-   <p style="font-size:12.5px;color:var(--faint);margin-top:12px">Each person reconnects or fixes their own — there's nothing to do for them from here. See Profile → Your connections.</p>`;
+   <p style="font-size:12.5px;color:var(--faint);margin-top:12px">Each person reconnects or fixes their own — there's nothing to do for them from here. See Profile → Your connections.</p>
+   ${gmailTriggerCard()}`;
  } else if(S.tab==="rules"){
   /* The manifest is the most important statement in the product, so it is not a
      constant any more — it is rows in pulse_policy that a person can change.
@@ -2879,6 +2884,24 @@ document.addEventListener("click",e=>{
    if(window.PulseLive&&PulseLive.loadAutomations)PulseLive.loadAutomations(render);
   },eventName);
   return;}
+ /* Gmail triggers. Both call through to PulseLive, which owns the request and
+    the toast; this only routes the click. */
+ const trigon=t.closest("[data-trigon]");
+ if(trigon&&window.PulseLive&&PulseLive.subscribeTrigger){
+  PulseLive.subscribeTrigger(trigon.dataset.trigon,PULSE_BAG,render);
+  return;}
+ const trigoff=t.closest("[data-trigoff]");
+ if(trigoff&&window.PulseLive&&PulseLive.unsubscribeTrigger){
+  PulseLive.unsubscribeTrigger(Number(trigoff.dataset.trigoff),PULSE_BAG,render);
+  return;}
+ const trigconn=t.closest("[data-connect]");
+ if(trigconn){
+  /* Reload the catalogue after connecting, not just the page: the card is
+     gated on there being a connection, and it has to notice it now has one. */
+  connectApp(trigconn.dataset.connect,()=>{
+   if(window.PulseLive)PulseLive.loadTriggers(PULSE_BAG,render,true);
+   render();});
+  return;}
  const aret=t.closest("[data-automation-retire]");
  if(aret&&window.PulseLive&&PulseLive.retireAutomation){
   aret.textContent="…";
@@ -3439,6 +3462,66 @@ const RULEDEF={
  * on purpose: what to do is only writable once you know what you're
  * reacting to.
  */
+/**
+ * "Set a trigger for Gmail" — the Connections tab's listening card.
+ *
+ * Every other integration surface in Pulse is Pulse asking a question. This is
+ * the one that asks Gmail to speak first: pick a trigger, and when it fires
+ * ViaSocket POSTs to us and the page raises a toast.
+ *
+ * Four states, told apart rather than collapsed, because each needs a
+ * different thing from the reader:
+ *
+ *   still loading     — a skeleton, never an empty list that would read as
+ *                       "Gmail offers no triggers"
+ *   failed to load    — the error, not the last good catalogue: a stale list
+ *                       is a set of buttons that may no longer do anything
+ *   none configured   — VIASOCKET_GMAIL_TRIGGERS is unset. That is a
+ *                       deployment gap with a specific fix, so it says so
+ *   not connected     — a trigger watches a mailbox; there has to be one
+ */
+function gmailTriggerCard(){
+ const t=(window.PulseLive&&PulseLive.state.triggers)||null;
+ const head=`<div class="lab" style="margin:34px 0 0">Gmail triggers</div>`;
+ const box=inner=>`${head}<div class="prop" style="border-style:solid">
+  <h4>Have Gmail tell Pulse, instead of Pulse asking</h4>
+  <p>Subscribe to an event and it fires the moment it happens in the mailbox — no schedule, no polling on our side.</p>
+  ${inner}</div>`;
+
+ if(!t||(!t.loaded&&t.loading!==false&&!t.error))
+  return box(`${[0,1].map(()=>'<div class="sk" style="height:34px;margin-top:10px"></div>').join("")}`);
+ if(t.error)
+  return box(`<p style="color:var(--bad);margin-top:10px">Couldn't load the triggers — ${esc(t.error)}</p>`);
+ if(!t.connected)
+  return box(`<p style="margin-top:10px;color:var(--ink2)">Connect Gmail first — a trigger needs a mailbox to watch.
+   <span class="pen" data-connect="gmail" style="cursor:pointer;color:var(--br)" role="button" tabindex="0">Connect Gmail</span></p>`);
+ if(!t.catalogue.length)
+  return box(`<p style="margin-top:10px;color:var(--ink2)">No Gmail triggers are configured yet.</p>
+   <p style="font-size:12.5px;color:var(--faint);margin-top:8px">ViaSocket publishes no API that lists a service's
+   triggers, so their ids come from its dashboard the same way the action ids in lib/pulse/gmail.ts did.
+   Set <code>VIASOCKET_GMAIL_TRIGGERS</code> to a JSON array of
+   <code>{"id","label","description"}</code> and they appear here.</p>`);
+
+ const subFor=id=>t.subscriptions.find(s=>s.triggerVersionId===id);
+ const rows=t.catalogue.map(c=>{
+  const sub=subFor(c.id);
+  const busy=t.busy===c.id||(sub&&t.busy==="sub-"+sub.id);
+  return `<div class="ru" style="cursor:default">
+   <em data-k="${sub?"ACT":"CARD"}" style="opacity:${sub?1:.5}">${sub?"LIVE":"OFF"}</em>
+   <div style="flex:1"><b>${esc(c.label)}</b>
+    ${c.description?`<span class="un">${esc(c.description)}</span>`:""}
+    ${sub&&sub.eventCount?`<span class="un" style="color:var(--ink2)">${sub.eventCount} received${
+      sub.lastEventAt?" · last "+new Date(sub.lastEventAt).toLocaleString():""}</span>`:""}
+    ${sub&&sub.lastError?`<span class="br">${esc(sub.lastError)}</span>`:""}
+    ${sub&&!sub.live?`<span class="br">ViaSocket never confirmed this subscription.</span>`:""}</div>
+   <button class="go${sub?"":" solid"}" ${busy?"disabled":""}
+    ${sub?`data-trigoff="${sub.id}"`:`data-trigon="${esc(c.id)}"`}
+    style="font-size:12px;padding:5px 11px">${busy?"…":sub?"Stop":"Subscribe"}</button></div>`;}).join("");
+
+ return box(`<div style="margin-top:12px">${rows}</div>
+  <p style="font-size:12.5px;color:var(--faint);margin-top:12px">A subscribed trigger raises a toast here the moment it fires.</p>`);
+}
+
 let eaEventsCache=null;
 function eventAutomationCard(){
  if(eaEventsCache===null){
@@ -4358,6 +4441,15 @@ if (window.PulseLive) {
      resolve (a /company/<name> not yet fetched), and a final correctness
      pass now that real data is in hand. */
   window.PulseLive.boot(PULSE_BAG, render).then(routeGo, routeGo);
+  /* Triggers are loaded at boot rather than when the Connections tab opens,
+     even though that is the only tab that draws them. A subscribed trigger is
+     supposed to toast wherever you happen to be, and the poll cannot start
+     until it knows the event-id to start from and whether anything is
+     subscribed at all — both of which come from this one request. Gating it on
+     a tab nobody has to visit would mean mail only announced itself to people
+     already looking at the settings page. */
+  window.PulseLive.loadTriggers(PULSE_BAG, render);
+  window.PulseLive.startTriggerPolling(render);
 } else {
   routeGo();
 }

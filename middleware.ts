@@ -38,7 +38,19 @@ function isPublic(pathname: string): boolean {
     // register looks like.
     pathname === "/sw.js" ||
     pathname === "/manifest.webmanifest" ||
-    pathname.startsWith("/api/auth/")
+    pathname.startsWith("/api/auth/") ||
+    // ViaSocket's trigger callback. Unlike cron-job.org, ViaSocket is handed a
+    // URL once at subscribe time and calls it from its own servers forever
+    // after; there is no way to attach a rotating header to it, and giving it
+    // AUTOPILOT_TICK_SECRET would spread the secret that guards every machine
+    // endpoint to a third party for the sake of one callback.
+    //
+    // The URL is the credential instead: it ends in a random per-subscription
+    // UUID (pulse_trigger_subscription.hook_key, migrations/024) which the
+    // handler looks up and refuses when unknown. That scopes a leak to one
+    // subscription, and revoking it is a row delete rather than a rotation
+    // that would break every other machine endpoint at once.
+    pathname.startsWith("/api/pulse/viasocket/hook/")
     // The per-automation webhook (/api/pulse/autopilot/webhook/[key]) is NOT
     // listed here: cron-job.org's outgoing calls now carry the same shared
     // secret the tick uses (see build.ts), so it is authenticated via
