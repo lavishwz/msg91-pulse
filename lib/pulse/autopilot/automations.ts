@@ -228,7 +228,7 @@ export async function saveAutomation(
         trigger_kind, when_event, parent_key, every_minutes, find_sql, enrich_sql, subject_col,
         watermark_col, agent_task, mode, gtwy_agent_id, cron_job_id, executor_prompt,
         optimized_prompt, max_rows, capability, blocked_reason, live, next_run_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())
      ON DUPLICATE KEY UPDATE
         motion=VALUES(motion), scope=VALUES(scope), english=VALUES(english),
         summary=VALUES(summary), trigger_kind=VALUES(trigger_kind),
