@@ -67,17 +67,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ key: st
    * party's account held the key to every machine endpoint in the product.
    * See lib/pulse/autopilot/webhookKey.ts.
    *
-   * The shared secret is still accepted, because jobs registered before this
-   * change still send it and must not all break the moment this deploys.
-   * scripts/repoint-cron-jobs.mjs rewrites them; once no job sends ?secret=
-   * any more, the second half of this condition can go. */
+   * The shared-secret fallback is gone. It existed so jobs registered before
+   * the per-automation key did not all break on deploy; repoint-cron-jobs.mjs
+   * has since rewritten every automation webhook to ?k=, and both were watched
+   * firing cleanly on the new key afterwards.
+   *
+   * Worth removing rather than leaving harmless: it was the one place the
+   * shared secret was checked with `===` on a route that middleware
+   * deliberately skips, and while it stood, the whole point of the change —
+   * that a URL sitting in cron-job.org's dashboard no longer opens every
+   * machine endpoint — was only true of the jobs that happened to be
+   * repointed. The tick still authenticates with the shared secret, but that
+   * is /tick, a different path with no automation to derive a key from. */
   const params_ = new URL(req.url).searchParams;
-  const sharedSecret = (process.env.AUTOPILOT_TICK_SECRET ?? "").trim();
-  const viaSharedSecret =
-    Boolean(sharedSecret) &&
-    (params_.get("secret") === sharedSecret ||
-      req.headers.get("x-autopilot-secret") === sharedSecret);
-  if (!webhookKeyMatches(key, params_.get("k")) && !viaSharedSecret) {
+  if (!webhookKeyMatches(key, params_.get("k"))) {
     /* Deliberately the same answer an unknown automation gets, so a caller
        with a wrong key cannot use this to learn which automations exist. */
     return NextResponse.json({ ok: false, error: "no such automation" }, { status: 404 });

@@ -48,8 +48,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * a tight retry just spends the budget faster. Four attempts covers roughly a
  * minute and a half of waiting, which is longer than the window that trips it.
  */
-const RETRY_ATTEMPTS = 4;
-const RETRY_BASE_MS = 1_500;
+/* 1.5s doubling over four attempts is 10.5s of waiting, and their limit is
+   per-minute — so the original constants could not do the thing the paragraph
+   above says they do. Observed live: a 429 on PUT /jobs was still a 429 after
+   the whole ladder. 4s doubling over five attempts is 60s, which actually
+   outlasts the window. */
+const RETRY_ATTEMPTS = 5;
+const RETRY_BASE_MS = 4_000;
 
 /** Worth waiting for: their rate limit, and the transient 5xx shapes. */
 function worthRetrying(status: number | null): boolean {
@@ -61,6 +66,12 @@ async function call(
   path: string,
   body?: unknown,
 ): Promise<Record<string, unknown>> {
+  /* Read once, and outside the loop.
+     apiKey() throws when CRONJOB_API_KEY is unset, and evaluating it inside the
+     try below meant that throw was caught by the connection-failure handler:
+     zero requests were sent, the person was told the host was unreachable, and
+     the loop still slept the entire ladder for a problem no wait can fix. */
+  const auth = apiKey();
   let lastErr: CronJobError | null = null;
 
   for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
@@ -68,7 +79,7 @@ async function call(
     try {
       res = await fetch(`${BASE_URL}${path}`, {
         method,
-        headers: { authorization: `Bearer ${apiKey()}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer ${auth}`, "content-type": "application/json" },
         body: body === undefined ? undefined : JSON.stringify(body),
       });
     } catch (err) {
@@ -85,10 +96,17 @@ async function call(
     try {
       parsed = raw ? JSON.parse(raw) : {};
     } catch {
-      throw new CronJobError(
+      /* An unparseable body used to throw straight out of the loop, so a 502 or
+         503 served as an HTML proxy or maintenance page — exactly the transient
+         shape worthRetrying() exists for — cost one attempt and no retry. The
+         status decides whether to wait; the body only decides the message. */
+      lastErr = new CronJobError(
         `cron-job.org returned non-JSON (${res.status}): ${raw.slice(0, 200)}`,
         res.status,
       );
+      if (!worthRetrying(res.status) || attempt === RETRY_ATTEMPTS) throw lastErr;
+      await sleep(RETRY_BASE_MS * 2 ** (attempt - 1));
+      continue;
     }
 
     if (res.ok) return parsed as Record<string, unknown>;
