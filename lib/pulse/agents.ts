@@ -220,6 +220,21 @@ export const AutomationPlanSchema = z.object({
   max_rows: z.number().int().positive(),
   executor_prompt: z.string(),
   optimized_rule_prompt: z.string(),
+  /* Explicit prohibitions in the rule's own English ("never message an
+     enterprise account", "don't act if somebody already owns it"), as
+     [field, op, value] triples against the same row find_sql selects —
+     checked in code in automation-runner.ts before anything the executor
+     agent decided is acted on, not left for that agent's own prompt to
+     honour or not.
+     .optional().default([]): the automation-planner agent's prompt on GTWY
+     predates this field, so it will not be in the response until that
+     prompt is told to extract it (see docs/automation-never-if.md) —
+     .optional() is what keeps a planner that has never heard of never_if
+     from failing this schema on every single build. */
+  never_if: z
+    .array(z.tuple([z.string(), z.enum([">=", ">", "<=", "<", "==", "!=", "in"]), z.unknown()]))
+    .optional()
+    .default([]),
 });
 export type AutomationPlan = z.infer<typeof AutomationPlanSchema>;
 

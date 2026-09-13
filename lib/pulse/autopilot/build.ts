@@ -20,6 +20,7 @@ import { query, columnsOf } from "@/lib/db";
 import { write } from "@/lib/store";
 import { createCronJob, deleteCronJob, cronIntervalMinutes } from "@/lib/pulse/cronjob";
 import { saveAutomation, type Motion, type Scope } from "./automations";
+import type { Condition } from "./rules";
 import { EVENTS, isEventName, type EventName } from "./events";
 import { publicBaseUrl } from "@/lib/pulse/baseUrl";
 import { webhookKeyFor } from "./webhookKey";
@@ -35,6 +36,7 @@ export type BuildResult =
       optimizedPrompt: string;
       findSql: string;
       executorPrompt: string;
+      neverIf: Condition[] | null;
       cronJobId: string | null;
       webhookUrl: string | null;
       cronSchedule: string | null;
@@ -405,6 +407,7 @@ export async function buildAutomation(
       subjectCol: null,
       watermarkCol: null,
       agentTask: plan.executor_prompt,
+      neverIf: plan.never_if?.length ? plan.never_if : null,
       executorPrompt: plan.executor_prompt,
       optimizedPrompt: plan.optimized_rule_prompt,
       cronJobId: null,
@@ -422,6 +425,7 @@ export async function buildAutomation(
       optimizedPrompt: plan.optimized_rule_prompt,
       findSql: "",
       executorPrompt: plan.executor_prompt,
+      neverIf: plan.never_if?.length ? plan.never_if : null,
       cronJobId: null,
       webhookUrl: null,
       cronSchedule: null,
@@ -597,6 +601,7 @@ export async function buildAutomation(
     subjectCol: columnNamed(plan.subject_col, dry.columns) ?? idColumn(dry.columns),
     watermarkCol,
     agentTask: plan.executor_prompt,
+    neverIf: plan.never_if?.length ? plan.never_if : null,
     executorPrompt: plan.executor_prompt,
     optimizedPrompt: plan.optimized_rule_prompt,
     cronJobId,
@@ -631,6 +636,7 @@ export async function buildAutomation(
     optimizedPrompt: plan.optimized_rule_prompt,
     findSql: plan.find_sql,
     executorPrompt: plan.executor_prompt,
+    neverIf: plan.never_if?.length ? plan.never_if : null,
     cronJobId,
     webhookUrl,
     cronSchedule: plan.cron_schedule,

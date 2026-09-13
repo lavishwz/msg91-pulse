@@ -20,6 +20,7 @@
 
 import { read, write } from "@/lib/store";
 import { guard } from "@/lib/pulse/sqlguard";
+import type { Condition } from "./rules";
 
 export type TriggerKind = "schedule" | "event" | "branch" | "guard";
 export type Motion = "inbound" | "outbound" | "startup" | "partner" | "any";
@@ -45,6 +46,14 @@ export type Automation = {
   subjectCol: string | null;
   watermarkCol: string | null;
   agentTask: string | null;
+  /* [field, op, value] triples the row must NOT match — checked in code by
+     automation-runner.ts before anything the executor agent decided is acted
+     on, so a "never do this" in the rule's English is a guarantee rather
+     than a request the agent could talk itself out of. Null on almost every
+     row today: only automation-planner extracts these, and its prompt (on
+     GTWY, not in this repo) does not populate it yet — see
+     docs/automation-never-if.md. */
+  neverIf: Condition[] | null;
   mode: "cron" | "event";
   gtwyAgentId: string | null;
   cronJobId: string | null;
@@ -63,6 +72,19 @@ export type Automation = {
 };
 
 type Row = Record<string, unknown>;
+
+/** Malformed or absent JSON is "no constraint", never a thrown error — a
+ *  guarantee that fails to parse must not become an automation that fails
+ *  to run. */
+function parseNeverIf(v: unknown): Condition[] | null {
+  if (typeof v !== "string" || !v.trim()) return null;
+  try {
+    const parsed = JSON.parse(v);
+    return Array.isArray(parsed) && parsed.length ? (parsed as Condition[]) : null;
+  } catch {
+    return null;
+  }
+}
 
 function toAutomation(r: Row): Automation {
   return {
@@ -83,6 +105,7 @@ function toAutomation(r: Row): Automation {
     subjectCol: (r.subject_col as string) ?? null,
     watermarkCol: (r.watermark_col as string) ?? null,
     agentTask: (r.agent_task as string) ?? null,
+    neverIf: parseNeverIf(r.never_if_json),
     mode: (r.mode as Automation["mode"]) ?? "cron",
     gtwyAgentId: (r.gtwy_agent_id as string) ?? null,
     cronJobId: (r.cron_job_id as string) ?? null,
@@ -103,7 +126,7 @@ function toAutomation(r: Row): Automation {
 
 const COLUMNS = `id, automation_key, rule_key, motion, scope, owner_email, english, summary,
   trigger_kind, when_event, parent_key, every_minutes, find_sql, enrich_sql, subject_col, watermark_col,
-  agent_task, mode, gtwy_agent_id, cron_job_id, executor_prompt, optimized_prompt,
+  agent_task, never_if_json, mode, gtwy_agent_id, cron_job_id, executor_prompt, optimized_prompt,
   max_rows, capability, blocked_reason, state, live, last_run_at, next_run_at,
   last_error, run_count, alert_count`;
 
@@ -179,6 +202,7 @@ export type NewAutomation = {
   subjectCol?: string | null;
   watermarkCol?: string | null;
   agentTask?: string | null;
+  neverIf?: Condition[] | null;
   mode?: "cron" | "event";
   gtwyAgentId?: string | null;
   cronJobId?: string | null;
@@ -226,9 +250,9 @@ export async function saveAutomation(
     `INSERT INTO pulse_automation
        (automation_key, rule_key, motion, scope, owner_email, english, summary,
         trigger_kind, when_event, parent_key, every_minutes, find_sql, enrich_sql, subject_col,
-        watermark_col, agent_task, mode, gtwy_agent_id, cron_job_id, executor_prompt,
+        watermark_col, agent_task, never_if_json, mode, gtwy_agent_id, cron_job_id, executor_prompt,
         optimized_prompt, max_rows, capability, blocked_reason, live, next_run_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NOW())
      ON DUPLICATE KEY UPDATE
         motion=VALUES(motion), scope=VALUES(scope), english=VALUES(english),
         summary=VALUES(summary), trigger_kind=VALUES(trigger_kind),
@@ -236,7 +260,7 @@ export async function saveAutomation(
         every_minutes=VALUES(every_minutes), find_sql=VALUES(find_sql),
         enrich_sql=VALUES(enrich_sql),
         subject_col=VALUES(subject_col), watermark_col=VALUES(watermark_col),
-        agent_task=VALUES(agent_task), mode=VALUES(mode),
+        agent_task=VALUES(agent_task), never_if_json=VALUES(never_if_json), mode=VALUES(mode),
         gtwy_agent_id=VALUES(gtwy_agent_id), cron_job_id=VALUES(cron_job_id),
         executor_prompt=VALUES(executor_prompt), optimized_prompt=VALUES(optimized_prompt),
         max_rows=VALUES(max_rows), capability=VALUES(capability),
@@ -247,6 +271,7 @@ export async function saveAutomation(
       a.english, a.summary ?? null, a.triggerKind, a.whenEvent ?? null,
       a.parentKey ?? null, a.everyMinutes ?? null, a.findSql ?? null, a.enrichSql ?? null,
       a.subjectCol ?? null, a.watermarkCol ?? null, a.agentTask ?? null,
+      a.neverIf?.length ? JSON.stringify(a.neverIf) : null,
       a.mode ?? "cron", a.gtwyAgentId ?? null, a.cronJobId ?? null,
       a.executorPrompt ?? null, a.optimizedPrompt ?? null,
       a.maxRows ?? 50, a.capability ?? "ready", a.blockedReason ?? null,

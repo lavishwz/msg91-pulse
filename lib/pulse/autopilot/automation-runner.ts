@@ -28,6 +28,7 @@ import { read, write, acquireLock, releaseLock } from "@/lib/store";
 import { guard } from "@/lib/pulse/sqlguard";
 import { judgeRow } from "../agents";
 import { due, recordRun, deferRun, automationsForEvent, type Automation } from "./automations";
+import { test as testCondition } from "./rules";
 import { check as checkBreaker } from "./breaker";
 import { bindPlaceholders, bindValues } from "./enrich";
 import type { EventName } from "./events";
@@ -337,6 +338,24 @@ function looksBrokenSubject(subjectId: string | null, rowSubject: string | null)
   return !/[A-Za-z0-9]/.test(subjectId);
 }
 
+/**
+ * Does this row trip one of the automation's own neverIf conditions?
+ *
+ * Checked before the row ever reaches judge() — a prohibition the rule's
+ * English named is enforced here, in code, against the row's real fields, not
+ * left for the executor agent's prompt to remember and honour on its own. An
+ * automation with no neverIf (every one built before this, and every one
+ * today until automation-planner's own prompt is told to populate it) always
+ * returns null and costs this one array check.
+ *
+ * Returns the condition that matched, so the decision written for a blocked
+ * row can say plainly which one it was — not just "blocked".
+ */
+function neverIfHit(a: Automation, facts: Record<string, unknown>) {
+  if (!a.neverIf?.length) return null;
+  return a.neverIf.find((c) => testCondition(c, facts)) ?? null;
+}
+
 /** Run one automation. Never throws — a bad rule must not stop the pass. */
 export async function runOne(
   a: Automation,
@@ -517,6 +536,21 @@ export async function runOne(
     }
     const rowSubject = a.subjectCol ? String(row[a.subjectCol] ?? "") : null;
     const signalKey = `auto:${a.key}:${rowSubject || "portfolio"}`;
+    const blocked = neverIfHit(a, row);
+    if (blocked) {
+      // Never reaches the agent at all — a prohibition the rule named is a
+      // guarantee, not a question worth even asking.
+      await writeDecision(
+        a, signalKey, "", null, row, { never_if: blocked },
+        "quiet", null, "blocked", null, {}, rowSubject,
+      ).catch(() => {});
+      out.judged++;
+      if (a.watermarkCol) {
+        const v = markOf(row[a.watermarkCol]);
+        if (v > highest) highest = v;
+      }
+      continue;
+    }
     try {
       let call = await judge(a.english, a.agentTask ?? a.english, row);
       let retries = 0;
@@ -718,20 +752,32 @@ export async function runEventAutomation(
   let input: Record<string, unknown> = payload;
   try {
     input = await withEnrichment(a, payload);
-    const call = await judge(a.english, a.agentTask ?? a.english, input);
-    const data = call.data;
-    out.judged = 1;
-    let acted = "none";
-    if (data.should_alert && data.headline) {
-      if (await writeAlert(a, subject || data.subject_id || null, data.headline, data.detail ?? "", data.reasons, data.confidence))
-        out.alerts++;
-      acted = "alerted";
+    const blocked = neverIfHit(a, input);
+    if (blocked) {
+      // Never reaches the agent at all — a prohibition the rule named is a
+      // guarantee, not a question worth even asking. recordRun below still
+      // runs, same as every other row this pass.
+      await writeDecision(
+        a, signalKey, "", null, input, { never_if: blocked },
+        "quiet", null, "blocked", null, {}, subject,
+      );
+      out.judged = 1;
+    } else {
+      const call = await judge(a.english, a.agentTask ?? a.english, input);
+      const data = call.data;
+      out.judged = 1;
+      let acted = "none";
+      if (data.should_alert && data.headline) {
+        if (await writeAlert(a, subject || data.subject_id || null, data.headline, data.detail ?? "", data.reasons, data.confidence))
+          out.alerts++;
+        acted = "alerted";
+      }
+      await writeDecision(
+        a, signalKey, call.agentId, call.model, input, data,
+        data.should_alert ? "alert" : "quiet",
+        data.confidence, acted, null, call.usage, subject,
+      );
     }
-    await writeDecision(
-      a, signalKey, call.agentId, call.model, input, data,
-      data.should_alert ? "alert" : "quiet",
-      data.confidence, acted, null, call.usage, subject,
-    );
   } catch (err) {
     await writeDecision(
       a, signalKey, "", null, input, null, "failed", null, "none",

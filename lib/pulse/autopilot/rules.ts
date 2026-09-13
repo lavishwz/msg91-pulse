@@ -214,8 +214,12 @@ export async function retireRule(key: string, actor: string): Promise<boolean> {
  * A missing field is `false`, never a throw and never a silent true. A rule
  * that quietly passes because the data was absent is how an automation ends up
  * doing something nobody asked for.
+ *
+ * Exported: automation-runner.ts reuses this exact evaluator for a dynamically
+ * built automation's own `neverIf` conditions, rather than a second
+ * implementation that could quietly drift from what this one does.
  */
-function test(cond: Condition, facts: Record<string, unknown>): boolean {
+export function test(cond: Condition, facts: Record<string, unknown>): boolean {
   const [field, op, value] = cond;
   const actual = facts[field];
   if (actual === undefined || actual === null) return false;
