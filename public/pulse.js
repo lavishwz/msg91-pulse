@@ -1798,19 +1798,22 @@ function vAuto(){
     '<div class="item"><div class="sk" style="width:60px;height:12px"></div><div class="bd">'+
     '<div class="sk" style="width:40%;height:14px"></div><div class="sk" style="width:80%;margin-top:6px"></div></div></div>').join("")}</div>`;
   } else {
-   const activityDrafted=window.PulseLive&&PulseLive.state.activityDrafted;
-   /* "drafted"'s count and rows come from its own fetch (loadDrafted), not a
-      filter over the general feed's most-recent-60 window — see the comment
-      on draftedForPerson() server-side. Every other chip still filters
-      `rows` as before. */
-   const draftedLoading=S.act==="drafted"&&!activityDrafted;
-   const shown=draftedLoading?[]:S.act==="drafted"?(activityDrafted||[]):rows.filter(matches);
+   /* "drafted" and "suppressed" each read their own fetch (loadDrafted /
+      loadSuppressed), not a filter over the general feed's most-recent-60
+      window — see the comments on draftedForPerson()/suppressed()
+      server-side for why that window loses real rows on a busy day. Every
+      other chip still filters `rows` as before. */
+   const OWNFETCH={drafted:"activityDrafted",suppressed:"activitySuppressed"};
+   const ownKey=OWNFETCH[S.act];
+   const ownRows=ownKey&&window.PulseLive&&PulseLive.state[ownKey];
+   const ownLoading=!!ownKey&&!ownRows;
+   const shown=ownLoading?[]:ownKey?(ownRows||[]):rows.filter(matches);
    const count=k=>k==="all"?rows.length
-    :k==="drafted"?(activityDrafted?activityDrafted.length:"…")
+    :OWNFETCH[k]?((window.PulseLive&&PulseLive.state[OWNFETCH[k]])?window.PulseLive.state[OWNFETCH[k]].length:"…")
     :rows.filter(r=>{const o=S.act;S.act=k;const m=matches(r);S.act=o;return m;}).length;
    body=`<div class="row" style="margin:22px 0 0;gap:8px;flex-wrap:wrap">${CHIPS.map(([k,lab])=>
      `<button class="go${S.act===k?" solid":""}" data-act="${k}" style="font-size:12.5px;padding:6px 12px">${lab} · ${count(k)}</button>`).join("")}</div>
-    ${draftedLoading?`<div class="feed" style="margin-top:14px">${[0,1].map(()=>
+    ${ownLoading?`<div class="feed" style="margin-top:14px">${[0,1].map(()=>
       '<div class="item"><div class="sk" style="width:60px;height:12px"></div><div class="bd">'+
       '<div class="sk" style="width:40%;height:14px"></div><div class="sk" style="width:80%;margin-top:6px"></div></div></div>').join("")}</div>`
     :shown.length?`<div class="feed" style="margin-top:14px">${shown.map(r=>
@@ -2273,7 +2276,37 @@ function startClocks(){clearInterval(CT);const els=$$('[data-clk]');if(!els.leng
  go();CT=setInterval(go,1000);}
 
 /* ⌘K */
-let PAL=[];
+/**
+ * "Go to" and "Do" — real, but never seeded anywhere.
+ *
+ * rebuildPal() below has always filtered PAL for `g==="Go to"`/`g==="Do"`
+ * expecting something to carry forward across a rebuild — but PAL starts
+ * `[]` and nothing ever put a "Go to" or "Do" row into it, so both groups
+ * have been permanently empty since this shipped. "Add accounts in bulk"
+ * had no way to open it — confirmed by search, not a single
+ * data-sheet="bulk" existed anywhere — the same for every other item
+ * handover §7.8 describes living only in ⌘K. This is that seed.
+ */
+const GOTO_ROW=(t,s,v,tab)=>({g:"Go to",ic:"→",t,s,rt:"↵",
+ run:()=>{const am=document.getElementById("amenu");if(am)am.hidden=true;S.v=v;if(tab)S.tab=tab;render();}});
+let PAL=[
+ GOTO_ROW("Autopilot · Activity","What AI is doing now","auto","activity"),
+ GOTO_ROW("Autopilot · Rules","What it may do, and what needs a person","auto","rules"),
+ GOTO_ROW("Autopilot · Connections","What Pulse is connected to","auto","connections"),
+ GOTO_ROW("Autopilot · Audit log","Who saw what","auto","audit"),
+ GOTO_ROW("Profile","Your connections, your voice, your channels","profile"),
+ {g:"Do",ic:"＋",t:"Add accounts in bulk",s:"Paste a list, checked against existing accounts",rt:"↵",
+  run:()=>{S.bulkRows=null;S.bulkText=null;S.bulkDup=false;openSheet("bulk");}},
+ {g:"Do",ic:"↻",t:"Reassign accounts",s:"Start from the unassigned pile",rt:"↵",
+  run:()=>{openReassign("Unassigned",0);}},
+ {g:"Do",ic:"⏸",t:"Pause all sending",s:"The kill switch — nothing goes out until resumed",rt:"↵",
+  run:()=>{pulseConfirm({title:"Pause all sending?",
+   body:"Every held draft stays held and nothing new is released until somebody turns this back on. This affects everyone, not just you.",
+   confirmLabel:"Pause it",danger:true}).then(yes=>{
+    if(!yes||!window.PulseLive||!PulseLive.setSendingPaused)return;
+    PulseLive.setSendingPaused(true).then(()=>{toastDone(null,true,"Sending paused.");
+     if(PulseLive.loadAlerts)PulseLive.loadAlerts(render);});});}},
+];
 let pS=0,pR=[];
 /* Open a company page from anywhere, the same way a [data-cust] click does. */
 function openCompany(name){
@@ -2611,6 +2644,7 @@ document.addEventListener("click",e=>{
      feed's most-recent-60 window — see the comment on loadDrafted and on
      draftedForPerson() server-side for why that window is not reliable here. */
   if(S.act==="drafted"&&window.PulseLive&&PulseLive.loadDrafted){PulseLive.loadDrafted(PULSE_BAG,render);return;}
+  if(S.act==="suppressed"&&window.PulseLive&&PulseLive.loadSuppressed){PulseLive.loadSuppressed(PULSE_BAG,render);return;}
   render();return;}
  /* A row opens in place rather than in a panel: the evidence belongs next to
     the claim it supports, and Autopilot is a surface you scan, not one you
@@ -2890,6 +2924,22 @@ document.addEventListener("click",e=>{
 
  /* Bulk sheet: narrow the table to the rows that need a decision. */
  if(t.closest("#bulkdup")){S.bulkDup=!S.bulkDup;openSheet("bulk");return;}
+ const bck=t.closest("#bulkcheck");
+ if(bck){
+  const ta=$("#bulktx");const text=ta?ta.value.trim():"";
+  const err=$("#bulkerr");if(err)err.hidden=true;
+  if(!text){if(err){err.hidden=false;err.textContent="Paste something first.";}return;}
+  if(!window.PulseLive||!PulseLive.checkBulk){if(err){err.hidden=false;err.textContent="Not ready yet — reload and try again.";}return;}
+  bck.disabled=true;bck.textContent="…";
+  PulseLive.checkBulk(text,res=>{
+   if(!res||!res.ok){
+    bck.disabled=false;bck.textContent="Check →";
+    if(err){err.hidden=false;err.textContent=(res&&res.error)||"Could not check those.";}
+    return;}
+   S.bulkText=text;S.bulkRows=res.rows;S.bulkDup=false;
+   openSheet("bulk");
+  });
+  return;}
 
  /* Tag sheet: chips are a picker, and what is picked lands in the box so the
     text about to be saved is the text on screen. */
@@ -2945,6 +2995,24 @@ document.addEventListener("click",e=>{
      return;}
     $("#ovb").innerHTML=logResultHtml(res);
     if(window.PulseLive&&PulseLive.loadAccount)PulseLive.loadAccount(S.cust,PULSE_BAG,render);
+   });
+   return;}
+  /* "Add accounts in bulk" — the create step. Only present once #bulkcheck
+     has actually run; S.bulkRows is the real, server-checked list. */
+  if(S.bulkRows){
+   const btn=t.closest("#ovdo");
+   const newRows=S.bulkRows.filter(r=>r.result==="new");
+   if(!newRows.length)return;
+   if(!window.PulseLive||!PulseLive.createBulk)return;
+   btn.disabled=true;btn.textContent="…";
+   PulseLive.createBulk(newRows,res=>{
+    if(!res||!res.ok){
+     btn.disabled=false;btn.textContent=`Create the ${newRows.length} new one${newRows.length===1?"":"s"} →`;
+     toastDone(null,false,(res&&res.error)||"Could not create them.");
+     return;}
+    S.bulkRows=null;S.bulkText=null;S.bulkDup=false;
+    $("#ov").hidden=true;
+    toastDone(null,true,`Added ${res.created.length} new prospect${res.created.length===1?"":"s"}.`);
    });
    return;}
   if(window.PulseLive&&PulseLive.state.reassign.open){
@@ -3968,7 +4036,8 @@ function openPanel(kind,arg){
   const rows=(st&&st.activity)||[];
   const [sk,ag]=String(arg).split("::");
   const d=rows.find(x=>x.signalKey===sk&&x.agent===ag)
-   ||(st&&st.activityDrafted||[]).find(x=>x.signalKey===sk&&x.agent===ag);
+   ||(st&&st.activityDrafted||[]).find(x=>x.signalKey===sk&&x.agent===ag)
+   ||(st&&st.activitySuppressed||[]).find(x=>x.signalKey===sk&&x.agent===ag);
   if(!d){$("#pk").hidden=true;return;}
   const draft=d.draftId&&st.drafts?st.drafts.find(x=>x.id===d.draftId):null;
   const cf=d.confidence!=null?Math.round(d.confidence*100):null;
@@ -4117,23 +4186,31 @@ function openSheet(kind,arg){
     <button class="go" id="ovx">Cancel</button></div>`;
  }
  if(kind==="bulk"){
+  const rowStatus={new:"NEW",dup_customer:"ALREADY OURS",dup_prospect:"ALREADY OURS",suppressed:"SUPPRESSED"};
+  const checked=S.bulkRows;
+  const newCount=checked?checked.filter(r=>r.result==="new").length:0;
+  const shownRows=checked?checked.filter(r=>!S.bulkDup||r.result!=="new"):[];
   B.innerHTML=`<h3>Add accounts in bulk</h3>
-   <p class="sub">Paste a list or drop a CSV from the event. I check every row against what we already have before anything is created.</p>
-   <textarea class="logbox" style="min-height:70px" id="bulktx">sampleco19.example, sampleco1.example, sampleco20.example, rakesh.k@gmail.com, sampleco23.example, sampleco21.example, sampleco22.example</textarea>
+   <p class="sub">Paste a list — one per line or comma-separated. I check every row against MSG91's existing accounts and what has already been added here before anything is created.</p>
+   <textarea class="logbox" style="min-height:70px" id="bulktx" placeholder="acme.com, jane@acme.com, another-company.com">${checked?esc(S.bulkText||""):""}</textarea>
    <div class="row" style="margin-top:12px"><button class="go" disabled title="CSV upload isn't wired up yet — paste the list above instead." style="opacity:.5;cursor:not-allowed">Upload a CSV instead</button>
-    <span class="fresh">7 ROWS READ · CHECKED AGAINST 3,412 EXISTING ACCOUNTS</span></div>
-   <div class="tbl" style="margin-top:16px"><div class="tblscroll"><table>
-    <thead><tr><th>Company</th><th>Domain</th><th></th><th>What I found</th></tr></thead>
-    <tbody>${BULK.filter(([,,r])=>!S.bulkDup||r==="dup").map(([n,dm,r,note])=>`<tr>
-     <td class="c">${r==="junk"?"":LOGO(n,18)+" "}${n}</td><td>${dm}</td>
-     <td><span class="rowst" data-r="${r}">${r==="new"?"NEW":r==="dup"?"ALREADY OURS":"SUPPRESSED"}</span></td>
-     <td style="white-space:normal;max-width:280px">${note}</td></tr>`).join("")}
+    ${!checked?`<button class="go solid" id="bulkcheck">Check →</button>`:""}
+    ${checked?`<span class="fresh">${checked.length} ROW${checked.length===1?"":"S"} CHECKED</span>`:""}</div>
+   <div id="bulkerr" class="tagerr" role="alert" hidden></div>
+   ${checked?`<div class="tbl" style="margin-top:16px"><div class="tblscroll"><table>
+    <thead><tr><th>Input</th><th>Company</th><th></th><th>What I found</th></tr></thead>
+    <tbody>${shownRows.map(r=>`<tr>
+     <td class="c">${r.result==="suppressed"?"":LOGO(r.companyName,18)+" "}${esc(r.input)}</td><td>${esc(r.companyName)}</td>
+     <td><span class="rowst" data-r="${r.result==="new"?"new":r.result==="suppressed"?"junk":"dup"}">${rowStatus[r.result]}</span></td>
+     <td style="white-space:normal;max-width:280px">${esc(r.note)}</td></tr>`).join("")}
     </tbody></table></div></div>
-   <div class="row" style="margin-top:16px"><button class="go solid" id="ovdo">Create the 4 new ones →</button>
-    <button class="go" id="bulkdup">${S.bulkDup?"Show all 7 rows":`Review the ${
-      BULK.filter(b=>b[2]==="dup").length} duplicates`}</button><button class="go" id="ovx">Cancel</button></div>
+   <div class="row" style="margin-top:16px">${newCount?`<button class="go solid" id="ovdo">Create the ${newCount} new one${newCount===1?"":"s"} →</button>`
+     :`<button class="go solid" disabled style="opacity:.5;cursor:not-allowed">Nothing new to create</button>`}
+    <button class="go" id="bulkdup">${S.bulkDup?`Show all ${checked.length} rows`:`Only show the ${newCount} new one${newCount===1?"":"s"}`}</button>
+    <button class="go" id="ovx">Cancel</button></div>
    <div class="ver" style="font-family:var(--m);font-size:10.5px;color:var(--faint);margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
-    NEW ACCOUNTS ARE ENRICHED AND SCORED BEFORE THEY REACH ANYONE. DUPLICATES ATTACH TO THE EXISTING ACCOUNT AND TELL ITS OWNER.</div>`;
+    Checked against MSG91's own accounts and what has already been added here — no enrichment or scoring happens yet.</div>`
+   :`<div class="row" style="margin-top:16px"><button class="go" id="ovx">Cancel</button></div>`}`;
  }
  if(kind==="approvals"){
   B.innerHTML=`<h3>Startup approvals · since 1 August</h3>
@@ -4176,7 +4253,9 @@ function openSheet(kind,arg){
 }
 document.addEventListener("click",e=>{
  const t=e.target;
- const sh=t.closest("[data-sheet]");if(sh){openSheet(sh.dataset.sheet);return;}
+ const sh=t.closest("[data-sheet]");if(sh){
+  if(sh.dataset.sheet==="bulk"){S.bulkRows=null;S.bulkText=null;S.bulkDup=false;}
+  openSheet(sh.dataset.sheet);return;}
  if(t.closest("[data-addtag]")){openSheet("tag");return;}
  if(t.closest("#tagadd")){
   /* Everything picked, plus whatever was typed. One request, then the sheet

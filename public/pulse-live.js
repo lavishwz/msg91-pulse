@@ -12,7 +12,7 @@
  * real and which are still the prototype's sample data.
  */
 window.PulseLive = (function () {
-  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, cardsError: null, boardLoaded: false, flightLoaded: false, autopilot: null, autopilotError: null, drafts: [], policy: null, manifest: null, motionRules: null, automations: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null, mockDismissed: false, audit: null, auditError: null, auditLoadingMore: false, gmailRecent: null, gmailRecentError: null, gmailRecentLoaded: false, activityDrafted: null, activityDraftedError: null };
+  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, cardsError: null, boardLoaded: false, flightLoaded: false, autopilot: null, autopilotError: null, drafts: [], policy: null, manifest: null, motionRules: null, automations: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null, mockDismissed: false, audit: null, auditError: null, auditLoadingMore: false, gmailRecent: null, gmailRecentError: null, gmailRecentLoaded: false, activityDrafted: null, activityDraftedError: null, activitySuppressed: null, activitySuppressedError: null };
 
   /**
    * Sample-data notice (static markup in app/pulse-shell.tsx, #mockbar).
@@ -585,6 +585,26 @@ window.PulseLive = (function () {
   }
 
   /**
+   * The "Suppressed" chip's own rows — same fix as loadDrafted above, same
+   * reason: `suppressed()` already existed server-side as its own query
+   * (log.ts), nothing ever fetched it. The chip filtered `state.activity`'s
+   * most-recent-60 window instead, which has exactly the same lossy-window
+   * problem drafted had.
+   */
+  async function loadSuppressed(bag, render) {
+    if (state.activitySuppressed) { render(); return; }
+    try {
+      const data = await get("/api/pulse/autopilot/decisions?view=filtered&limit=50");
+      state.activitySuppressed = data.rows;
+      render();
+    } catch (err) {
+      console.warn("[pulse] suppressed activity failed:", err.message);
+      state.activitySuppressedError = err.message;
+      render();
+    }
+  }
+
+  /**
    * Drafts waiting on a person.
    *
    * Held is the only status this loads: released and discarded drafts are
@@ -1107,6 +1127,33 @@ window.PulseLive = (function () {
    * first open, and hands the resolved name back so the caller can switch
    * the view the same way `openCompany` always has.
    */
+  /**
+   * "Add accounts in bulk" — POST /api/pulse/prospects, two calls matching
+   * the sheet's own two steps: check, then create only the confirmed `new`
+   * rows. Real dedup against ms_user and existing prospects — see
+   * lib/pulse/prospects.ts. No enrichment; the sheet's copy says so.
+   */
+  async function checkBulk(text, cb) {
+    try {
+      const res = await post("/api/pulse/prospects", { action: "check", text });
+      cb(res);
+    } catch (err) {
+      cb({ ok: false, error: err.message });
+    }
+  }
+
+  async function createBulk(rows, cb) {
+    try {
+      const res = await post("/api/pulse/prospects", {
+        action: "create",
+        rows: rows.map((r) => ({ companyName: r.companyName, domain: r.domain, email: r.email })),
+      });
+      cb(res);
+    } catch (err) {
+      cb({ ok: false, error: err.message });
+    }
+  }
+
   /**
    * "Log what happened", for real — POST /api/pulse/accounts/:id/log. `cb`
    * gets the whole response ({ok, extract, created} or {ok:false, error}):
@@ -2177,6 +2224,9 @@ window.PulseLive = (function () {
     claimAccount,
     trackCard,
     loadDrafted,
+    loadSuppressed,
+    checkBulk,
+    createBulk,
     logWhatHappened,
     loadMotionRules,
     saveMotionRule,
