@@ -326,11 +326,13 @@ check(typeof nums[1] === "number", "zero stays a number and does not collapse to
  * ------------------------------------------------------------------ */
 
 /* The names a query may use are not open-ended: emitEvent only ever fires the
-   seven events in EVENTS, each with a fixed payload. This walks the catalogue
-   itself rather than a copy of it, so adding an eighth event without thinking
-   about enrichment shows up here. */
+   eight events in EVENTS, each with a fixed payload. This walks the catalogue
+   itself rather than a copy of it, so adding a ninth event without thinking
+   about enrichment shows up here. (Was seven until trigger.fired — ViaSocket's
+   actual watch firing, not just a connect/disconnect — gave a rule written
+   against "the trigger" something to react to.) */
 const eventNames = Object.keys(EVENTS);
-check(eventNames.length === 7, `the catalogue still has 7 events (got ${eventNames.length})`);
+check(eventNames.length === 8, `the catalogue still has 8 events (got ${eventNames.length})`);
 
 /* A field no event carries, used as the negative case everywhere below. */
 const ABSENT = "user_pwd";

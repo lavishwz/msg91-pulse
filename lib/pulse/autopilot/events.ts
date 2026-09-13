@@ -20,7 +20,8 @@ export type EventName =
   | "member.invited"
   | "member.removed"
   | "connection.connected"
-  | "connection.disconnected";
+  | "connection.disconnected"
+  | "trigger.fired";
 
 export const EVENTS: Record<EventName, { label: string; payload: string; example: Record<string, unknown> }> = {
   "account.tag_added": {
@@ -60,6 +61,29 @@ export const EVENTS: Record<EventName, { label: string; payload: string; example
     label: "Someone disconnects Gmail, Calendar or Slack",
     payload: "{ memberEmail, service }",
     example: { memberEmail: "rhea@msg91.com", service: "gmail" },
+  },
+  /* ViaSocket's actual watch — a Gmail message, a calendar change, a Slack
+   * message — landing at app/api/pulse/viasocket/hook/[key]/route.ts. That
+   * handler recorded the event for the Connections tab and stopped there by
+   * design ("no fan-out, no agent call" — its own docstring), which meant a
+   * rule written against "the ViaSocket trigger" had nothing to react to:
+   * the catalogue offered only the two connect/disconnect housekeeping
+   * events, and the planner either invented an event name or tried to poll a
+   * table that does not exist for something that only ever arrives by push.
+   *
+   * One generic event rather than one per service: `summary` is ViaSocket's
+   * own one-line description of what happened (already what the Connections
+   * tab shows), and a rule judges that text rather than the service needing
+   * its own event name and payload shape before it can be reacted to at all.
+   */
+  "trigger.fired": {
+    label: "A connected ViaSocket trigger fires (a new email, a calendar change, a Slack message)",
+    payload: "{ service, label, summary, memberEmail }",
+    example: {
+      service: "gmail", label: "New email in inbox",
+      summary: "From: prospect@acme.com — Re: pricing for 50k SMS/month",
+      memberEmail: "rhea@msg91.com",
+    },
   },
 };
 

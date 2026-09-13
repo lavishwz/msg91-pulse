@@ -8,18 +8,34 @@
  * is the whole authorisation, which is why it is never logged or returned
  * anywhere a browser could read it for a different member.
  *
- * The handler is deliberately dull. It records that the event arrived and
- * returns — no fan-out, no agent call, no mail fetch. Whatever Pulse eventually
- * does when mail lands belongs downstream of this row, not inside the request
- * ViaSocket is timing; a slow handler here is a trigger ViaSocket marks failed
- * and eventually stops calling.
+ * The handler records that the event arrived and answers ViaSocket immediately
+ * — the response is what ViaSocket is timing, and a slow answer here is a
+ * trigger it marks failed and eventually stops calling. What used to end there
+ * ("no fan-out, no agent call" — this docstring, until a rule written against
+ * "the ViaSocket trigger" turned out to have nothing to react to: the fixed
+ * event catalogue offered only the connect/disconnect housekeeping events,
+ * never the trigger firing itself). Fan-out to any automation listening for
+ * `trigger.fired` now happens after the response, via `after()`, the same
+ * pattern every other event emitter in this codebase uses to survive past the
+ * request that triggered it on serverless compute.
  */
 
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { subscriptionByHookKey, recordEvent } from "@/lib/pulse/triggers";
+import { emitEvent } from "@/lib/pulse/autopilot/automation-runner";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/**
+ * Long enough for `trigger.fired` listeners to actually finish.
+ *
+ * One event automation is one GTWY judging call, measured at 15-25 seconds —
+ * matches maxDuration on every other route that calls emitEvent (tags,
+ * owner, tick, webhook) for the same reason: the platform default kills the
+ * invocation mid-call, the response has already gone out, and the caller
+ * sees success while the automation never actually ran.
+ */
+export const maxDuration = 300;
 
 async function handle(req: Request, key: string) {
   if (!key || key.length < 16) {
@@ -52,6 +68,14 @@ async function handle(req: Request, key: string) {
   }
 
   const { id, summary } = await recordEvent(sub, payload);
+  after(() =>
+    emitEvent("trigger.fired", {
+      service: sub.service,
+      label: sub.label,
+      summary,
+      memberEmail: sub.memberEmail,
+    }).catch(() => {}),
+  );
   return NextResponse.json({ ok: true, eventId: id, summary });
 }
 
