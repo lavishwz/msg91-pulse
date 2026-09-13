@@ -695,9 +695,52 @@ export async function planAutomation(
    * which is exactly what it had before this, so a database hiccup degrades
    * the plan rather than failing the build. */
   let tableIndex = "";
+  let tableDetail = "";
   try {
-    const { index, renderIndex } = await import("./schema");
-    tableIndex = renderIndex(await index());
+    const { index, renderIndex, detail, renderDetail } = await import("./schema");
+    const idx = await index();
+    tableIndex = renderIndex(idx);
+
+    /* The columns of the tables this rule actually names.
+     *
+     * The index says a table exists and what it holds. It does not say what
+     * columns it has — the paragraph below used to admit that in as many
+     * words — so for the 107 tables outside SCHEMA_GLOSSARY the planner had a
+     * name and had to invent the rest. It duly did: "Unknown column
+     * 'tb.user_pid' in 'WHERE'", "Unknown column 'user_pid' in 'SELECT'",
+     * three times in the first seven rules of a batch, every one of them on a
+     * rule that needed a join.
+     *
+     * A rule names its tables in the sentence somebody typed — "using
+     * ms_signup_log", "using verify_dlt" — so the tables worth describing in
+     * full are knowable before the planner runs. Matched on a word boundary
+     * against the allowlist, which is both the safe set and the only set the
+     * query may read anyway.
+     *
+     * Bounded at eight: detail() caps at twelve, the prompt should not become
+     * mostly schema, and a rule naming more than eight tables has a bigger
+     * problem than column names. */
+    const named = idx
+      .map((t) => t.table)
+      .filter((t) => new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(english))
+      .slice(0, 8);
+
+    if (named.length) {
+      /* The dump first, live introspection second.
+       *
+       * schema/msg91-schema.sql has all 509 tables and every column, costs no
+       * round trip, and answers while the database is asleep — which the free
+       * tier does. detail() is the fallback for a table the dump does not
+       * describe, which is what a schema change since the dump looks like. */
+      const { renderDumpDetail, dumpColumns } = await import("./schemaDump");
+      const fromDump = named.filter((t) => dumpColumns(t));
+      const missing = named.filter((t) => !dumpColumns(t));
+      const parts = [
+        fromDump.length ? renderDumpDetail(fromDump) : "",
+        missing.length ? renderDetail(await detail(missing)) : "",
+      ].filter(Boolean);
+      tableDetail = parts.join("\n\n");
+    }
   } catch (err) {
     console.warn("[pulse] schema index unavailable to the planner:", (err as Error).message);
   }
@@ -706,10 +749,19 @@ export async function planAutomation(
     today: today(),
     motion,
     english,
-    schema: tableIndex
-      ? `${SCHEMA_GLOSSARY}\n\nEvery other table you may read. Use a column only after\n` +
-        `confirming it exists; these lines give the table and what it holds, not its columns:\n\n${tableIndex}`
-      : SCHEMA_GLOSSARY,
+    schema: [
+      SCHEMA_GLOSSARY,
+      tableDetail &&
+        `The full columns of the tables this rule names. These are read from the\n` +
+        `database itself — use these names exactly, and do not use a column that\n` +
+        `is not listed here:\n\n${tableDetail}`,
+      tableIndex &&
+        `Every other table you may read. These lines give the table and what it\n` +
+        `holds, not its columns — so do not reference a column of one of these\n` +
+        `unless it also appears above:\n\n${tableIndex}`,
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
     fields: Object.entries(RULE_FIELDS)
       .map(([k, v]) => `- ${k} — ${v}`)
       .join("\n"),
