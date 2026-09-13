@@ -73,7 +73,20 @@ function saveState(s) {
 }
 
 const state = loadState();
-const token = await session();
+
+/**
+ * A fresh session per build, not one for the whole run.
+ *
+ * signSession() mints a token with the app's real TTL, and a 45-case batch at
+ * ~35s a build plus a 25s gap runs well past it. The first run of this died at
+ * case 36 with "401 Not signed in" and then failed the last ten in a fifth of a
+ * second each — which reads exactly like the app rejecting the work, and is
+ * actually the clock.
+ *
+ * Minting is local JWT signing against a secret already in memory, so it costs
+ * nothing next to a 35-second build.
+ */
+const freshToken = () => session();
 
 console.log(`base   : ${base()}`);
 console.log(`cases  : ${cases.length}${ONLY ? ` (tiers of ${all.length})` : ""}`);
@@ -97,7 +110,7 @@ for (const [i, c] of cases.entries()) {
   const t0 = Date.now();
   let res;
   try {
-    res = await api(token, "POST", "/api/pulse/autopilot/build", body);
+    res = await api(await freshToken(), "POST", "/api/pulse/autopilot/build", body);
   } catch (err) {
     res = { status: 0, json: null, text: String(err && err.message) };
   }
