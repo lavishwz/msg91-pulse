@@ -668,6 +668,17 @@ ms_domain — subsite_userid, subsite_dname, signup_enabled (branded sub-sites)
 export async function planAutomation(
   english: string,
   motion: string,
+  /**
+   * Set on the one retry build.ts makes after a dry run fails — the query
+   * this same planner just wrote, and MySQL's own error rejecting it. Real
+   * feedback ("Illegal mix of collations…") corrects a planner far more
+   * reliably than a warning it saw once before writing anything, which is
+   * what a bare advisory in `schema` turned out to be: partner-high-9 still
+   * mixed latin1_swedish_ci and utf8mb4_general_ci with the warning present,
+   * because a general "watch out for this" competes with everything else in
+   * the prompt, while "this exact query, this exact rejection" does not.
+   */
+  repair?: { sql: string; error: string },
 ): Promise<AgentCall<AutomationPlan>> {
   const { eventsCatalogueForPlanner } = await import("./autopilot/events");
 
@@ -696,6 +707,7 @@ export async function planAutomation(
    * the plan rather than failing the build. */
   let tableIndex = "";
   let tableDetail = "";
+  let collationWarning = "";
   try {
     const { index, renderIndex, detail, renderDetail } = await import("./schema");
     const idx = await index();
@@ -732,7 +744,7 @@ export async function planAutomation(
        * round trip, and answers while the database is asleep — which the free
        * tier does. detail() is the fallback for a table the dump does not
        * describe, which is what a schema change since the dump looks like. */
-      const { renderDumpDetail, dumpColumns } = await import("./schemaDump");
+      const { renderDumpDetail, dumpColumns, mixedCharsets } = await import("./schemaDump");
       const fromDump = named.filter((t) => dumpColumns(t));
       const missing = named.filter((t) => !dumpColumns(t));
       const parts = [
@@ -740,6 +752,29 @@ export async function planAutomation(
         missing.length ? renderDetail(await detail(missing)) : "",
       ].filter(Boolean);
       tableDetail = parts.join("\n\n");
+
+      /* This is where "Illegal mix of collations (latin1_swedish_ci, IMPLICIT)
+       * and (utf8mb4_general_ci, IMPLICIT)" came from on partner-high-9: 427 of
+       * the 509 tables still default to latin1 from whenever they were
+       * created, a handful sit on plain utf8, and the rest (mostly what has
+       * been touched more recently) are utf8mb4. None of that is visible in a
+       * column list alone — `varchar(45)` reads the same whichever charset it
+       * carries — so the planner had no way to know two joined columns would
+       * collide until MySQL said so at query time, after the plan already
+       * looked reasonable. Only raised when the rule's own tables actually
+       * mix charsets: most rules touch tables that already agree, and a
+       * warning that fires on every rule is one nobody reads on the rule that
+       * needs it. */
+      const charsets = mixedCharsets(fromDump);
+      if (charsets.length > 1) {
+        collationWarning =
+          `These tables mix character sets on their text columns: ${charsets.join(", ")} ` +
+          `(marked [charset:…] above where it isn't utf8mb4). Comparing or joining two text ` +
+          `columns with different charsets fails at query time with "Illegal mix of collations" ` +
+          `— it does not fail to plan, it fails to run. Wrap either side in ` +
+          `CONVERT(column USING utf8mb4) before comparing or joining across a charset boundary, ` +
+          `or when in doubt.`;
+      }
     }
   } catch (err) {
     console.warn("[pulse] schema index unavailable to the planner:", (err as Error).message);
@@ -759,6 +794,13 @@ export async function planAutomation(
         `Every other table you may read. These lines give the table and what it\n` +
         `holds, not its columns — so do not reference a column of one of these\n` +
         `unless it also appears above:\n\n${tableIndex}`,
+      collationWarning,
+      repair &&
+        `Your previous query for this exact rule failed against the real database ` +
+        `and must not be repeated as written:\n\n${repair.sql}\n\nThe database's own error:\n` +
+        `${repair.error}\n\nWrite a new find_sql that avoids this specific failure — if it names ` +
+        `a column mixing character sets, wrap the offending side in CONVERT(column USING utf8mb4) ` +
+        `rather than repeating the bare comparison.`,
     ]
       .filter(Boolean)
       .join("\n\n"),

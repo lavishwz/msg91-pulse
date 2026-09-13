@@ -376,51 +376,86 @@ export async function buildAutomation(
   }
 
   /* ── schedule automations: unchanged from before this feature ── */
-  /* find_sql is optional on the plan schema so an event rule can be built
-     without one (see AutomationPlanSchema). On this path it is the whole
-     point, so its absence is caught here with a message that says what the
-     planner actually did — rather than being handed to guard() as an empty
-     string and coming back as a parse complaint about nothing. */
-  if (!plan.find_sql?.trim()) {
-    return fail(
-      english, motion, ownerEmail, "plan",
-      "the planner returned no query for a scheduled rule. Say more plainly what it should look for, " +
-        "or pick an event instead if it should react to something happening inside Pulse.",
-    );
-  }
-  /* A query that refers to a variable nobody sets can never match a row.
+  /*
+   * One repair pass on a dry-run failure, not on a guard failure.
    *
-   * The planner writes `AND user_date > @watermark` often enough to matter —
-   * it is what the SQL for an incremental rule looks like everywhere else in
-   * the world. But Pulse does not filter by watermark in SQL; runOne() fetches
-   * the rows and filters them in JavaScript against pulse_watermark. Nothing
-   * ever binds `@watermark`, so MySQL reads it as an unset session variable,
-   * which is NULL — and `user_date > NULL` is NULL, so the rule matches
-   * nothing on every pass for the rest of its life.
-   *
-   * Neither existing check catches it. guard() is about safety and this is
-   * perfectly safe; dryRun() wraps the query in LIMIT 0 and asks only whether
-   * it parses and executes, which it does. The rule then saves, gets a cron
-   * job, fires on schedule and reports "ran, found nothing" forever — the one
-   * outcome that looks identical to a healthy rule with a quiet week.
-   *
-   * Caught here rather than repaired, because the fix is to write the query
-   * without the variable and only the planner can do that. */
-  const variableRef = /(?<![\w@])@[a-z_][\w$]*/i.exec(stripStrings(plan.find_sql));
-  if (variableRef) {
-    return fail(
-      english, motion, ownerEmail, "guard",
-      `the planner's query refers to ${variableRef[0]}, which nothing ever sets — it would match no rows on every run. ` +
-        `Pulse applies the watermark itself after fetching, so the query must not mention one.`,
-    );
-  }
+   * A guard rejection is a safety-shaped refusal — an unsafe table, a query
+   * with no LIMIT the guard could not fix, a second statement — and asking
+   * the same planner to try again gets the same refusal for the same reason.
+   * A dry-run failure is different: the plan was safe and plausible, MySQL
+   * just would not run it, and MySQL's own error is exactly the information
+   * that was missing when the query was written. "Illegal mix of collations"
+   * survived a prompt that already warned about mixed charsets in the
+   * abstract (schemaDump.mixedCharsets, above) — partner-high-9 wrote the
+   * clash anyway with that warning present. What changes a planner's mind is
+   * its own query and its own rejection, handed back once, not a rule that
+   * fires before it has written anything.
+   */
+  let g!: ReturnType<typeof guard>;
+  let dry!: Awaited<ReturnType<typeof dryRun>>;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    /* find_sql is optional on the plan schema so an event rule can be built
+       without one (see AutomationPlanSchema). On this path it is the whole
+       point, so its absence is caught here with a message that says what the
+       planner actually did — rather than being handed to guard() as an empty
+       string and coming back as a parse complaint about nothing. */
+    if (!plan.find_sql?.trim()) {
+      return fail(
+        english, motion, ownerEmail, "plan",
+        "the planner returned no query for a scheduled rule. Say more plainly what it should look for, " +
+          "or pick an event instead if it should react to something happening inside Pulse.",
+      );
+    }
+    /* A query that refers to a variable nobody sets can never match a row.
+     *
+     * The planner writes `AND user_date > @watermark` often enough to matter —
+     * it is what the SQL for an incremental rule looks like everywhere else in
+     * the world. But Pulse does not filter by watermark in SQL; runOne() fetches
+     * the rows and filters them in JavaScript against pulse_watermark. Nothing
+     * ever binds `@watermark`, so MySQL reads it as an unset session variable,
+     * which is NULL — and `user_date > NULL` is NULL, so the rule matches
+     * nothing on every pass for the rest of its life.
+     *
+     * Neither existing check catches it. guard() is about safety and this is
+     * perfectly safe; dryRun() wraps the query in LIMIT 0 and asks only whether
+     * it parses and executes, which it does. The rule then saves, gets a cron
+     * job, fires on schedule and reports "ran, found nothing" forever — the one
+     * outcome that looks identical to a healthy rule with a quiet week.
+     *
+     * Caught here rather than repaired, because the fix is to write the query
+     * without the variable and only the planner can do that. */
+    const variableRef = /(?<![\w@])@[a-z_][\w$]*/i.exec(stripStrings(plan.find_sql));
+    if (variableRef) {
+      return fail(
+        english, motion, ownerEmail, "guard",
+        `the planner's query refers to ${variableRef[0]}, which nothing ever sets — it would match no rows on every run. ` +
+          `Pulse applies the watermark itself after fetching, so the query must not mention one.`,
+      );
+    }
 
-  const g = guard(plan.find_sql, Math.min(plan.max_rows || 50, 200));
-  if (!g.ok) {
-    return fail(english, motion, ownerEmail, "guard", "the planner's query is not safe to run: " + g.reason);
-  }
+    g = guard(plan.find_sql, Math.min(plan.max_rows || 50, 200));
+    if (!g.ok) {
+      return fail(english, motion, ownerEmail, "guard", "the planner's query is not safe to run: " + g.reason);
+    }
 
-  const dry = await dryRun(g.sql);
+    dry = await dryRun(g.sql);
+    if (dry.ok) break;
+
+    if (attempt === 1) {
+      return fail(
+        english, motion, ownerEmail, "dry_run",
+        "the planner's query does not run against the real database: " + dry.error,
+      );
+    }
+    try {
+      plan = (await planAutomation(english, motion, { sql: plan.find_sql, error: dry.error })).data;
+    } catch (err) {
+      return fail(english, motion, ownerEmail, "plan", (err as Error).message);
+    }
+  }
+  /* Unreachable: the loop above only leaves via `break` (dry.ok is true) or an
+     explicit `return` on failure. Narrows `dry` for TypeScript, which cannot
+     see that guarantee across the loop's own boundary. */
   if (!dry.ok) {
     return fail(
       english, motion, ownerEmail, "dry_run",
