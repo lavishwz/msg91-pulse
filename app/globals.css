@@ -580,6 +580,12 @@ h1 .sl{color:var(--faint)}
 .ru:hover span{color:var(--ink)}
 .ru .pen{opacity:0;font-size:11px;color:var(--br);flex:none;padding-top:3px}
 .ru:hover .pen{opacity:1}
+/* Same problem as .qa below: a device with no hover has no way to ever make
+   opacity:0 become opacity:1, so "turn off" and "delete" on every built
+   automation were there in the DOM and permanently invisible on a phone —
+   the automations screen's own retire/delete controls, unreachable on the
+   device most people are holding it on. */
+@media(hover:none){.ru .pen{opacity:1}}
 .red h4{font-family:var(--m);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
  color:var(--faint);font-weight:400;margin:22px 0 8px}
 .red .cl2{display:flex;align-items:center;gap:8px;padding:9px 11px;border:1px solid var(--line);
@@ -990,14 +996,22 @@ h1 .sl{color:var(--faint)}
    --------------------------------------------------------------------------- */
 .authpage{min-height:100dvh;display:grid;place-items:center;padding:40px 24px}
 .authcard{width:min(420px,100%);background:var(--raise);border:1px solid var(--line2);
- border-radius:14px;box-shadow:var(--sh);padding:30px 28px 26px;text-align:left}
+ border-radius:14px;box-shadow:var(--sh);padding:30px 28px 26px;text-align:left;overflow-x:hidden}
 .authcard .brand{margin-bottom:20px}
 .authcard h1{margin:0;font-size:22px;font-weight:600;letter-spacing:-.02em}
 .authcard p{margin:9px 0 0;font-size:14px;color:var(--muted)}
 .authcard form{margin-top:20px}
-/* The widget draws its own form inside this box. Height is reserved so the card
-   does not jump the moment the third-party script paints. */
-.authwidget{margin-top:22px;min-height:200px}
+/* The widget draws its own form inside this box, and it does so with markup
+   Pulse does not control. On narrow screens that markup has been wider than
+   the card — fixed-width inputs, an OTP row that does not wrap — which,
+   left-aligned in a box with nowhere to grow, ran off the card's right edge
+   instead of wrapping or shrinking. Height is reserved so the card does not
+   jump the moment the third-party script paints; the flex centring and the
+   blanket max-width keep whatever it renders inside the card no matter what
+   width it was built for. */
+.authwidget{margin-top:22px;min-height:200px;width:100%;display:flex;
+ flex-direction:column;align-items:center;overflow-x:hidden}
+.authwidget *{max-width:100%;box-sizing:border-box}
 .authwait{margin-top:18px;font-family:var(--m);font-size:10px;letter-spacing:.1em;
  text-transform:uppercase;color:var(--faint)}
 .loader{width:28px;height:28px;border:3px solid var(--line2);border-top-color:var(--br);border-radius:50%;
@@ -1101,6 +1115,17 @@ h1 .sl{color:var(--faint)}
  .pr,.ln,.lrow,.frow,.drow,.oi{flex-wrap:wrap}
  .pr b,.lrow .nm2,.frow b,.drow b{min-width:0;width:100%}
  .pr i,.ln i{text-align:left}
+
+ /* An automation's row on the Automations tab: the CRON/EVENT badge, the
+    title and run stats, then "history"/"turn off"/"delete" all sat on one
+    unwrapping flex line — fine at desktop widths, but on a phone the three
+    actions had nowhere to go and were squeezed down to a sliver next to
+    whatever room the title's first line left them. Wrapping them onto their
+    own row, full width and evenly spaced, gives each one a real tap target
+    instead of a squint-and-hope one. */
+ .aurow{flex-wrap:wrap;row-gap:8px}
+ .aurow .pen{flex:1 1 auto;text-align:center;padding:6px 4px;
+  border:1px solid var(--line2);border-radius:8px}
 
  /* dialogs and the palette: full-bleed on a phone rather than a card
     floating in from the sides */

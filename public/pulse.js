@@ -764,6 +764,20 @@ function place(){
  return [S.v,S.cust,S.ask,S.tab,S.act,S.askTab,S.teamTab,S.partner,S.scope].join("|");
 }
 let LASTPLACE=null;
+/* Opening an account is always "somewhere new" no matter what place() says —
+ * but place() does not carry enough to guarantee that: it does not know
+ * *which* account was open before, and S.act (the Activity filter) rides
+ * along unrelated to whether the reader just walked onto a company page. Two
+ * renders in a row that land on the same place() string — the account's
+ * first paint as a stub, then again once loadAccount's detail lands — are
+ * exactly the case the normal scroll-restore is right to treat as "stayed
+ * put", which is correct for tags loading in later while someone reads. The
+ * one render this must not apply to is the very first one, opening the page
+ * — and that render is a one-shot the three entry points below (the wall,
+ * the palette, "Open account →" on a decision) each know about and this
+ * generic logic further down does not. Set immediately before that first
+ * render, cleared the moment it is honoured. */
+let FORCE_TOP=false;
 
 /* ---------------------------------------------------------------------------
  * The address bar.
@@ -976,7 +990,8 @@ function paint(){
      underneath it, so it is redrawn from its own state rather than being
      rebuilt only when it is opened. */
   drawReassign();
-  window.scrollTo({top:here===LASTPLACE?y:0});
+  window.scrollTo({top:(!FORCE_TOP&&here===LASTPLACE)?y:0});
+  FORCE_TOP=false;
   restoreFocus(focused);
   /* .tabs scrolls horizontally on a narrow screen (five Autopilot tabs, or
      Ask's own two, don't all fit) and every render recreates it from scratch,
@@ -984,8 +999,22 @@ function paint(){
      with the strip still showing Activity and no visible sign which tab is
      actually open. Putting the selected button back in view undoes that,
      on first paint and on every later one alike. */
+  /* scrollIntoView's block:"nearest" is not a no-op just because the tab bar
+     is already fully on screen vertically — the moment a render happens with
+     the strip scrolled *above* the viewport (reading an automation further
+     down the Rules tab, then toggling its history), "nearest" walks every
+     scrollable ancestor including the page itself, and the page is the one
+     that has to move to satisfy it. That is the click-history-and-the-page-
+     jumps-to-the-top bug: nothing about opening a row's history should move
+     the page at all. Scrolling only the strip's own scrollLeft reaches the
+     one axis this is actually for and never touches window scroll. */
   const activeTab=main.querySelector(".tabs button[aria-selected=\"true\"]");
-  if(activeTab)activeTab.scrollIntoView({block:"nearest",inline:"nearest"});
+  const tabsEl=activeTab&&activeTab.closest(".tabs");
+  if(tabsEl){
+   const tb=activeTab.getBoundingClientRect(),cb=tabsEl.getBoundingClientRect();
+   if(tb.left<cb.left)tabsEl.scrollLeft-=(cb.left-tb.left);
+   else if(tb.right>cb.right)tabsEl.scrollLeft+=(tb.right-cb.right);
+  }
  };
 
  /* Motion belongs to a navigation, not to a repaint.
@@ -1002,6 +1031,31 @@ function paint(){
  const navigated=here!==LASTPLACE;
  const useVT=navigated&&LASTPLACE!==null&&canViewTransition();
  main.dataset.enter=navigated&&!useVT?"1":"0";
+ /* swap() rebuilds #main from scratch by string-templating live state — CUST,
+    the board, an account's health — and every one of those screens has a
+    spot that assumes some field is there once loading is done. When that
+    assumption is wrong (a race between two loaders, a shape the API changed
+    underneath), the exception happens partway through building the string,
+    main.innerHTML is never reassigned, and whatever was already on screen —
+    the previous view, or the "Opening…" state a click left behind — just
+    sits there for good with nothing left to trigger another render. That is
+    the silent "stuck, no skeleton" failure: not a slow loader (skeleton()
+    above already covers that), a broken one, with nothing after it to show
+    even an error. Catching it here cannot fix whatever was wrong with the
+    data, but it turns a screen frozen with no explanation into one that
+    says so and offers the one thing that reliably clears any of these —
+    another load from scratch — instead of a tab that looks hung forever. */
+ const safeSwap=()=>{
+  try{swap();}
+  catch(err){
+   console.error("[pulse] render failed",err);
+   main.innerHTML=`<div class="item" style="justify-content:center;text-align:center;padding:48px 20px">
+    <div class="bd"><b>Something went wrong showing this screen.</b>
+     <p style="margin:6px 0 0;color:var(--muted)">Reloading clears it.</p>
+     <div class="row" style="justify-content:center;margin-top:14px">
+      <button class="go solid" onclick="location.reload()">Reload →</button></div></div></div>`;
+  }
+ };
  /* The fallback is not defensive habit. startViewTransition defers the swap
     into a callback the browser runs, so anything that goes wrong there — an
     unsupported edge in a browser that advertises the API, a transition
@@ -1009,8 +1063,8 @@ function paint(){
     thing it must never do is leave main empty because the swap never ran. If
     the transition cannot be started at all, paint normally. */
  if(useVT){
-  try{document.startViewTransition(swap);}catch(e){swap();}
- }else swap();
+  try{document.startViewTransition(safeSwap);}catch(e){safeSwap();}
+ }else safeSwap();
 
  /* And the address bar, which is the same question asked of the browser. */
  routeSync(LASTPLACE===null||here===LASTPLACE);
@@ -1773,7 +1827,7 @@ function vAuto(){
     const hist=AUTOHIST[a.key];
     const open=S.autoHist===a.key;
     return `<div class="item" style="flex-direction:column;align-items:stretch">
-     <div style="display:flex;align-items:center;gap:10px">
+     <div class="aurow" style="display:flex;align-items:center;gap:10px">
       <em data-k="${a.live?"ACT":"CARD"}" style="opacity:${a.live?1:.5}">${a.mode==="cron"?"CRON":"EVENT"}</em>
       <div class="bd"><b>${esc(a.summary||a.english)}
         ${a.live?"":`<em style="font-style:normal;font-size:11px;color:var(--watch);margin-left:6px">not scheduled</em>`}</b>
@@ -2203,7 +2257,7 @@ function openCompany(name){
  S.from={v:S.v,scope:S.scope,ask:S.ask,tab:S.tab,label:
   S.v==="ask"?"Ask · "+ASK[S.ask].q:S.v==="auto"?"Autopilot":
   S.scope==="me"?"Now · your work":S.scope==="team"?"Now · the team":"Now · the company"};
- S.cust=name;S.v="cust";render();
+ S.cust=name;S.v="cust";FORCE_TOP=true;render();
  if(window.PulseLive&&window.PulseLive.loadAccount)
   window.PulseLive.loadAccount(name,PULSE_BAG,render);}
 
@@ -2363,6 +2417,34 @@ document.addEventListener("mouseover",e=>{
  x=Math.max(10,Math.min(x,window.innerWidth-tw-10));
  tipEl.style.left=x+"px";tipEl.style.top=y+"px";});
 document.addEventListener("mouseout",e=>{if(e.target.closest("[data-tip]"))tipEl.dataset.on="0";});
+/* On touch there is no mouseout: a tap fires mouseover (showing the tip) and
+   then nothing ever fires the matching mouseout, so the tooltip from
+   whichever tab was tapped stayed on screen through the navigation and
+   everything after it. A click, unlike mouseout, does reliably follow a tap
+   — so clear the tip once the tap that opened it has been acted on, letting
+   whatever the click just navigated to render underneath a clean screen. */
+document.addEventListener("click",()=>{tipEl.dataset.on="0";});
+
+/* Popover placement, clamped to the viewport.
+ *
+ * .lens and .menu anchor themselves in CSS to one edge of the button that
+ * opens them (right:0 for .lens, left:0 for .menu) and hang a fixed width
+ * off it. That is fine wherever the button has that much room on its far
+ * side — which desktop always does — but on a narrow phone the button can
+ * sit close enough to the opposite edge that the panel runs straight off
+ * screen, same as the tooltip above would without the clamp it already
+ * does. This does the same clamp for popovers: measure where the anchor
+ * actually is, then slide the panel back on screen if the CSS anchor would
+ * have put it off one.
+ */
+function placeMenu(anchor,panel,edge){
+ if(!anchor||!panel)return;
+ const ar=anchor.getBoundingClientRect();
+ const pw=panel.getBoundingClientRect().width;
+ let left=edge==="right"?ar.right-pw:ar.left;
+ left=Math.max(10,Math.min(left,window.innerWidth-pw-10));
+ panel.style.left=left+"px";panel.style.right="auto";
+}
 
 /* Keyboard support for the rows marked role="button" — account links, wall
    logos, rule rows and the rest of the div/span "buttons" the delegated click
@@ -2419,14 +2501,16 @@ document.addEventListener("click",e=>{
   S.from={v:S.v,scope:S.scope,ask:S.ask,tab:S.tab,label:
    S.v==="ask"?"Ask · "+ASK[S.ask].q:S.v==="auto"?"Autopilot":
    S.scope==="me"?"Now · your work":S.scope==="team"?"Now · the team":"Now · the company"};
-  S.cust=cu.dataset.cust;S.v="cust";render();return;}
- if(t.closest("#lensb")){const m=$("#lensm");m.hidden=!m.hidden;return;}
+  S.cust=cu.dataset.cust;S.v="cust";FORCE_TOP=true;render();return;}
+ if(t.closest("#lensb")){const m=$("#lensm");m.hidden=!m.hidden;
+  if(!m.hidden)placeMenu($(".lensw"),m,"right");return;}
  if(t.closest("#lensc")||t.closest("#lensc2")||t.closest("#clrf")){S.C.clear();S.M.clear();S.lensAll=0;render();return;}
- if(t.closest("#lensmore")){S.lensAll=1;render();const m=$("#lensm");if(m)m.hidden=false;return;}
- if(t.closest("#lensfewer")){S.lensAll=0;render();const m=$("#lensm");if(m)m.hidden=false;return;}
+ if(t.closest("#lensmore")){S.lensAll=1;render();const m=$("#lensm");if(m){m.hidden=false;placeMenu($(".lensw"),m,"right");}return;}
+ if(t.closest("#lensfewer")){S.lensAll=0;render();const m=$("#lensm");if(m){m.hidden=false;placeMenu($(".lensw"),m,"right");}return;}
  const mn=t.closest("[data-menu]");
  if(mn){const id=mn.dataset.menu,m=$("#menu-"+id);const was=m.hidden;
-  $$(".menu").forEach(x=>x.hidden=true);m.hidden=!was;return;}
+  $$(".menu").forEach(x=>x.hidden=true);m.hidden=!was;
+  if(!m.hidden)placeMenu(mn,m,"left");return;}
  const rv=t.closest("[data-rev]");if(rv){const b=$("#rev-"+rv.dataset.rev);b.hidden=!b.hidden;
   rv.setAttribute("aria-expanded",String(!b.hidden));
   $$(".menu").forEach(x=>x.hidden=true);return;}
@@ -2813,7 +2897,7 @@ document.addEventListener("change",e=>{
  const set="c" in i.dataset?S.C:S.M,v=i.dataset.c||i.dataset.m;
  set.clear();if(v)set.add(v);
  render();
- const m=$("#lensm");if(m)m.hidden=false;});
+ const m=$("#lensm");if(m){m.hidden=false;placeMenu($(".lensw"),m,"right");}});
 $("#pq").addEventListener("input",e=>pF(e.target.value));
 
 /**
@@ -3341,7 +3425,34 @@ function openNewRule(motion){
   <p class="sub">Write it as a sentence you could say out loud to a new teammate.
    Pulse will read it back as the check it would actually perform — if that is not
    what you meant, change the words rather than the machinery.</p>
-  <h4>The rule</h4>
+  <details style="margin:14px 0 0;font-size:13px;color:var(--ink2)">
+   <summary style="cursor:pointer;color:var(--br);font-weight:500">What Pulse can and can't write a rule to do</summary>
+   <div style="margin-top:10px;line-height:1.6">
+    <b>It can:</b> check real signup/account/payment fields (score, confidence,
+    mobile number, free-mail domain, days since signup or last payment, spend
+    change, and the rest of what MSG91's own tables hold) against numbers,
+    text or a short list of choices, on a schedule or the moment something
+    happens — and then score a signup, raise a card for a person, start or
+    hold a message, or just notify someone. Nothing is sent without a step a
+    person can see and, on most paths, approve first.<br><br>
+    <b>It can't:</b> write, update or delete anything in MSG91's database —
+    every automation only ever reads. It can't invent a field nothing in the
+    schema actually has (a "company name" column does not exist, for
+    example — Pulse will say so rather than guess). And a connected inbox
+    (Gmail/Calendar/Slack) only ever hands a rule one flat summary line per
+    event, not a structured message it can pick sender or subject out of —
+    so "when an email arrives" works, "when an email from a VIP account
+    arrives" only works as well as matching words in that one line.<br><br>
+    <b>"Don't"/"never" rules:</b> written as an explicit condition — "never
+    message an account that already has an owner", not just "be careful with
+    owned accounts" — Pulse tries to compile it into a check it runs in code
+    before anything acts, so it is a hard stop rather than a request the AI
+    could talk itself out of. It will show you below exactly what it
+    understood; if it could not turn "don't do this" into a real condition,
+    it says so instead of quietly hoping the wording was enough.
+   </div>
+  </details>
+  <h4 style="margin-top:18px">The rule</h4>
   <textarea id="rule-en" placeholder="For example: If a signup has not sent a message twelve days after signing up, a person should take over."
    style="width:100%;min-height:80px;font:inherit;font-size:14px;padding:11px;border:1px solid var(--line2);
    border-radius:8px;background:var(--raise);color:var(--ink);resize:vertical"></textarea>
@@ -3400,6 +3511,10 @@ function showBuilt(motion,english,plan){
    <p style="margin:10px 0 0;color:var(--muted);font-size:12.5px">
     ${plan.mode==="cron"?`Checked on schedule <code>${plan.cronSchedule}</code>.`:"Runs on an event, not a schedule."}
     Its own agent judges each row it finds.</p>
+   ${plan.neverIf&&plan.neverIf.length?`<p style="margin:10px 0 0;color:var(--ink);font-size:12.5px">
+     <b>Never, no matter what the agent decides:</b> ${plan.neverIf.map(c=>
+      `<code>${esc(c[0])} ${esc(c[1])} ${esc(JSON.stringify(c[2]))}</code>`).join(" · ")}
+     — checked in code before anything runs, on every row.</p>`:""}
   </div>
   <div class="row" style="margin-top:14px">
    <button class="go" data-automation-retire="${plan.key}">Turn it off</button>
@@ -3774,9 +3889,28 @@ function openPanel(kind,arg){
     <p class="why">Nothing is deleted. Putting it back returns it to the deck with its reasons attached.</p>
     <div class="row"><button class="go solid" data-unsuppress="${d.signalKey}">Put it back →</button></div>`:""}
 
-   <h4>The policy behind it</h4>
-   <p class="why">Policy ${d.policyVersion||"—"}${d.model?`, decided on ${d.model}`:""}.
-    ${d.agent==="signup-triage"?"The score came from the agent; the verdict came from the motion's rules, applied in code.":""}</p>
+   ${(()=>{
+    /* "Policy v3" told a reader nothing they could act on — the version
+       number of a table they've never seen and a model name is not what
+       anyone asking "what did this" wants first. What they want is the
+       automation's own name. The policy detail is still here for whoever
+       does want it (debugging a regression against a specific version) —
+       behind a hover, an (i) rather than a paragraph everyone had to read
+       past to get to the account. */
+    const p=String(d.signalKey||"").split(":");
+    const autos=(window.PulseLive&&PulseLive.state.automations)||[];
+    const auto=p[0]==="auto"?autos.find(a=>a.key===p[1]):null;
+    const label=auto?(auto.summary||auto.english):d.agent;
+    const policyNote=`Policy ${d.policyVersion||"—"}${d.model?`, decided on ${d.model}`:""}.`+
+     (d.agent==="signup-triage"?" The score came from the agent; the verdict came from the motion's rules, applied in code.":"");
+    return `<h4>The automation behind it</h4>
+     <p class="why" style="display:flex;align-items:center;gap:8px">
+      <span>${esc(label)}</span>
+      <span class="pen" tabindex="0" style="cursor:help;border:1px solid var(--line2);border-radius:50%;
+       width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;
+       font-size:11px;line-height:1;flex:none" data-tip="Policy||${esc(policyNote)}">i</span>
+     </p>`;
+   })()}
    <div class="stamp"><span>${d.signalKey}</span><span>logged</span></div>`;
  }
  if(kind==="rowdetail"){
