@@ -293,9 +293,12 @@ let HISTORY=[];
 
 /* ── pinned questions ──────────────────────────────────────────────────────
    A pin is the one thing on this surface a person changes and expects to find
-   again. The database connection is SELECT-only, so there is nowhere on the
-   server to put it; localStorage keeps a pin across reloads without inventing
-   a write endpoint for it.
+   again — including on a different browser. localStorage is the instant,
+   offline-proof local copy this tab renders from before anything has had a
+   chance to answer; /api/pulse/pins (lib/pulse/pins.ts, Pulse's own writable
+   store — MSG91's schema is the one Pulse only has SELECT on) is the real
+   source of truth once loadPinsFromServer() has run, so a pin now survives
+   clearing site data or moving to a different machine.
 
    `q` holds overrides for catalogue questions, so unpinning one that ships
    pinned sticks too — a plain list of pinned ids could not express that.
@@ -305,7 +308,41 @@ let PINS={q:{},typed:[]};
 try{const raw=JSON.parse(localStorage.getItem(PINKEY)||"{}");
  PINS={q:raw.q&&typeof raw.q==="object"?raw.q:{},typed:Array.isArray(raw.typed)?raw.typed:[]};}
 catch(err){/* private mode, or someone else's JSON — start clean */}
-function savePins(){try{localStorage.setItem(PINKEY,JSON.stringify(PINS));}catch(err){}}
+function savePins(){
+ try{localStorage.setItem(PINKEY,JSON.stringify(PINS));}catch(err){}
+ /* Best-effort. localStorage above is the instant, offline-proof copy this
+    tab renders from; the server call is what makes the same pin show up in
+    a different browser or after clearing site data — a pin that only ever
+    lived in one tab is the bug this exists to fix. Fire-and-forget: nobody
+    should wait on a network round trip to see their own click take. */
+ fetch("/api/pulse/pins",{method:"PUT",headers:{"content-type":"application/json"},
+  body:JSON.stringify(PINS)}).catch(err=>{});
+}
+
+/* Pull the server's copy on boot and let it win over whatever this tab had
+   locally — the server is the one place that has seen every browser this
+   member has used. A member with pins only in this tab (from before this
+   existed) is the one case worth pushing up rather than overwriting: an
+   empty server row with a non-empty local one means "never synced yet", not
+   "pinned nothing everywhere else". */
+async function loadPinsFromServer(){
+ try{
+  const r=await fetch("/api/pulse/pins",{headers:{accept:"application/json"}});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok||!d||d.ok===false||!d.pins)return;
+  const server=d.pins;
+  const serverEmpty=!Object.keys(server.q||{}).length&&!(server.typed||[]).length;
+  const localHasSomething=Object.keys(PINS.q||{}).length||(PINS.typed||[]).length;
+  if(serverEmpty&&localHasSomething){
+   fetch("/api/pulse/pins",{method:"PUT",headers:{"content-type":"application/json"},
+    body:JSON.stringify(PINS)}).catch(err=>{});
+   return;
+  }
+  PINS={q:server.q&&typeof server.q==="object"?server.q:{},typed:Array.isArray(server.typed)?server.typed:[]};
+  try{localStorage.setItem(PINKEY,JSON.stringify(PINS));}catch(err){}
+  applyPins();render();
+ }catch(err){/* offline, or signed out — the local copy already rendered */}
+}
 
 /* A typed question is re-asked when it is opened, so the text has to survive
    alongside the row that stands for it. */
@@ -4201,6 +4238,7 @@ if (window.PulseLive) {
   window.PulseLive.boot(PULSE_BAG, render)
    .then(routeGo, routeGo)
    .then(()=>{ ROUTING = false; });
+  loadPinsFromServer();
   /* Triggers are loaded at boot rather than when the Connections tab opens,
      even though that is the only tab that draws them. A subscribed trigger is
      supposed to toast wherever you happen to be, and the poll cannot start
