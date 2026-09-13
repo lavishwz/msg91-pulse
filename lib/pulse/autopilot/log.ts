@@ -41,6 +41,19 @@ export type LogRow = {
    * data underneath it could back up.
    */
   isAI: boolean;
+  /**
+   * The held draft this decision produced, if any — a *different* thing from
+   * `held` above. `held` is the decision's own state ("this verdict needs a
+   * person to look at it"); a decision can be held=0 (the triage succeeded
+   * outright) and still have produced a draft that is separately sitting at
+   * pulse_draft.status='held' waiting to be released. Before this field
+   * existed, the "Drafted for a person" chip filtered on `held || draftId`
+   * where `draftId` was never set by anything — it always read as "the
+   * decision itself is stuck", so a signup that triaged cleanly and then
+   * produced three real held drafts showed up as zero drafted rows.
+   */
+  draftId: number | null;
+  draftHeld: boolean;
 };
 
 type Raw = {
@@ -62,6 +75,8 @@ type Raw = {
   subject_id: string | null;
   subject_name: string | null;
   state: string | null;
+  draft_id: number | null;
+  draft_status: string | null;
 };
 
 const SELECT = `
@@ -80,9 +95,21 @@ const SELECT = `
          (SELECT JSON_UNQUOTE(JSON_EXTRACT(t.input_json, '$.company_name'))
             FROM pulse_decision t
            WHERE t.signal_key = d.signal_key AND t.agent = 'signup-triage'
-           LIMIT 1) subject_name
+           LIMIT 1) subject_name,
+         f.id draft_id, f.status draft_status
     FROM pulse_decision d
-    LEFT JOIN pulse_signal s ON s.signal_key = d.signal_key`;
+    LEFT JOIN pulse_signal s ON s.signal_key = d.signal_key
+    /* One draft per signal_key, preferring whichever is still held over an
+       already-released/discarded one — a signal can carry several drafts
+       (sequence_step 1/2/3), and the row that matters to "is a person still
+       waiting on this" is the held one if any exists, not just the latest. */
+    LEFT JOIN (
+      SELECT signal_key, id, status,
+             ROW_NUMBER() OVER (
+               PARTITION BY signal_key ORDER BY (status = 'held') DESC, created_at DESC
+             ) rn
+        FROM pulse_draft
+    ) f ON f.signal_key = d.signal_key AND f.rn = 1`;
 
 const json = <T,>(v: unknown, dflt: T): T => {
   if (v == null) return dflt;
@@ -159,6 +186,7 @@ function shape(r: Raw): LogRow {
       tag: "escalated", kind: "act", verdict: r.verdict, score: null, confidence: null,
       policyVersion: r.policy_version, model: null, agent: r.agent,
       reasons: [], held: Boolean(r.held), errorCode: r.error_code, isAI: false,
+      draftId: null, draftHeld: false,
     };
   }
 
@@ -173,6 +201,7 @@ function shape(r: Raw): LogRow {
       tag: "acted", kind: "ok", verdict: r.verdict, score: null, confidence: null,
       policyVersion: r.policy_version, model: null, agent: r.agent,
       reasons, held: Boolean(r.held), errorCode: r.error_code, isAI: false,
+      draftId: null, draftHeld: false,
     };
   }
 
@@ -190,6 +219,7 @@ function shape(r: Raw): LogRow {
         .filter(Boolean)
         .concat(reasons),
       held: Boolean(r.held), errorCode: r.error_code, isAI: true,
+      draftId: null, draftHeld: false,
     };
   }
   if (r.agent === "portfolio-digest") {
@@ -203,6 +233,7 @@ function shape(r: Raw): LogRow {
       policyVersion: r.policy_version, model: r.model, agent: r.agent,
       reasons: plays.map((p) => `${p.worth ?? ""} — ${p.what ?? ""}`.trim()),
       held: Boolean(r.held), errorCode: r.error_code, isAI: true,
+      draftId: null, draftHeld: false,
     };
   }
   const domain = (inp.email_domain as string) || "";
@@ -275,6 +306,8 @@ function shape(r: Raw): LogRow {
     // call (signup-triage, outreach-drafter, rule-worker:<automation key>) —
     // the ones that are not (human, system, rules) all returned earlier.
     isAI: r.agent !== "human",
+    draftId: r.draft_id === null ? null : Number(r.draft_id),
+    draftHeld: r.draft_status === "held",
   };
 }
 
@@ -375,6 +408,30 @@ export async function suppressed(limit = 25): Promise<LogRow[]> {
 }
 
 /**
+ * Decisions with a draft still waiting on a person — the "Drafted for a
+ * person" chip, its own backend query rather than a client-side filter over
+ * `decisions()`'s most-recent-N window.
+ *
+ * That distinction matters here specifically: a drafted signup-triage row
+ * can be old (a signup from yesterday, still unreleased) while dozens of
+ * unrelated automation runs (viasocket triggers, other rules) land *after*
+ * it — confirmed live: 3 real held drafts were pushed 83 rows deep by other
+ * decisions within a day. `decisions(60)` never had a chance of showing
+ * them; `suppressed()` next to this already had the right idea, filtering
+ * at the query, and this follows it rather than raising the page size,
+ * which would only buy time until the next busy day pushed it over again.
+ */
+export async function draftedForPerson(limit = 25): Promise<LogRow[]> {
+  const rows = await read<Raw>(
+    `${SELECT} WHERE f.status = 'held' ORDER BY d.at DESC LIMIT ?`,
+    [limit],
+  );
+  const names = await resolveSubjectNames(rows);
+  for (const r of rows) if (!r.subject_name && r.subject_id) r.subject_name = names.get(r.subject_id) ?? null;
+  return rows.map(shape);
+}
+
+/**
  * Put a suppressed signal back in front of a person.
  *
  * This does not edit the decision — the original verdict stays exactly as it
@@ -449,7 +506,7 @@ export async function logSummary() {
  * schema.
  */
 export async function forAccount(userPid: number) {
-  const [decisions, drafts, timers] = await Promise.all([
+  const [decisions, drafts, timers, recipient] = await Promise.all([
     read<Raw>(
       `${SELECT} WHERE s.subject_id = ? OR d.signal_key LIKE ?
         ORDER BY d.at DESC LIMIT 12`,
@@ -467,6 +524,13 @@ export async function forAccount(userPid: number) {
         ORDER BY fires_at ASC LIMIT 3`,
       [`%:${userPid}`],
     ),
+    // Who a held draft here would actually go to, if sent — a single PK
+    // lookup, not a join, since this whole function is already scoped to one
+    // account. See sendDraft() (lib/pulse/autopilot/drafts.ts) for why this
+    // is resolved fresh rather than stored on the draft row.
+    query<{ user_email: string | null }>(`SELECT user_email FROM ms_user WHERE user_pid = ?`, [userPid])
+      .then((r) => r[0]?.user_email ?? null)
+      .catch(() => null),
   ]);
 
   return {
@@ -479,6 +543,7 @@ export async function forAccount(userPid: number) {
       status: d.status,
       holdReason: d.hold_reason,
       when: d.created_at.toISOString(),
+      to: recipient,
     })),
     // "Message two goes out on Thursday, unless something changes." Nowhere
     // else in the product says what Autopilot intends to do next.

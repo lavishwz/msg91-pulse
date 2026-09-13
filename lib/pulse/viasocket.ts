@@ -108,6 +108,28 @@ export async function runViasocketAction(
   return body?.success === true ? body.data : body;
 }
 
+/**
+ * Gmail's "Send Email" action (rowwj0sfmhub) — the one action every prior
+ * ViaSocket call in this file deliberately avoided. Reading a mailbox is
+ * reversible; sending is not, which is why this exists as its own named
+ * function rather than a bare `runViasocketAction` call at the point of use —
+ * one place to find every real send this app has ever made, for whoever
+ * greps for it next.
+ *
+ * `messageBody` is HTML per the action's own field table — no `messageType`
+ * branch on Send Email, unlike Reply To Thread and Create Email Draft, which
+ * do. `from` is left unset: it is optional, and every rep sends from the one
+ * mailbox they connected.
+ */
+export async function sendGmail(
+  scriptId: string,
+  to: string,
+  subject: string,
+  htmlBody: string,
+): Promise<unknown> {
+  return runViasocketAction(scriptId, "rowwj0sfmhub", { to, subject, messageBody: htmlBody });
+}
+
 /* ── triggers ──────────────────────────────────────────────────────────────
  *
  * Everything above is Pulse asking ViaSocket a question. A trigger is the

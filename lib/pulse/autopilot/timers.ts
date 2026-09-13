@@ -193,7 +193,7 @@ export async function sweepTimers(budgetMs: number, cap = 5): Promise<TimerSweep
     const step = (payload.step ?? 2) as 2 | 3;
 
     try {
-      const { draftId } = await draftFor(payload.facts as SignupFacts, payload.reasons ?? [], ownerName(), step);
+      const { draftId } = await draftFor(payload.facts as SignupFacts, payload.reasons ?? [], ownerName(), step, ownerEmail());
       await write(`UPDATE pulse_timer SET state = 'fired', fired_at = NOW() WHERE id = ?`, [t.id]);
       out.fired += 1;
 
@@ -221,6 +221,9 @@ export async function sweepTimers(budgetMs: number, cap = 5): Promise<TimerSweep
 }
 
 const ownerName = () => (process.env.PULSE_OWNER_NAME ?? "").trim() || "the MSG91 team";
+// See the matching comment in runner.ts — same configured identity's saved
+// voice, by email, null until real per-signup ownership exists.
+const ownerEmail = () => (process.env.PULSE_OWNER_EMAIL ?? "").trim() || null;
 
 /** What is waiting, for the Activity tab and the run response. */
 export async function pendingTimers(limit = 20) {

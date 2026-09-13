@@ -19,9 +19,12 @@ import { read, write } from "@/lib/store";
  * mails" was describing a feature that does not exist. The traits are seeded
  * with five sensible defaults and edited by hand, and the copy now says so.
  *
- * The traits are stored and shown; nothing consumes them yet. Wiring them into
- * the outreach drafter is a separate decision and a one-function change from
- * here — `traitsFor(email)` is the whole interface it would need.
+ * The traits are stored and used: `draftFor` (lib/pulse/autopilot/drafts.ts)
+ * calls `traitsFor(email)` and turns the result into the
+ * `owner_writing_samples` field the outreach-drafter agent's prompt reads,
+ * via `samplesFromTraits` below. Whoever's traits are looked up is whoever's
+ * voice the next draft written for that identity sounds like — edit the list
+ * in Profile and the next draft reflects it, no redeploy needed.
  */
 
 export type VoiceTrait = {
@@ -156,3 +159,16 @@ export async function removeTrait(email: string, raw: string): Promise<VoiceTrai
 
 const markEdited = (email: string) =>
   write(`UPDATE pulse_user_voice SET seeded = 0 WHERE member_email = ?`, [email]);
+
+/**
+ * Traits → the prompt field the outreach-drafter agent reads.
+ *
+ * Plain sentences, not a bullet list — `owner_writing_samples` sits next to
+ * `owner_writing_samples: "(no samples yet — write plainly...)"` in the same
+ * prompt slot in drafts.ts, so this has to read like a sentence that slot
+ * could hold, not a data dump the model has to reinterpret.
+ */
+export function samplesFromTraits(traits: VoiceTrait[]): string {
+  if (!traits.length) return "(no samples yet — write plainly, short sentences, no marketing language)";
+  return `Write like this: ${traits.map((t) => t.trait.replace(/\.$/, "")).join("; ")}.`;
+}

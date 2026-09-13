@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
 import { writer } from "@/lib/pulse/guard";
-import { decisions, suppressed, logSummary, unsuppress, humanActs, inFlight } from "@/lib/pulse/autopilot/log";
+import { decisions, suppressed, draftedForPerson, logSummary, unsuppress, humanActs, inFlight } from "@/lib/pulse/autopilot/log";
 
 /**
  * GET  /api/pulse/autopilot/decisions        — the Live / AI log feed
  * GET  /api/pulse/autopilot/decisions?view=filtered — what was suppressed
+ * GET  /api/pulse/autopilot/decisions?view=drafted  — decisions with a draft still held
  * POST /api/pulse/autopilot/decisions        — { signalKey } reopens a suppression
  *
  * Reads Pulse's own store. If the store is not reachable the surfaces fall back
@@ -21,6 +22,11 @@ export async function GET(req: Request) {
   try {
     if (view === "filtered") {
       return NextResponse.json({ ok: true, rows: await suppressed(limit) });
+    }
+    // "Drafted for a person" — its own query, not a filter over the general
+    // feed's most-recent-N window. See draftedForPerson()'s own comment.
+    if (view === "drafted") {
+      return NextResponse.json({ ok: true, rows: await draftedForPerson(limit) });
     }
     // What people did to Autopilot's own records — releasing a draft, reversing
     // a suppression. Different question from Activity ("what did the AI do?"),

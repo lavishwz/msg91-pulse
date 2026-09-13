@@ -12,7 +12,7 @@
  * real and which are still the prototype's sample data.
  */
 window.PulseLive = (function () {
-  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, cardsError: null, boardLoaded: false, flightLoaded: false, autopilot: null, autopilotError: null, drafts: [], policy: null, manifest: null, motionRules: null, automations: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null, mockDismissed: false, audit: null, auditError: null, auditLoadingMore: false, gmailRecent: null, gmailRecentError: null, gmailRecentLoaded: false };
+  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, cardsError: null, boardLoaded: false, flightLoaded: false, autopilot: null, autopilotError: null, drafts: [], policy: null, manifest: null, motionRules: null, automations: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null, mockDismissed: false, audit: null, auditError: null, auditLoadingMore: false, gmailRecent: null, gmailRecentError: null, gmailRecentLoaded: false, activityDrafted: null, activityDraftedError: null };
 
   /**
    * Sample-data notice (static markup in app/pulse-shell.tsx, #mockbar).
@@ -86,6 +86,7 @@ window.PulseLive = (function () {
     w: c.watch ? 1 : 0,
     r: c.reason,
     cust: c.account ? c.account.name : "—",
+    custId: c.account ? c.account.id : null,
     geo: c.geo,
     h: c.headline,
     y: c.why,
@@ -564,6 +565,26 @@ window.PulseLive = (function () {
   }
 
   /**
+   * The "Drafted for a person" chip's own rows — not a filter over
+   * state.activity's most-recent-60 window, which a busy day of unrelated
+   * automation runs can push a real held draft clean out of (confirmed live:
+   * 83 other decisions landed after 3 real held drafts inside one day).
+   * Fetched once, lazily, the first time the chip is opened.
+   */
+  async function loadDrafted(bag, render) {
+    if (state.activityDrafted) { render(); return; }
+    try {
+      const data = await get("/api/pulse/autopilot/decisions?view=drafted&limit=50");
+      state.activityDrafted = data.rows;
+      render();
+    } catch (err) {
+      console.warn("[pulse] drafted activity failed:", err.message);
+      state.activityDraftedError = err.message;
+      render();
+    }
+  }
+
+  /**
    * Drafts waiting on a person.
    *
    * Held is the only status this loads: released and discarded drafts are
@@ -627,6 +648,33 @@ window.PulseLive = (function () {
       loadAutopilot(bag, render);
     } catch (err) {
       draftMessage(id, err.message);
+    }
+  }
+
+  /**
+   * Send a draft for real, through the sender's own connected Gmail — the
+   * one call in this file that puts a message in front of an actual
+   * customer. `cb`, unlike releaseDraft's, receives the whole result
+   * ({ok, sentTo} or {ok:false, error}) rather than firing only on success:
+   * the caller is expected to have already confirmed with the person before
+   * this is called (see the confirm step at the [data-release] click site in
+   * pulse.js) — this function's job is to report exactly what happened, not
+   * to decide whether it should.
+   */
+  async function sendDraft(id, body, bag, cb) {
+    try {
+      const original = (state.drafts || []).find((d) => d.id === id);
+      const edited = body != null && original && body.trim() !== original.body.trim();
+      const res = await fetch("/api/pulse/autopilot/drafts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action: "send", actor: actor(), body: edited ? body : undefined }),
+      });
+      const out = await res.json();
+      if (out.ok) { await loadDrafts(bag, () => {}); loadAutopilot(bag, () => {}); }
+      cb(out);
+    } catch (err) {
+      cb({ ok: false, error: err.message });
     }
   }
 
@@ -1070,6 +1118,54 @@ window.PulseLive = (function () {
     } catch (err) {
       console.warn("[pulse] account " + id + " failed:", err.message);
       cb(null);
+    }
+  }
+
+  /**
+   * A card's primary action, made real — see the audit against handover §4:
+   * every card but "Your approval" fell through to a generic mark-done that
+   * called no API at all. Two real things a click can mean:
+   *
+   *   claim   — "Take this account" / "Assign an owner" (Your hands). Pulse
+   *             *can* do this one itself: PUT the owner to the signed-in rep,
+   *             through the same endpoint the reassign sheet uses, so it gets
+   *             the same audit trail (pulse_account_owner_event) for free.
+   *             The underlying scanner condition (no owner) is now false, so
+   *             the card genuinely will not return next fetch — not just
+   *             hidden locally.
+   *   track   — "Call them" / "Find out what stalled" (Your hands / Your
+   *             knowledge). Pulse cannot place a call or read a mind — these
+   *             stay real human work — so a click here writes a tracked
+   *             work item (pulse_work_item, shows up in My Work) instead of
+   *             silently discarding the card, then hands back the account id
+   *             so the caller can open it.
+   */
+  async function claimAccount(accountId, cb) {
+    if (!state.me || !state.me.id) { cb({ ok: false, error: "not signed in" }); return; }
+    try {
+      const res = await send("PUT", "/api/pulse/accounts/" + accountId + "/owner", {
+        ownerId: state.me.id,
+        note: "Claimed from a Now card",
+      });
+      cb({ ok: true, owner: res.owner });
+    } catch (err) {
+      cb({ ok: false, error: err.message });
+    }
+  }
+
+  async function trackCard(accountId, type, title, reason, cb) {
+    try {
+      const res = await post("/api/pulse/work", {
+        action: "create",
+        accountId: String(accountId),
+        type,
+        title,
+        reason,
+        ownerId: state.me && state.me.id ? String(state.me.id) : undefined,
+      });
+      cb({ ok: true, item: res.item });
+    } catch (err) {
+      cb({ ok: false, error: err.message });
     }
   }
 
@@ -2063,6 +2159,9 @@ window.PulseLive = (function () {
     loadAutomationHistory,
     loadAutomations,
     loadAccountById,
+    claimAccount,
+    trackCard,
+    loadDrafted,
     loadMotionRules,
     saveMotionRule,
     addMotionRule,
@@ -2077,6 +2176,7 @@ window.PulseLive = (function () {
     retireRule,
     loadDrafts,
     releaseDraft,
+    sendDraft,
     discardDraft,
     setSendingPaused,
     unsuppress,

@@ -505,6 +505,12 @@ const BANDS=[
  ["risk","At risk","#A8462A",0,"silent long enough that somebody should call"]];
 /* Playing a card moves the account. Keyed by card subject. */
 const CARDMOVE={};
+/* A card's primary action, real backends behind it — see the [data-do]
+   handler. CLAIM: Pulse can do this itself (assign ownership). TRACK: Pulse
+   cannot (a phone call, an investigation) — writes a tracked work item and
+   opens the account instead of silently discarding the card. */
+const CLAIM_ACTIONS=new Set(["Take this account","Assign an owner"]);
+const TRACK_ACTIONS=new Set(["Call them","Find out what stalled"]);
 const HMOVERS=[];
 const HKEPT=[];
 
@@ -1626,9 +1632,15 @@ function vAuto(){
     "Learned something" is a policy change — there are none until the critic
     agent exists, and showing an honest zero is better than borrowing rows from
     another chip to make it look busy. */
+ /* "drafted" used to read `r.held || !!r.draftId` — `held` is the DECISION's
+    own held state (a low-confidence triage, unrelated to a draft), and
+    `draftId` was never set by the API at all, so this chip always read
+    empty even with real held drafts sitting in pulse_draft. `draftHeld` is
+    the real, joined field (lib/pulse/autopilot/log.ts) — true only when this
+    decision actually produced a draft still waiting on a person. */
  const matches=r=>S.act==="all"||
-  (S.act==="acted"&&!r.held&&!r.draftId&&r.verdict!=="suppress")||
-  (S.act==="drafted"&&(r.held||!!r.draftId))||
+  (S.act==="acted"&&!r.held&&!r.draftHeld&&r.verdict!=="suppress")||
+  (S.act==="drafted"&&r.draftHeld)||
   (S.act==="suppressed"&&r.verdict==="suppress")||
   (S.act==="learned"&&r.agent==="policy-critic");
 
@@ -1786,11 +1798,22 @@ function vAuto(){
     '<div class="item"><div class="sk" style="width:60px;height:12px"></div><div class="bd">'+
     '<div class="sk" style="width:40%;height:14px"></div><div class="sk" style="width:80%;margin-top:6px"></div></div></div>').join("")}</div>`;
   } else {
-   const shown=rows.filter(matches);
-   const count=k=>k==="all"?rows.length:rows.filter(r=>{const o=S.act;S.act=k;const m=matches(r);S.act=o;return m;}).length;
+   const activityDrafted=window.PulseLive&&PulseLive.state.activityDrafted;
+   /* "drafted"'s count and rows come from its own fetch (loadDrafted), not a
+      filter over the general feed's most-recent-60 window — see the comment
+      on draftedForPerson() server-side. Every other chip still filters
+      `rows` as before. */
+   const draftedLoading=S.act==="drafted"&&!activityDrafted;
+   const shown=draftedLoading?[]:S.act==="drafted"?(activityDrafted||[]):rows.filter(matches);
+   const count=k=>k==="all"?rows.length
+    :k==="drafted"?(activityDrafted?activityDrafted.length:"…")
+    :rows.filter(r=>{const o=S.act;S.act=k;const m=matches(r);S.act=o;return m;}).length;
    body=`<div class="row" style="margin:22px 0 0;gap:8px;flex-wrap:wrap">${CHIPS.map(([k,lab])=>
      `<button class="go${S.act===k?" solid":""}" data-act="${k}" style="font-size:12.5px;padding:6px 12px">${lab} · ${count(k)}</button>`).join("")}</div>
-    ${shown.length?`<div class="feed" style="margin-top:14px">${shown.map(r=>
+    ${draftedLoading?`<div class="feed" style="margin-top:14px">${[0,1].map(()=>
+      '<div class="item"><div class="sk" style="width:60px;height:12px"></div><div class="bd">'+
+      '<div class="sk" style="width:40%;height:14px"></div><div class="sk" style="width:80%;margin-top:6px"></div></div></div>').join("")}</div>`
+    :shown.length?`<div class="feed" style="margin-top:14px">${shown.map(r=>
      `<div class="item" data-decision="${r.signalKey}::${r.agent}" style="cursor:pointer" role="button" tabindex="0">
       <time>${r.when}</time>
       <div class="bd"><b>${r.title}</b><span>${r.detail}</span></div>
@@ -2170,7 +2193,7 @@ function vCust(){
       line-height:1.6;padding:11px;border:1px solid var(--line);border-radius:8px;background:var(--raise);
       color:var(--ink);resize:vertical">${x.body.replace(/</g,"&lt;")}</textarea>
      ${x.holdReason?`<p style="font-size:12.5px;color:var(--muted);margin:8px 0 0">Held: ${x.holdReason}</p>`:""}
-     <div class="row" style="margin-top:10px"><button class="go solid" data-release="${x.id}">Release →</button>
+     <div class="row" style="margin-top:10px"><button class="go solid" data-release="${x.id}" data-release-to="${esc(x.to||"")}">Send →</button>
       <button class="go" data-discard="${x.id}">Discard</button>
       <span class="dmsg" data-dmsg="${x.id}" style="font-size:12.5px;color:var(--muted);align-self:center"></span></div>
     </div>`).join("")}
@@ -2471,7 +2494,14 @@ document.addEventListener("click",e=>{
     this one has already drawn — so "Rules" and "Connections" both opened on
     Activity. Read it here, before the render, and the later handler sets it a
     second time to the value it already has. */
- const nv=t.closest("[data-nav]");if(nv){S.v=nv.dataset.nav;
+ const nv=t.closest("[data-nav]");if(nv){
+  /* Every other account-menu action (admin, sign out, replay setup) closes
+     #amenu before it acts. This one never did, so choosing "Ask" or
+     "Autopilot → Rules" navigated correctly underneath a menu that stayed
+     open on top of it — indistinguishable, at a glance, from the click
+     having done nothing at all. */
+  const am=$("#amenu");if(am)am.hidden=true;
+  S.v=nv.dataset.nav;
   if(nv.dataset.tab2)S.tab=nv.dataset.tab2;
   /* An alert card names a specific kind of thing (decisions on hold, drafts
      waiting, a runaway automation) — landing on Activity with whatever
@@ -2515,6 +2545,39 @@ document.addEventListener("click",e=>{
   rv.setAttribute("aria-expanded",String(!b.hidden));
   $$(".menu").forEach(x=>x.hidden=true);return;}
  const dd=t.closest("[data-do]");if(dd){const c=CARDS[+dd.dataset.do];
+  /* "Your approval" cards are a held draft, not a thing to mark done from
+     here — there is nothing to decide on this screen, only on the account
+     page, where the actual text, and the real Release/Discard buttons
+     (PulseLive.releaseDraft / discardDraft), already live under "What
+     Autopilot did here". Falling through to the generic mark-done below
+     used to fake an approval that never happened server-side. */
+  if(c&&c.r==="Your approval"&&c.cust&&c.cust!=="—"){openCompany(c.cust);return;}
+  /* CLAIM — "Take this account" / "Assign an owner". Pulse really can do
+     this: PUT the owner to the signed-in rep. The underlying scanner
+     condition (no owner) is now false, so this card will not come back next
+     fetch — not a local fake-done, an actual resolved reason. */
+  if(c&&CLAIM_ACTIONS.has(c.a)&&c.custId&&window.PulseLive&&PulseLive.claimAccount){
+   dd.disabled=true;dd.textContent="…";
+   PulseLive.claimAccount(c.custId,res=>{
+    if(!res.ok){dd.disabled=false;dd.textContent=c.a+" →";toastDone(null,false,"Could not assign: "+res.error);return;}
+    S.doneIds.add(+dd.dataset.do);S.doneOpen=1;render();
+    toastDone(null,true,(res.owner&&res.owner.name?res.owner.name:"You")+" now own"+(res.owner&&res.owner.name?"s":"")+" "+c.cust+".");
+   });
+   return;}
+  /* TRACK — "Call them" / "Find out what stalled". Pulse cannot place a call
+     or read a mind, so the honest action is: write a real work item (shows
+     up in My Work), then open the account so the rep has what they need to
+     actually do it — never a silent local discard. */
+  if(c&&TRACK_ACTIONS.has(c.a)&&c.custId&&window.PulseLive&&PulseLive.trackCard){
+   dd.disabled=true;dd.textContent="…";
+   PulseLive.trackCard(c.custId,"next_action",c.h,c.y,res=>{
+    dd.disabled=false;dd.textContent=c.a+" →";
+    if(!res.ok){toastDone(null,false,"Could not track this: "+res.error);return;}
+    S.doneIds.add(+dd.dataset.do);S.doneOpen=1;render();
+    if(window.PulseLive.loadAccountById)
+     window.PulseLive.loadAccountById(c.custId,PULSE_BAG,name=>{if(name){$("#pk").hidden=true;openCompany(name);}});
+   });
+   return;}
   S.doneIds.add(+dd.dataset.do);
   /* Playing a card is what moves an account between bands — without this the
      board never changed and the score band was decoration. */
@@ -2543,7 +2606,12 @@ document.addEventListener("click",e=>{
  if(brk&&window.PulseLive&&PulseLive.clearBreaker){
   brk.disabled=true;brk.textContent="…";
   PulseLive.clearBreaker(brk.dataset.breaker,render);return;}
- const ach=t.closest("[data-act]");if(ach){S.act=ach.dataset.act;S.openRow=null;render();return;}
+ const ach=t.closest("[data-act]");if(ach){S.act=ach.dataset.act;S.openRow=null;
+  /* "Drafted for a person" reads its own fetch (loadDrafted), not the general
+     feed's most-recent-60 window — see the comment on loadDrafted and on
+     draftedForPerson() server-side for why that window is not reliable here. */
+  if(S.act==="drafted"&&window.PulseLive&&PulseLive.loadDrafted){PulseLive.loadDrafted(PULSE_BAG,render);return;}
+  render();return;}
  /* A row opens in place rather than in a panel: the evidence belongs next to
     the claim it supports, and Autopilot is a surface you scan, not one you
     navigate. */
@@ -2571,12 +2639,33 @@ document.addEventListener("click",e=>{
  const rr=t.closest("[data-rretire]");
  if(rr&&window.PulseLive&&PulseLive.retireRule){
   PulseLive.retireRule(rr.dataset.rretire,()=>{render();toastDone(null,true,"Rule retired.");});return;}
+ /* Send — the one button in the whole app that puts a message in front of a
+    real customer. Confirms first, plainly: who it is going to, that it comes
+    from the signed-in rep's own connected mailbox, and that it cannot be
+    undone. See docs/dev-notes/send-for-real.md for why this used to do
+    nothing but flip a database status. */
  const rlz=t.closest("[data-release]");
- if(rlz&&window.PulseLive&&PulseLive.releaseDraft){
+ if(rlz&&window.PulseLive&&PulseLive.sendDraft){
   const id=+rlz.dataset.release;
+  const to=rlz.dataset.releaseTo||"";
   const ta=$(`[data-body="${id}"]`);
-  rlz.disabled=true;rlz.textContent="…";
-  PulseLive.releaseDraft(id,ta?ta.value:null,PULSE_BAG,()=>{render();toastDone(null,true,"Draft released.");});return;}
+  const body=ta?ta.value:null;
+  pulseConfirm({
+   title:"Send this email?",
+   body:to
+     ?`This sends for real, right now, from your own connected mailbox — to ${to}. This cannot be undone.`
+     :`There is no email on file for this account, so sending will be refused. You can still try, or discard the draft instead.`,
+   confirmLabel:"Send it",
+  }).then(yes=>{
+   if(!yes)return;
+   rlz.disabled=true;rlz.textContent="…";
+   PulseLive.sendDraft(id,body,PULSE_BAG,res=>{
+    render();
+    if(res&&res.ok)toastDone(null,true,"Sent to "+res.sentTo+".");
+    else{rlz.disabled=false;rlz.textContent="Send →";toastDone(null,false,(res&&res.error)||"Could not send.");}
+   });
+  });
+  return;}
  const dc=t.closest("[data-discard]");
  if(dc&&window.PulseLive&&PulseLive.discardDraft){
   dc.disabled=true;dc.textContent="…";
@@ -2782,9 +2871,19 @@ document.addEventListener("click",e=>{
  const op=t.closest("[data-opp]");
  if(op){openPanel("opp",JSON.parse(decodeURIComponent(op.dataset.opp)));return;}
  const off=t.closest("[data-oppoff]");
- if(off){S.roomOff.add(off.dataset.oppoff);
-  if(off.dataset.pkclose)$("#pk").hidden=true;
-  render();return;}
+ if(off){
+  const key=off.dataset.oppoff,doClose=off.dataset.pkclose;
+  pulseConfirm({
+   title:"Dismiss this?",
+   body:"This hides it until the next reload. Nothing is written or changed anywhere else.",
+   confirmLabel:"Dismiss it",
+  }).then(yes=>{
+   if(!yes)return;
+   S.roomOff.add(key);
+   if(doClose)$("#pk").hidden=true;
+   render();
+  });
+  return;}
 
  const pc=t.closest("[data-pcontacts]");
  if(pc){openPanel("pcontacts",pc.dataset.pcontacts);return;}
@@ -3770,15 +3869,21 @@ function openPanel(kind,arg){
  }
  if(kind==="opp"){
   /* One opportunity, with everything behind it. The CTA on the board used to
-     be decoration; this is what it opens. */
-  const[k,h2,p2,ev,cta]=arg,q=oppAsk(k,cta);
+     be decoration; this is what it opens. oppDest checks the exact key first
+     (roomRows()'s three real opportunities, none of which oppAsk's keyword
+     match ever caught — see its own comment) and falls back to the loose
+     match only for Agent-5's generated monthly-digest plays. */
+  const[k,h2,p2,ev,cta]=arg,dest=oppDest(k)||(q=>q?{ask:q}:null)(oppAsk(k,cta));
   B.innerHTML=`<div class="pkh"><div class="t4"><div class="lb2">Room to grow</div>
     <b>${esc(k)}</b></div><button class="cx2" data-pkx>✕</button></div>
    <p class="why" style="font-weight:500;color:var(--ink);font-size:16px;margin-bottom:8px">${esc(h2)}</p>
    <p class="why">${esc(p2)}</p>
    ${ev?`<h4>What it is counted from</h4><div class="ev2">${esc(ev)}</div>`:""}
-   <div class="row" style="margin-top:18px">${q
-     ?`<button class="go solid" data-openask="${q}">Open in Ask →</button>`:""}
+   <div class="row" style="margin-top:18px">${dest&&dest.ask
+     ?`<button class="go solid" data-openask="${dest.ask}">Open in Ask →</button>`
+     :dest&&dest.nav
+       ?`<button class="go solid" data-nav="${dest.nav.v}" data-tab2="${dest.nav.tab}" data-act2="${dest.nav.act}">Open in Autopilot →</button>`
+       :""}
     <button class="go" data-oppoff="${esc(h2)}" data-pkclose="1">Not now</button></div>
    <p style="font-size:12.5px;color:var(--faint);margin-top:14px">Dismissing this hides it until the next reload. Nothing is written.</p>`;
  }
@@ -3834,9 +3939,14 @@ function openPanel(kind,arg){
      would make a row unreadable lives here: the evidence, how sure it was, the
      rule that produced it, and the message if one was written. */
   const st=window.PulseLive&&PulseLive.state;
+  /* A row opened from the "drafted" chip lives in activityDrafted, its own
+     fetch (loadDrafted) — not in `activity`, the general feed's most-recent
+     window, which is exactly the list a real held draft can be missing from.
+     Checked second only because most rows still come from the general feed. */
   const rows=(st&&st.activity)||[];
   const [sk,ag]=String(arg).split("::");
-  const d=rows.find(x=>x.signalKey===sk&&x.agent===ag);
+  const d=rows.find(x=>x.signalKey===sk&&x.agent===ag)
+   ||(st&&st.activityDrafted||[]).find(x=>x.signalKey===sk&&x.agent===ag);
   if(!d){$("#pk").hidden=true;return;}
   const draft=d.draftId&&st.drafts?st.drafts.find(x=>x.id===d.draftId):null;
   const cf=d.confidence!=null?Math.round(d.confidence*100):null;
@@ -3881,7 +3991,7 @@ function openPanel(kind,arg){
      line-height:1.6;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--raise);
      color:var(--ink);resize:vertical">${draft.body.replace(/</g,"&lt;")}</textarea>
     ${draft.holdReason?`<p style="font-size:12.5px;color:var(--muted);margin:8px 0 0">Held: ${draft.holdReason}</p>`:""}
-    <div class="row" style="margin-top:10px"><button class="go solid" data-release="${draft.id}">Release →</button>
+    <div class="row" style="margin-top:10px"><button class="go solid" data-release="${draft.id}" data-release-to="${esc(draft.to||"")}">Send →</button>
      <button class="go" data-discard="${draft.id}">Discard</button>
      <span class="dmsg" data-dmsg="${draft.id}" style="font-size:12.5px;color:var(--muted);align-self:center"></span></div>`:""}
 
@@ -4134,6 +4244,24 @@ function oppAsk(k,cta){
  if(/after-hours|uae|entity/.test(s))return"uae";
  if(/stuck|dlt|blocked|first message/.test(s))return"stuck";
  if(/churn|risk|leaving|went quiet|win.?back/.test(s))return"churn";
+ return null;
+}
+
+/**
+ * Where an opportunity's CTA actually goes — exact, by key, not guessed.
+ *
+ * oppAsk() above matches on loose keywords in the title/cta text and missed
+ * every one of roomRows()'s three real (non-mock) opportunities: none of
+ * "Claim an account", "Wake something up" or "Release what is written"
+ * contain any of its keywords, so all three opened a panel with nothing but
+ * "Not now" — a real "3 messages waiting" with no way to reach them. This is
+ * checked first; oppAsk stays as the fallback for Agent-5's monthly-digest
+ * plays, whose titles are generated text, not a fixed set this can name.
+ */
+function oppDest(k){
+ if(k==="Claim an account")return{ask:"unowned"};
+ if(k==="Wake something up")return{ask:"churn"};
+ if(k==="Release what is written")return{nav:{v:"auto",tab:"activity",act:"drafted"}};
  return null;
 }
 

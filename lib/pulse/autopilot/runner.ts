@@ -261,6 +261,11 @@ export async function tickSignups(): Promise<TickResult> {
   // Whose name goes on the draft. Ownership is not assigned at signup time yet,
   // so this is Pulse's configured admin until the assignment step exists.
   const ownerName = (process.env.PULSE_OWNER_NAME ?? "").trim() || "the MSG91 team";
+  // Same identity's saved voice (Profile → "How you write", pulse_user_voice),
+  // looked up by email since that is the traits table's key. Unset until the
+  // per-signup owner-assignment step above exists — null falls through to the
+  // honest "no samples yet" text in draftFor rather than a wrong voice.
+  const ownerEmail = (process.env.PULSE_OWNER_EMAIL ?? "").trim() || null;
 
   for (const r of results) {
     const f = byPid.get(r.user_pid);
@@ -412,6 +417,7 @@ export async function draftPending(budgetMs: number): Promise<DraftPhaseResult> 
 
   out.considered = rows.length;
   const ownerName = (process.env.PULSE_OWNER_NAME ?? "").trim() || "the MSG91 team";
+  const ownerEmail = (process.env.PULSE_OWNER_EMAIL ?? "").trim() || null;
 
   for (const r of rows) {
     if (Date.now() - started > budgetMs) {
@@ -431,7 +437,7 @@ export async function draftPending(budgetMs: number): Promise<DraftPhaseResult> 
       reasons?: string[];
     };
     try {
-      const { draftId, holdReason } = await draftFor(facts, output?.reasons ?? [], ownerName);
+      const { draftId, holdReason } = await draftFor(facts, output?.reasons ?? [], ownerName, 1, ownerEmail);
       if (draftId) {
         out.drafted += 1;
         // Message one is written; message two is now a dated row rather than

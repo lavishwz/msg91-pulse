@@ -1,14 +1,17 @@
 import { NextResponse } from "next/server";
 import { writer } from "@/lib/pulse/guard";
-import { listDrafts, releaseDraft, discardDraft } from "@/lib/pulse/autopilot/drafts";
+import { listDrafts, releaseDraft, sendDraft, discardDraft } from "@/lib/pulse/autopilot/drafts";
 
 /**
  * GET  /api/pulse/autopilot/drafts?status=held — what is waiting on a person
  * POST /api/pulse/autopilot/drafts             — { id, action, body? }
  *
- * `action` is "release" or "discard". Release re-checks the price rule against
- * whatever text is actually going out, including a rep's edits — see
- * lib/pulse/autopilot/drafts.ts.
+ * `action` is "release" (marks approved; nothing is sent — see the note in
+ * drafts.ts on why this is not the same as "send"), "send" (release AND
+ * actually deliver it via the sender's connected Gmail — the one action in
+ * this whole app that puts a message in front of a real customer), or
+ * "discard". Both release and send re-check the price rule against whatever
+ * text is actually going out, including a rep's edits.
  */
 export async function GET(req: Request) {
   const url = new URL(req.url);
@@ -30,7 +33,7 @@ export async function POST(req: Request) {
   try {
     const body = (await req.json()) as {
       id?: number;
-      action?: "release" | "discard";
+      action?: "release" | "send" | "discard";
       body?: string;
     };
     if (!body.id || !body.action) {
@@ -40,7 +43,9 @@ export async function POST(req: Request) {
     const res =
       body.action === "release"
         ? await releaseDraft(body.id, actor, body.body)
-        : await discardDraft(body.id, actor);
+        : body.action === "send"
+          ? await sendDraft(body.id, actor, body.body)
+          : await discardDraft(body.id, actor);
 
     // A refused release is a 409, not a 500: the rule worked, and the message
     // says which rule and why.

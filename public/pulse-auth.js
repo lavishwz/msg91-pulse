@@ -66,13 +66,25 @@
 
   /* ── 2. sign out ───────────────────────────────────────────────────────── */
 
-  async function signOut() {
+  /**
+   * `signOut()` is a real network round trip (`/api/auth/logout`) followed
+   * by a full navigation — on a slow connection that is a visible pause with
+   * nothing on screen saying a click landed. `btn` is optional: the fallback
+   * path some callers use has no element to disable.
+   */
+  async function signOut(btn) {
+    if (btn) {
+      btn.disabled = true;
+      btn.dataset.origText = btn.textContent;
+      btn.textContent = "Signing out…";
+    }
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } catch (err) {
       console.warn("[pulse] logout call failed:", err.message);
     }
     // Either way: the cookie is gone or the guard will refuse the next request.
+    // No need to restore the button — toLogin() navigates away regardless.
     toLogin();
   }
 
@@ -96,9 +108,11 @@
       const t = e.target;
       if (!(t instanceof Element)) return;
 
-      if (t.closest("[data-signout]")) {
+      const so = t.closest("[data-signout]");
+      if (so) {
         e.preventDefault();
-        signOut();
+        if (so.disabled) return; // already signing out — a second click is not a second sign-out
+        signOut(so);
       }
     },
     true,

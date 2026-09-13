@@ -2,6 +2,7 @@ import { query } from "@/lib/db";
 import { cached, DEFAULT_TTL_MS } from "./cache";
 import { count, money } from "./domain";
 import { USER_TYPE } from "./domain";
+import { listDrafts } from "./autopilot/drafts";
 
 /**
  * Scanners → cards.
@@ -545,6 +546,65 @@ async function repeatedPaymentFailure(limit: number): Promise<Card[]> {
   });
 }
 
+/**
+ * 8. Drafts held for a person — "Your approval": ready to send, waiting on a yes.
+ *
+ * This reason has existed in `CardReason` since the six-reason taxonomy was
+ * written, but nothing ever produced it — `pulse_draft` (held/released/sent,
+ * see lib/pulse/autopilot/drafts.ts) already carried everything a card needs;
+ * it just was never read from here. Unlike the other seven scanners this one
+ * reads Pulse's own store, not ms_user/ms_trans, so it costs nothing against
+ * the ms_trans-has-no-index constraint above.
+ */
+async function heldDrafts(limit: number): Promise<Card[]> {
+  const held = (await listDrafts("held", limit)).filter((d) => d.accountPid);
+  if (!held.length) return [];
+
+  const ids = [...new Set(held.map((d) => Number(d.accountPid)))].filter(Number.isFinite);
+  const rows = await query<{ user_pid: number; name: string; currency: string | null }>(
+    `SELECT u.user_pid,
+            TRIM(CONCAT(COALESCE(u.user_fname,''),' ',COALESCE(u.user_lname,''))) name,
+            d.currency
+       FROM ms_user u
+       LEFT JOIN default_destination_country d ON d.u_id = u.user_pid
+      WHERE u.user_pid IN (${ids.map(() => "?").join(",")})`,
+    ids,
+  );
+  const info = new Map(rows.map((r) => [Number(r.user_pid), r]));
+
+  return held.map((d) => {
+    const id = Number(d.accountPid);
+    const found = info.get(id);
+    const name = found?.name || `Account ${id}`;
+    const ageMins = Math.max(0, Math.round((Date.now() - new Date(d.createdAt).getTime()) / 60000));
+    const age = ageMins < 60 ? `${ageMins} min` : `${Math.round(ageMins / 60)}h`;
+    return {
+      key: `draft:${d.id}`,
+      scope: "me" as const,
+      reason: "Your approval" as const,
+      watch: false,
+      headline: `A ${d.channel} draft for ${trim(name)} is ready to send.`,
+      why:
+        `Written <span class="l1">${age} ago</span>` +
+        (d.holdReason ? `, held because it ${d.holdReason}.` : ", waiting on a read before it goes.") +
+        ` Nothing goes out until you say so.`,
+      l1: `${age} ago`,
+      action: "Review and send",
+      solid: true,
+      account: { id, name },
+      geo: geoLine(found?.currency, "Inbound"),
+      clock: null,
+      evidence: [
+        ["Channel", d.channel],
+        ["Subject", d.subject || "(no subject)"],
+        ["Held because", d.holdReason || "policy requires a read"],
+        ["Confidence", d.confidence != null ? `${Math.round(d.confidence * 100)}%` : "not recorded"],
+        ["Facts used", d.factsUsed.length ? d.factsUsed.join("; ") : "none recorded"],
+      ],
+    };
+  });
+}
+
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
 function humanMins(mins: number): string {
@@ -599,6 +659,7 @@ async function buildCardsUncached(n: number): Promise<Card[]> {
     verificationStalled(n),
     walletRunDry(n),
     repeatedPaymentFailure(n),
+    heldDrafts(n),
   ]);
 
   const order: CardReason[] = [

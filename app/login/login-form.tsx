@@ -128,6 +128,34 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
               setStatus("error");
             },
           });
+          /**
+           * `init()` neither throws nor calls `failure` when it simply
+           * declines to render — confirmed live: the widget script loads,
+           * `initVerification` runs without error, the container is
+           * correctly sized, and it stays empty regardless (most likely this
+           * domain is not on the widget's allowed-origin list yet — a
+           * config question for whoever registered `referenceId`, not a
+           * bug in the call above). Silence read as "still loading"
+           * forever, so a person watched a permanently blank box with
+           * nothing to act on. This says so instead, once it is sure: after
+           * giving the widget a real window to render in.
+           */
+          // No cleanup path here — this is a one-shot flow (the page either
+          // navigates away on success or the person reloads), matching this
+          // effect's existing pattern of not tearing the script/interval
+          // above down on unmount either.
+          setTimeout(() => {
+            const el = document.getElementById(referenceId);
+            if (el && el.childElementCount === 0) {
+              setError(
+                "The MSG91 sign-in widget loaded but did not render anything. " +
+                  "This usually means the current address is not registered for this " +
+                  "sign-in widget yet — ask whoever set up REFERENCEID to check its " +
+                  "allowed domains, then reload.",
+              );
+              setStatus("error");
+            }
+          }, 6000);
           });
           return;
         }
