@@ -1107,6 +1107,21 @@ window.PulseLive = (function () {
    * first open, and hands the resolved name back so the caller can switch
    * the view the same way `openCompany` always has.
    */
+  /**
+   * "Log what happened", for real — POST /api/pulse/accounts/:id/log. `cb`
+   * gets the whole response ({ok, extract, created} or {ok:false, error}):
+   * the caller renders what was actually created, not a guess made before
+   * the agent ran.
+   */
+  async function logWhatHappened(accountId, note, cb) {
+    try {
+      const res = await post("/api/pulse/accounts/" + accountId + "/log", { note });
+      cb(res);
+    } catch (err) {
+      cb({ ok: false, error: err.message });
+    }
+  }
+
   async function loadAccountById(id, bag, cb) {
     try {
       const d = await get("/api/pulse/accounts/" + id);
@@ -2162,6 +2177,7 @@ window.PulseLive = (function () {
     claimAccount,
     trackCard,
     loadDrafted,
+    logWhatHappened,
     loadMotionRules,
     saveMotionRule,
     addMotionRule,

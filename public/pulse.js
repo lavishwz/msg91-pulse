@@ -2925,6 +2925,28 @@ document.addEventListener("click",e=>{
    PulseLive.pickRep(Number(rpick.dataset.rep),render);return;}
   $$("[data-rep]").forEach(x=>x.setAttribute("aria-selected",String(x===rpick)));return;}
  if(t.closest("#ovdo")){
+  /* "Log what happened" — real now. See logResultHtml() for what a save
+     actually produces; the old static five-line preview promised the same
+     result for every note and saved nothing. */
+  const logtx=$("#logtx");
+  if(logtx){
+   const btn=t.closest("#ovdo"),err=$("#logerr");
+   const note=logtx.value.trim();
+   if(err)err.hidden=true;
+   if(!note){if(err){err.hidden=false;err.textContent="Write something first.";}return;}
+   const acct=CUST[S.cust];
+   if(!acct||!acct.id){if(err){err.hidden=false;err.textContent="Open this from an account page first.";}return;}
+   if(!window.PulseLive||!PulseLive.logWhatHappened){if(err){err.hidden=false;err.textContent="Not ready yet — reload and try again.";}return;}
+   btn.disabled=true;btn.textContent="…";
+   PulseLive.logWhatHappened(acct.id,note,res=>{
+    if(!res||!res.ok){
+     btn.disabled=false;btn.textContent="Save →";
+     if(err){err.hidden=false;err.textContent=(res&&res.error)||"Could not save.";}
+     return;}
+    $("#ovb").innerHTML=logResultHtml(res);
+    if(window.PulseLive&&PulseLive.loadAccount)PulseLive.loadAccount(S.cust,PULSE_BAG,render);
+   });
+   return;}
   if(window.PulseLive&&PulseLive.state.reassign.open){
    PulseLive.saveReassign(PULSE_BAG,render);return;}
   $("#ov").hidden=true;return;}
@@ -4065,21 +4087,33 @@ document.addEventListener("click",e=>{
    the one above — so the company-page handler always won and this never ran
    when it mattered. escClose owns every layer now. */
 
+/**
+ * What a real "Log what happened" save produced — only the fields the note
+ * actually supported, nothing padded to look fuller than it was.
+ */
+function logResultHtml(res){
+ const e=res.extract||{},c=res.created||{};
+ const rows=[];
+ if(e.promise)rows.push(["Promise",esc(e.promise.text)+(e.promise.due_date?` — due ${esc(e.promise.due_date)}, added to your promises`:"")]);
+ if(e.decision)rows.push(["Decision",esc(e.decision.text)]);
+ if(e.interest)rows.push(["Interest",esc(e.interest.product)+(e.interest.reason?` — ${esc(e.interest.reason)}`:"")+(c.missionId?", new mission started":"")]);
+ if(e.risk)rows.push(["Risk",esc(e.risk.text)+(e.risk.chase_date?` — chase by ${esc(e.risk.chase_date)}`:"")]);
+ if(e.person)rows.push(["Person",esc(e.person.name)+(e.person.role?` — ${esc(e.person.role)}`:"")+(c.contactAdded?", added as a contact":"")]);
+ return `<h3>Saved</h3>
+  <p class="sub">${rows.length?"Here is exactly what came from the note — nothing else.":"Nothing in that note needed a promise, a decision, a product interest, a risk, or a person. It is still on record."}</p>
+  ${rows.length?`<div class="extract2">${rows.map(([k,v])=>`<div class="ex2"><b>${k}</b><span>${v}</span></div>`).join("")}</div>`:""}
+  <div class="row" style="margin-top:18px"><button class="go solid" id="ovx">Done</button></div>`;
+}
+
 function openSheet(kind,arg){
  const B=$("#ovb");
  if(kind==="log"){
+  const acct=CUST[S.cust];
   B.innerHTML=`<h3>Log what happened</h3>
-   <p class="sub">Write it however you like, or hold the mic and talk. I will turn it into the right work — you do not need to pick a type.</p>
-   <textarea class="logbox" id="logtx">Meera called. They will take ₹0.119 if we can do 24 months. She also asked whether we do WhatsApp for refill reminders — said their competitor trial ends on the 30th. I said I would send the revised rate by Wednesday.</textarea>
-   <div class="row" style="margin-top:12px"><span class="miclg">●</span>
-    <span style="font-size:12.5px;color:var(--faint);font-family:var(--m)">HOLD TO TALK · OR JUST TYPE</span></div>
-   <div class="extract2"><div class="l3">What I will do with that</div>
-    <div class="ex2"><b>Promise</b><span>Send the revised rate — due Wednesday, added to your promises</span></div>
-    <div class="ex2"><b>Decision</b><span>₹0.119 with a 24-month term — closes the rate card, margin 9.4%</span></div>
-    <div class="ex2"><b>Interest</b><span>WhatsApp for refill reminders — new mission, grow product</span></div>
-    <div class="ex2"><b>Risk</b><span>Competitor trial ends 30 Sep — I will chase you on the 26th</span></div>
-    <div class="ex2"><b>Person</b><span>A contact marked as the decision maker</span></div></div>
-   <div class="row" style="margin-top:18px"><button class="go solid" id="ovdo">Save all five →</button>
+   <p class="sub">Write it however you like — a call, an email, a meeting. I will pull out the promise, the risk, the product interest and the person, and save each as real work. Nothing is invented: whatever the note does not say stays out.</p>
+   <textarea class="logbox" id="logtx" placeholder="e.g. Meera called. She'll take ₹0.119 on a 24-month term. Also asked about WhatsApp for refill reminders — said I'd send the revised rate by Wednesday."></textarea>
+   <div id="logerr" class="tagerr" role="alert" hidden></div>
+   <div class="row" style="margin-top:18px"><button class="go solid" id="ovdo"${acct&&acct.id?"":" disabled title=\"Open this from an account page first.\""}>Save →</button>
     <button class="go" id="ovx">Cancel</button></div>`;
  }
  if(kind==="bulk"){

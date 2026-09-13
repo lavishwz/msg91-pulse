@@ -73,6 +73,16 @@ export const AGENTS = {
     env: "GTWY_AGENT_ACCOUNT_HEALTH",
     fallback: "",
   },
+  /* "Log what happened" (PRD §8.4, handover §7.7) — the sheet that was
+     nothing but a hardcoded sample and a save button that called nothing.
+     One free-text note in, five nullable structured fields out: promise,
+     decision, interest, risk, person. Configured and published on GTWY
+     2026-09-13; fallback is that agent's id. */
+  logExtract: {
+    slug: "log-extract",
+    env: "GTWY_AGENT_LOG_EXTRACT",
+    fallback: "6aa0352bb54ce2b5442e0f39",
+  },
 } as const;
 
 export type AgentKey = keyof typeof AGENTS;
@@ -279,6 +289,22 @@ export const RuleWorkerSchema = z.object({
   needs: z.array(z.string()),
 });
 export type RuleWorkerResult = z.infer<typeof RuleWorkerSchema>;
+
+/**
+ * "Log what happened" — one free-text note in, five nullable fields out.
+ * Every field is null, not a guess, when the note does not say — the prompt
+ * is explicit that a placeholder dressed up as fact is worse than admitting
+ * nothing was there.
+ */
+export const LogExtractSchema = z.object({
+  promise: z.object({ text: z.string(), due_date: z.string().nullable() }).nullable(),
+  decision: z.object({ text: z.string() }).nullable(),
+  interest: z.object({ product: z.string(), reason: z.string() }).nullable(),
+  risk: z.object({ text: z.string(), chase_date: z.string().nullable() }).nullable(),
+  person: z.object({ name: z.string(), role: z.string() }).nullable(),
+  confidence: z.number().min(0).max(1),
+});
+export type LogExtract = z.infer<typeof LogExtractSchema>;
 
 export type TriageResult = z.infer<typeof TriageResultSchema>;
 export type Draft = z.infer<typeof DraftSchema>;
@@ -823,6 +849,21 @@ export async function planAutomation(
       .map(([k, v]) => `- ${k} — ${v}`)
       .join("\n"),
     events: eventsCatalogueForPlanner(),
+  });
+}
+
+/* ── Agent 11 · log-extract ───────────────────────────────────────────────── */
+
+/**
+ * "Log what happened", for real. The rep writes what actually occurred; this
+ * turns it into the five things Pulse can act on — never inventing a field
+ * the note does not support.
+ */
+export async function extractLog(note: string, accountName: string): Promise<AgentCall<LogExtract>> {
+  return callAgent("logExtract", LogExtractSchema, "Extract this.", {
+    today: today(),
+    account_name: accountName,
+    note,
   });
 }
 
