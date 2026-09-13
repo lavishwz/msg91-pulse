@@ -412,6 +412,22 @@ export async function stopWorkItem(id: number, reason: string): Promise<void> {
   );
 }
 
+/**
+ * Work items completed today, company-wide — "Done today · Company"
+ * (PRD §7.1). Previously two hardcoded example rows that never changed;
+ * this is what actually happened, from `pulse_work_item.completed_at`, no
+ * owner filter since Company scope is meant to be everyone's.
+ */
+export async function doneToday(limit = 25): Promise<WorkItem[]> {
+  const rows = await read<RawWork>(
+    `SELECT * FROM pulse_work_item
+      WHERE status = 'done' AND completed_at >= CURDATE()
+      ORDER BY completed_at DESC LIMIT ?`,
+    [limit],
+  );
+  return rows.map(shapeWork);
+}
+
 /** Overdue: open/snoozed work past its due time. Feeds the stale-work checks. */
 export async function overdueWork(limit = 50): Promise<WorkItem[]> {
   const rows = await read<RawWork>(

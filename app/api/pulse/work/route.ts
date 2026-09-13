@@ -22,6 +22,7 @@ import { gate } from "@/lib/pulse/guard";
 import { resolveMe } from "@/lib/pulse/team";
 import {
   completeWorkItem,
+  doneToday,
   getWorkItem,
   listWork,
   snoozeWorkItem,
@@ -52,6 +53,20 @@ export async function GET(req: Request) {
   if (!(await caller())) return refusal();
 
   const scopeParam = new URL(req.url).searchParams.get("scope") ?? "mine";
+
+  // "done" isn't one of the four My Work views — it's Now's "Done today ·
+  // Company" strip, which reads completed work company-wide rather than by
+  // owner. Kept in this route because it's the same table; doneToday() has
+  // its own shape (no ownerId/team filter) so it isn't routed through
+  // listWork() above.
+  if (scopeParam === "done") {
+    try {
+      return NextResponse.json({ ok: true, scope: "done", items: await doneToday() });
+    } catch (err) {
+      return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 503 });
+    }
+  }
+
   const scope = SCOPES.includes(scopeParam as WorkScope) ? (scopeParam as WorkScope) : "mine";
 
   try {

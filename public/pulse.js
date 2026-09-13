@@ -58,9 +58,6 @@ const DUP={};
 CARDS.splice(6,0,DUP);
 
 const DONE_T=[];
-const DONE_C=[
- ["09:40","Told all nine customers about the UAE outage","full disclosure, as in March","OTP · UAE"],
- ["08:05","Sent the RCS ask to product","third quarter running","Product signal"]];
 const DONE=[];
 
 let STANDINGS=[];
@@ -1418,7 +1415,11 @@ function vNow(){
     <div class="ev2">${ev}</div>
     <div class="row"><button class="go solid" data-opp="${encodeURIComponent(JSON.stringify([k,h2,p2,ev,cta]))}">${cta} →</button>
      <button class="go" data-oppoff="${esc(h2)}">Not now</button></div></div>`).join("")}`:""}</section>`:"";
- const dlist=S.scope==="me"?DONE:S.scope==="team"?DONE_T:DONE_C;
+ /* Company's "Done today" used to be two hardcoded rows that never changed
+    regardless of what actually happened — see docs/dev-notes/* for the
+    fix. Real now: completed work items, company-wide, from today. */
+ const doneCompanyLive=(window.PulseLive&&PulseLive.state.doneCompany)||[];
+ const dlist=S.scope==="me"?DONE:S.scope==="team"?DONE_T:doneCompanyLive;
  const dn=dlist.length+S.doneIds.size+S.snoozeIds.size;
  const doneSec=(!S.newRep)?`<section class="done">
   <div class="lab"><button id="dtog" style="font-family:inherit;letter-spacing:inherit;color:var(--faint)">
@@ -2558,6 +2559,8 @@ document.addEventListener("click",e=>{
   if(window.PulseLive&&PulseLive.loadAlerts)PulseLive.loadAlerts(render);
   if(window.PulseLive&&window.PulseLive.loadBoard)
    window.PulseLive.loadBoard(S.scope,PULSE_BAG,render);
+  if(S.scope==="company"&&window.PulseLive&&window.PulseLive.loadDoneCompany)
+   window.PulseLive.loadDoneCompany(PULSE_BAG,render);
   return;}
  const cu=t.closest("[data-cust]");
  if(cu&&CUST[cu.dataset.cust]){$("#pk").hidden=true;

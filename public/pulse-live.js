@@ -12,7 +12,7 @@
  * real and which are still the prototype's sample data.
  */
 window.PulseLive = (function () {
-  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, cardsError: null, boardLoaded: false, flightLoaded: false, autopilot: null, autopilotError: null, drafts: [], policy: null, manifest: null, motionRules: null, automations: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null, mockDismissed: false, audit: null, auditError: null, auditLoadingMore: false, gmailRecent: null, gmailRecentError: null, gmailRecentLoaded: false, activityDrafted: null, activityDraftedError: null, activitySuppressed: null, activitySuppressedError: null };
+  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, cardsError: null, boardLoaded: false, flightLoaded: false, autopilot: null, autopilotError: null, drafts: [], policy: null, manifest: null, motionRules: null, automations: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null, mockDismissed: false, audit: null, auditError: null, auditLoadingMore: false, gmailRecent: null, gmailRecentError: null, gmailRecentLoaded: false, activityDrafted: null, activityDraftedError: null, activitySuppressed: null, activitySuppressedError: null, doneCompany: null };
 
   /**
    * Sample-data notice (static markup in app/pulse-shell.tsx, #mockbar).
@@ -1128,6 +1128,29 @@ window.PulseLive = (function () {
    * the view the same way `openCompany` always has.
    */
   /**
+   * "Done today · Company" — two hardcoded example rows before this
+   * (public/pulse.js's DONE_C), never once reflecting anything that
+   * actually happened. Real now: completed work items, company-wide, from
+   * today. Fetched lazily, once, the first time Company scope is viewed.
+   */
+  async function loadDoneCompany(bag, render) {
+    if (state.doneCompany) { render(); return; }
+    try {
+      const data = await get("/api/pulse/work?scope=done");
+      state.doneCompany = (data.items || []).map((it) => [
+        new Date(it.completedAt || it.createdAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }),
+        it.title,
+        it.outcome || (it.type === "promise" ? "promise kept" : "done"),
+      ]);
+      render();
+    } catch (err) {
+      console.warn("[pulse] done-today (company) failed:", err.message);
+      state.doneCompany = [];
+      render();
+    }
+  }
+
+  /**
    * "Add accounts in bulk" — POST /api/pulse/prospects, two calls matching
    * the sheet's own two steps: check, then create only the confirmed `new`
    * rows. Real dedup against ms_user and existing prospects — see
@@ -2227,6 +2250,7 @@ window.PulseLive = (function () {
     loadSuppressed,
     checkBulk,
     createBulk,
+    loadDoneCompany,
     logWhatHappened,
     loadMotionRules,
     saveMotionRule,
@@ -2386,6 +2410,7 @@ window.PulseLive = (function () {
           loadAlerts(render),                       // sysband — the alert band
           loadBoard(bag.S.scope, bag, render),      // sband — the score band
           this.loadCards(bag, render),              // body — the cards
+          ...(bag.S.scope === "company" ? [loadDoneCompany(bag, render)] : []),
         ]);
 
         // 2 · the sections immediately below it.
