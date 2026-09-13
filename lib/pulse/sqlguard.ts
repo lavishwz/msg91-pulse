@@ -283,10 +283,21 @@ function disallowedTable(stmt: string): string | null {
    *
    * STRAIGHT_JOIN is matched explicitly: \bjoin does not match it, because the
    * underscore before JOIN is a word character and leaves no boundary there. */
-  const OPENERS = /\b(?:from|straight_join|(?:(?:inner|cross|left|right|full)\s+)?(?:outer\s+)?join)\b/gi;
+  /* `(?<![.\w])` so a column named `from` is not read as the FROM keyword.
+     ms_wallet_slab really does have columns called `from` and `to`, and
+     `SELECT ws.from AS slab_from` put a word boundary right before `from` —
+     the scanner took it as the start of a table list and read the next token,
+     `AS`, as a table name. A legitimate rule was refused for reading a table
+     called "as". A dot before the word means it is qualified, which means it
+     is a column. */
+  const OPENERS = /(?<![.\w])(?:from|straight_join|(?:(?:inner|cross|left|right|full)\s+)?(?:outer\s+)?join)\b/gi;
   /* Where a table-reference list stops. ON and USING end a join clause; the
      rest end the FROM clause outright. */
-  const STOP = /^(?:on|using|where|group|having|order|limit|union|into|for|window|straight_join|inner|cross|left|right|full|outer|join|procedure|lock)$/i;
+  /* `as` is here as a second line of defence rather than a necessity: with the
+     lookbehind above, the scanner should never be positioned on one. If some
+     other shape ever puts it there, refusing to treat the alias keyword as a
+     table is better than refusing the rule. */
+  const STOP = /^(?:as|on|using|where|group|having|order|limit|union|into|for|window|straight_join|inner|cross|left|right|full|outer|join|procedure|lock)$/i;
 
   let m: RegExpExecArray | null;
   while ((m = OPENERS.exec(sql))) {
