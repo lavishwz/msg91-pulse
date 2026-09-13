@@ -25,7 +25,7 @@ import { publicBaseUrl } from "@/lib/pulse/baseUrl";
 import { webhookKeyFor } from "./webhookKey";
 import { bindPlaceholders, bindValues } from "./enrich";
 
-export type BuildStep = "plan" | "guard" | "dry_run" | "cron" | "save";
+export type BuildStep = "plan" | "guard" | "dry_run" | "cost" | "cron" | "save";
 
 export type BuildResult =
   | {
@@ -52,6 +52,7 @@ const FRIENDLY_MESSAGE: Record<BuildStep, string> = {
   plan: "Pulse couldn't work out a plan for that rule. Try rewording it — shorter, more concrete sentences plan more reliably.",
   guard: "That rule would need a query Pulse won't run for safety reasons. Try being more specific about what it should check.",
   dry_run: "The plan referenced data that doesn't actually exist. Try rewording which field or condition the rule depends on.",
+  cost: "That rule would need to scan a huge table on every run, which would tie up the database for minutes at a time. Try narrowing what it checks, or ask whoever manages Pulse whether the table needs an index.",
   cron: "This rule needs a schedule, and something's wrong with how Pulse reaches the outside world right now — this isn't about your rule. Try again shortly, or tell whoever manages Pulse.",
   save: "Everything about the rule checked out, but saving it failed. Try again — if it keeps happening, tell whoever manages Pulse.",
 };
@@ -217,6 +218,58 @@ async function dryRun(sql: string): Promise<{ ok: true; columns: string[] } | { 
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
+}
+
+/**
+ * Above this many rows, a full scan with no index is worth refusing rather
+ * than discovering as a cron job stuck for minutes on a shared connection an
+ * hour later. Picked below ms_trans's own size (~1M rows, no secondary index
+ * at all beyond its primary key — confirmed live: partner-inbound's "no
+ * transaction in 30 days" rule joined it with an OR condition, EXPLAIN showed
+ * `type: ALL` on both sides with no key at all, and the automation's own
+ * per-run lock outlived its 300-second budget and had to be reclaimed after
+ * expiry) so that table is exactly what this catches, not a table sized so
+ * that only a pathological query would ever trip it.
+ */
+const FULL_SCAN_ROW_LIMIT = 50_000;
+
+type ExplainRow = { table: string | null; type: string | null; key: string | null; rows: string | number | null };
+
+/**
+ * Whether the plan's own query would full-scan a large table.
+ *
+ * dryRun() above only asks "does this run at all" — wrapped in `LIMIT 0`,
+ * which stops rows reaching the client but does not stop MySQL materialising
+ * a derived table with a GROUP BY in it, so a query that full-scans two
+ * unindexed tables took just as long to dry-run as to actually run. This asks
+ * a different question: EXPLAIN never executes anything, so it is cheap
+ * regardless of how expensive the real query would be, and `type: ALL` with
+ * no key and a large row estimate is the same signal a person reading the
+ * plan by hand would look for.
+ *
+ * Best-effort: EXPLAIN itself failing (a query shape MySQL explains oddly but
+ * runs fine) is not this check's problem to report — dryRun already covers
+ * whether it runs at all — so that case passes rather than blocking a build
+ * over a check that could not evaluate it.
+ */
+async function checkCost(sql: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  let rows: ExplainRow[];
+  try {
+    rows = await query<ExplainRow>(`EXPLAIN ${sql.replace(/;\s*$/, "")}`);
+  } catch {
+    return { ok: true };
+  }
+  const scans = rows.filter(
+    (r) => r.type === "ALL" && !r.key && Number(r.rows ?? 0) > FULL_SCAN_ROW_LIMIT,
+  );
+  if (!scans.length) return { ok: true };
+  const worst = scans.reduce((a, b) => (Number(a.rows) > Number(b.rows) ? a : b));
+  return {
+    ok: false,
+    error:
+      `would full-scan \`${worst.table}\` (~${worst.rows} rows, no index usable) — this ties up ` +
+      `a shared database connection for minutes on every scheduled run instead of seconds.`,
+  };
 }
 
 /**
@@ -393,7 +446,9 @@ export async function buildAutomation(
    */
   let g!: ReturnType<typeof guard>;
   let dry!: Awaited<ReturnType<typeof dryRun>>;
+  let costError: string | null = null;
   for (let attempt = 0; attempt < 2; attempt++) {
+    costError = null;
     /* find_sql is optional on the plan schema so an event rule can be built
        without one (see AutomationPlanSchema). On this path it is the whole
        point, so its absence is caught here with a message that says what the
@@ -439,23 +494,35 @@ export async function buildAutomation(
     }
 
     dry = await dryRun(g.sql);
-    if (dry.ok) break;
+    if (dry.ok) {
+      const cost = await checkCost(g.sql);
+      if (cost.ok) break;
+      costError = cost.error;
+    }
 
     if (attempt === 1) {
       return fail(
-        english, motion, ownerEmail, "dry_run",
-        "the planner's query does not run against the real database: " + dry.error,
+        english, motion, ownerEmail, costError ? "cost" : "dry_run",
+        costError
+          ? "the planner's query " + costError
+          : "the planner's query does not run against the real database: " + (dry as { ok: false; error: string }).error,
       );
     }
     try {
-      plan = (await planAutomation(english, motion, { sql: plan.find_sql, error: dry.error })).data;
+      plan = (
+        await planAutomation(english, motion, {
+          sql: plan.find_sql,
+          error: costError ?? (dry as { ok: false; error: string }).error,
+        })
+      ).data;
     } catch (err) {
       return fail(english, motion, ownerEmail, "plan", (err as Error).message);
     }
   }
-  /* Unreachable: the loop above only leaves via `break` (dry.ok is true) or an
-     explicit `return` on failure. Narrows `dry` for TypeScript, which cannot
-     see that guarantee across the loop's own boundary. */
+  /* Unreachable: the loop above only leaves via `break` (dry.ok and the cost
+     check both passed) or an explicit `return` on failure. Narrows `dry` for
+     TypeScript, which cannot see that guarantee across the loop's own
+     boundary. */
   if (!dry.ok) {
     return fail(
       english, motion, ownerEmail, "dry_run",
