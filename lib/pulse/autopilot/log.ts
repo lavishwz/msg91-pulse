@@ -67,7 +67,16 @@ type Raw = {
 const SELECT = `
   SELECT d.id, d.signal_key, d.agent, d.model, d.policy_version, d.verdict, d.score,
          d.confidence, d.action_taken, d.held, d.hold_reason, d.error_code,
-         d.output_json, d.input_json, d.at, s.subject_id, s.state,
+         d.output_json, d.input_json, d.at,
+         /* d.subject_id (migrations/027) is the row's own answer, written at
+            judge time regardless of verdict. s.subject_id only ever exists
+            when an alert fired — pulse_signal has no row for a quiet verdict
+            at all — so it is the fallback for a decision written before this
+            column existed, not the primary source. Without the fallback,
+            every historical "quiet" row would go from "Account ?" (the old,
+            wrong-but-consistent bug) to also "Account ?" for a different
+            reason, which is no improvement for anything already on record. */
+         COALESCE(d.subject_id, s.subject_id) AS subject_id, s.state,
          (SELECT JSON_UNQUOTE(JSON_EXTRACT(t.input_json, '$.company_name'))
             FROM pulse_decision t
            WHERE t.signal_key = d.signal_key AND t.agent = 'signup-triage'

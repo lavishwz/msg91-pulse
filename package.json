@@ -12,7 +12,7 @@
     "cron:repoint": "node --experimental-strip-types scripts/repoint-cron-jobs.mjs",
     "test:guard": "node --experimental-strip-types tests/sqlguard.test.mjs",
     "test:allowguard": "node --experimental-strip-types tests/sqlguard-allowlist.test.mjs",
-    "test": "npm run test:guard && npm run test:allowguard && npm run test:cron && npm run test:cronretry && npm run test:ruleguard && npm run test:watermark && npm run test:gtwy && npm run test:allowlist && npm run test:drafts && npm run test:members && npm run test:esc && npm run test:ruleworker && npm run test:webhookkey && npm run test:enrich",
+    "test": "npm run test:guard && npm run test:allowguard && npm run test:cron && npm run test:cronretry && npm run test:ruleguard && npm run test:watermark && npm run test:gtwy && npm run test:allowlist && npm run test:drafts && npm run test:members && npm run test:esc && npm run test:ruleworker && npm run test:webhookkey && npm run test:enrich && npm run test:pins && npm run test:charset",
     "test:cron": "node --experimental-strip-types --no-warnings tests/cron-interval.test.mjs",
     "test:cronretry": "node --experimental-strip-types --no-warnings tests/cron-retry.test.mjs",
     "test:gtwy": "node --experimental-strip-types tests/gtwy.test.mjs",
@@ -31,7 +31,9 @@
     "test:esc": "node tests/esc.test.mjs",
     "test:ruleworker": "node --experimental-strip-types tests/rule-worker-schema.test.mjs",
     "test:webhookkey": "node --experimental-strip-types --no-warnings tests/webhook-key.test.mjs",
-    "test:enrich": "node --experimental-strip-types --no-warnings tests/enrich-binding.test.mjs"
+    "test:enrich": "node --experimental-strip-types --no-warnings tests/enrich-binding.test.mjs",
+    "test:pins": "node --experimental-strip-types tests/pins.test.mjs",
+    "test:charset": "node --experimental-strip-types tests/schema-dump-charset.test.mjs"
   },
   "dependencies": {
     "jose": "^6.2.12",

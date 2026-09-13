@@ -169,12 +169,24 @@ async function writeDecision(
   action: string,
   errorCode: string | null,
   usage: Record<string, unknown>,
+  /**
+   * The account this decision was about, straight off the row (scheduled) or
+   * the event payload — not the model's transcription of it, for the same
+   * reason writeAlert() prefers rowSubject over data.subject_id. Kept on the
+   * row itself (migrations/027) rather than left for the log to reconstruct
+   * by joining pulse_signal, which only ever gains a row when an alert fires
+   * — a quiet verdict, the common case, had no signal row to join and
+   * rendered as "Scored Account ?" regardless of which real account was
+   * actually judged.
+   */
+  subjectId: string | null,
 ): Promise<void> {
   await write(
     `INSERT INTO pulse_decision
         (signal_key, agent, agent_id, model, policy_version, input_digest, input_json,
-         output_json, verdict, confidence, action_taken, held, hold_reason, error_code, usage_json)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         output_json, verdict, confidence, action_taken, held, hold_reason, error_code,
+         subject_id, usage_json)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
      ON DUPLICATE KEY UPDATE
         /* The input too, and its digest. Without these a second decision on the
            same signal kept the first one's input_json forever: the verdict, the
@@ -189,7 +201,7 @@ async function writeDecision(
         input_json = VALUES(input_json), input_digest = VALUES(input_digest),
         output_json = VALUES(output_json), verdict = VALUES(verdict),
         confidence = VALUES(confidence), action_taken = VALUES(action_taken),
-        error_code = VALUES(error_code), usage_json = VALUES(usage_json),
+        error_code = VALUES(error_code), subject_id = VALUES(subject_id), usage_json = VALUES(usage_json),
         at = CURRENT_TIMESTAMP()`,
     [
       signalKey,
@@ -206,6 +218,7 @@ async function writeDecision(
       errorCode ? 1 : 0,
       errorCode ? "the worker could not judge this row" : null,
       errorCode,
+      subjectId,
       JSON.stringify(usage ?? {}),
     ],
   );
@@ -535,7 +548,7 @@ export async function runOne(
       await writeDecision(
         a, signalKey, call.agentId, call.model, row, data,
         data.should_alert ? "alert" : "quiet",
-        data.confidence, acted, null, call.usage,
+        data.confidence, acted, null, call.usage, rowSubject,
       );
       /* Advance past this row only now that it has actually been judged.
 
@@ -554,7 +567,7 @@ export async function runOne(
     } catch (err) {
       await writeDecision(
         a, signalKey, "", null, row, null, "failed", null, "none",
-        (err as Error).message.slice(0, 40), {},
+        (err as Error).message.slice(0, 40), {}, rowSubject,
       ).catch(() => {});
       /* One row failing is not the automation failing. Record it and carry on
          — the alternative is that a single malformed account silences a rule
@@ -717,12 +730,12 @@ export async function runEventAutomation(
     await writeDecision(
       a, signalKey, call.agentId, call.model, input, data,
       data.should_alert ? "alert" : "quiet",
-      data.confidence, acted, null, call.usage,
+      data.confidence, acted, null, call.usage, subject,
     );
   } catch (err) {
     await writeDecision(
       a, signalKey, "", null, input, null, "failed", null, "none",
-      (err as Error).message.slice(0, 40), {},
+      (err as Error).message.slice(0, 40), {}, subject,
     ).catch(() => {});
     out.error = (err as Error).message;
   }
