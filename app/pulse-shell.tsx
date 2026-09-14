@@ -75,7 +75,6 @@ export default async function PulseShell() {
             <button data-nav="auto" data-tab2="audit">Audit log · who saw what</button>
             <div className="sp"></div>
             <button id="startonb">Replay first-run setup</button>
-            <button data-admin="">Admin · products, rates, team</button>
             <div className="sp"></div>
             <div className="hd2">Access</div>
             {/* Pulse is invite-only, so the list of who is in is a surface, not
@@ -126,9 +125,14 @@ export default async function PulseShell() {
       <div id="tip" role="tooltip" suppressHydrationWarning></div>
       <div className="onb" id="onb" hidden>
         <div className="onbar">
-          <span className="brand">
+          {/* Looked exactly like the real header's clickable brand button but
+              was a bare span with no handler — a home button a person could
+              see and click but that did nothing. Wired the same as the real
+              one now: data-nav="now" closes onboarding and returns to Now
+              (see the [data-nav] handler in public/pulse.js). */}
+          <button type="button" className="brand" data-nav="now">
             <span className="mark">P</span> Pulse
-          </span>
+          </button>
           <div className="steps" id="osteps" suppressHydrationWarning></div>
           <button className="skip" id="onbx">Close</button>
         </div>

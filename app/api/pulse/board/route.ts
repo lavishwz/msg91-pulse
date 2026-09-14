@@ -16,6 +16,13 @@ import { page } from "@/lib/pulse/paginate";
  * rather than the whole customer base — the header says how many were scored,
  * and the UI says so too. Scoring 10,000 accounts needs a nightly job writing
  * to a table Pulse is allowed to own, which it is not yet.
+ *
+ * The request below asks page() for LIMIT rows, but page() clamps every
+ * caller to MAX_PAGE_SIZE (see lib/pulse/paginate.ts) — so the request for
+ * LIMIT actually returns page({ limit: LIMIT }).limit rows, not LIMIT. That
+ * real, enforced number — plus whether more accounts exist beyond it — is
+ * reported back as `limit`/`truncated` so the board never looks complete when
+ * it is only a first page.
  */
 const LIMIT = 200;
 
@@ -26,14 +33,19 @@ export async function GET(req: Request) {
     const meId = me?.id ?? null;
 
     /* Your game is the accounts you own; the team and the company are the
-       first page of everything, which is all one request can honestly score. */
-    const filter = scope === "me" && meId ? { ownerId: meId } : {};
-    const { rows } = await listAccounts(filter, page({ limit: LIMIT }));
+       first page of everything, which is all one request can honestly score.
+       "me" always filters, even to nothing (meId ?? -1, a real ownerId no
+       account ever has) — it must never silently fall through to everyone
+       else's accounts just because identity could not be resolved. */
+    const filter = scope === "me" ? { ownerId: meId ?? -1 } : {};
+    const { rows, nextCursor, limit } = await listAccounts(filter, page({ limit: LIMIT }));
 
     // Read the last cron pass's scores rather than calling the account-health
     // agent inline — see lib/pulse/healthCron.ts. An account this page shows
-    // that no pass has reached yet is simply absent from the map here, and
-    // toBoard() already treats an unscored account the same as "too new".
+    // that no pass has reached yet is simply absent from the map here.
+    // toBoard() used to treat that the same as "too new to score" — now it
+    // tells them apart using signedUpAt, so the board can say "still being
+    // scored" instead of implying there is nothing to see.
     const health = await cachedHealthFor(rows.map((a) => a.id));
     const board = toBoard(
       rows.map((a) => ({
@@ -42,6 +54,10 @@ export async function GET(req: Request) {
         currency: a.currency,
         country: a.country,
         countryFlag: a.countryFlag,
+        // What lets toBoard tell "too new to have anything to score" apart
+        // from "old enough, the cron just hasn't reached it yet" — see the
+        // note on Board.unscored in lib/pulse/health.ts.
+        signedUpAt: a.signedUpAt,
       })),
       health,
     );
@@ -51,6 +67,8 @@ export async function GET(req: Request) {
       scope,
       board,
       scored: board.total,
+      limit,
+      truncated: nextCursor !== null,
       generatedAt: new Date().toISOString(),
     });
   } catch (err) {

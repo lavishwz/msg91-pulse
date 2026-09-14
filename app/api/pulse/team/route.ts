@@ -27,7 +27,7 @@ export async function GET(req: Request) {
     // How each rep's book is holding up — a standing, not a movement, because
     // movement needs a month of history Pulse has only just begun recording.
     if (view === "health")
-      return NextResponse.json({ ok: true, reps: await repStandings(6) });
+      return NextResponse.json({ ok: true, reps: await repStandings(6, me?.id ?? null) });
     if (view === "activity")
       return NextResponse.json({ ok: true, ...(await repActivity(pageFromUrl(req.url))) });
     return NextResponse.json({

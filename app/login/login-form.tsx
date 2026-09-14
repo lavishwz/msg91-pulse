@@ -83,9 +83,13 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
 
     // Case 2: a fresh arrival. The widget needs the reference id to render.
     if (!referenceId) {
-      setError(
-        "REFERENCEID is not set, so the MSG91 sign-in widget cannot load. See docs/auth.md.",
-      );
+      // The real cause (REFERENCEID unset — see docs/auth.md) is only ever
+      // actionable by whoever runs the deploy, never by the person stuck at
+      // this screen, so it stays in the console and the page gets a plain
+      // "try again" instead of an env-var name and a docs path they cannot
+      // open.
+      console.error("[pulse] REFERENCEID is not set — see docs/auth.md");
+      setError("Sign-in isn't available right now. Please try again shortly.");
       setStatus("error");
       return;
     }
@@ -147,12 +151,14 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
           setTimeout(() => {
             const el = document.getElementById(referenceId);
             if (el && el.childElementCount === 0) {
-              setError(
-                "The MSG91 sign-in widget loaded but did not render anything. " +
-                  "This usually means the current address is not registered for this " +
-                  "sign-in widget yet — ask whoever set up REFERENCEID to check its " +
-                  "allowed domains, then reload.",
+              // Real cause for whoever reads logs: this domain is most likely
+              // not on the widget's allowed-origin list for `referenceId`.
+              // The person on the page cannot fix that themselves, so they
+              // get a plain retry instead of a config term to go relay.
+              console.error(
+                "[pulse] MSG91 sign-in widget rendered empty — domain likely not on the allowed-origin list for this REFERENCEID",
               );
+              setError("Sign-in isn't available on this page right now. Please try again shortly.");
               setStatus("error");
             }
           }, 6000);
@@ -192,6 +198,18 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
       {error && (
         <div className="autherr" role="alert">
           <b>Not signed in.</b> {error}
+          <div style={{ marginTop: 10, display: "flex", gap: 12, alignItems: "center" }}>
+            {/* A full reload, not a state reset — the widget script, its
+                interval, and the one-shot `started` ref are only ever meant
+                to run once per page load, so retrying in place would either
+                no-op against the already-loaded script or double-run it. */}
+            <button type="button" className="btn" onClick={() => window.location.reload()}>
+              Try again
+            </button>
+            <span style={{ fontSize: 13, color: "var(--muted, #767676)" }}>
+              Still stuck? Message #pulse-support.
+            </span>
+          </div>
         </div>
       )}
     </>

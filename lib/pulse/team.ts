@@ -1,8 +1,10 @@
+import { cookies } from "next/headers";
 import { query, queryOne } from "@/lib/db";
 import { limitClause, page, toPaged, type Page, type Paged } from "./paginate";
 import { accountName, ago, USER_TYPE } from "./domain";
 import { healthFor } from "./health";
 import { overrideCounts } from "./ownership";
+import { SESSION_COOKIE, initialsOf, sessionFrom } from "./auth";
 
 /**
  * The MSG91 team.
@@ -182,6 +184,37 @@ export async function assignableReps(meId: number | null, cap = 500): Promise<Pa
   return toPaged(corrected, req);
 }
 
+/** One rep by email — how "me" is resolved to a real book, not a stand-in. */
+export async function getRepByEmail(email: string): Promise<Rep | null> {
+  const row = await queryOne<{
+    user_pid: number;
+    user_fname: string | null;
+    user_lname: string | null;
+    user_uname: string | null;
+    user_email: string | null;
+    n: number;
+  }>(
+    `SELECT a.user_pid, a.user_fname, a.user_lname, a.user_uname, a.user_email,
+            (SELECT COUNT(*)
+               FROM user_handled_by h
+               JOIN ms_user c ON c.user_pid = h.user_id AND c.user_type = ${USER_TYPE.CUSTOMER}
+              WHERE h.admin_id = a.user_pid) n
+       FROM ms_user a
+      WHERE LOWER(a.user_email) = LOWER(?) LIMIT 1`,
+    [email],
+  );
+  if (!row) return null;
+  const name = accountName(row);
+  return {
+    id: Number(row.user_pid),
+    name,
+    initials: repInitials(name),
+    email: (row.user_email ?? "").trim(),
+    accounts: Number(row.n),
+    isMe: true,
+  };
+}
+
 /** One rep by id. */
 export async function getRep(id: number): Promise<Rep | null> {
   const row = await queryOne<{
@@ -216,21 +249,40 @@ export async function getRep(id: number): Promise<Rep | null> {
 /**
  * Who Pulse is acting as.
  *
- * Pulse has no auth yet and cannot store a session (SELECT-only database), so
- * "me" is resolved in this order:
- *   1. `PULSE_ME_USER_PID` in the environment, if set — the deliberate choice.
- *   2. otherwise the rep with the largest book, so the app opens on somebody
- *      with real work rather than an empty screen.
- * This is the one place that decision lives; everything else takes `meId`.
+ * "me" is the real signed-in session, resolved to the rep row that shares
+ * their email — the same session cookie every other authenticated route
+ * already trusts (see lib/pulse/guard.ts). This used to ignore the session
+ * entirely and either use a pinned env var or whoever owned the most
+ * accounts, mislabeled as "isMe: true" — every real person who signed in saw
+ * the top rep's book presented as their own, not an absence of one. A
+ * genuinely logged-in rep who owns zero accounts now gets an honest zero
+ * (id -1, no match possible in `user_handled_by`), not somebody else's book.
+ *
+ * `PULSE_ME_USER_PID` is kept only for callers with no browser session at all
+ * — cron/background jobs (see lib/pulse/autopilot/healthDigest.ts) — never as
+ * a substitute for a real one.
  */
 export async function resolveMe(): Promise<Rep | null> {
+  const jar = await cookies();
+  const session = await sessionFrom(jar.get(SESSION_COOKIE)?.value);
+  if (session?.user?.email) {
+    const rep = await getRepByEmail(session.user.email);
+    if (rep) return rep;
+    return {
+      id: -1,
+      name: session.user.name || session.user.email,
+      initials: initialsOf(session.user.name || session.user.email, session.user.email),
+      email: session.user.email,
+      accounts: 0,
+      isMe: true,
+    };
+  }
   const pinned = Number(process.env.PULSE_ME_USER_PID);
   if (Number.isFinite(pinned) && pinned > 0) {
     const rep = await getRep(pinned);
     if (rep) return rep;
   }
-  const { rows } = await listReps(null, page({ limit: 1 }));
-  return rows[0] ? { ...rows[0], isMe: true } : null;
+  return null;
 }
 
 /**
@@ -305,6 +357,7 @@ export async function repActivity(
  */
 export async function repStandings(
   limit = 6,
+  meId: number | null = null,
 ): Promise<{ name: string; initials: string; healthy: number; scored: number; isMe: boolean }[]> {
   const owners = await query<{ admin_id: number; name: string | null; accounts: number }>(
     `SELECT h.admin_id, a.user_fname AS name, COUNT(*) accounts
@@ -334,8 +387,6 @@ export async function repStandings(
     rows.map((r) => ({ id: r.user_pid, hasOwner: true, ageDays: r.age_days })),
   );
 
-  const me = String(process.env.PULSE_ME_USER_PID ?? "").trim();
-
   return owners
     .map((o) => {
       const mine = rows.filter((r) => Number(r.admin_id) === Number(o.admin_id));
@@ -350,7 +401,10 @@ export async function repStandings(
         initials: name.slice(0, 2).toUpperCase(),
         healthy,
         scored: scored.length,
-        isMe: me ? String(o.admin_id) === me : false,
+        // The real signed-in rep's id, threaded in by the caller — not a
+        // pinned env var, which highlighted the same rep as "you" for every
+        // signed-in viewer regardless of who they actually were.
+        isMe: meId != null && Number(o.admin_id) === meId,
       };
     })
     // Accounts nobody has scored yet say nothing, so they sort last.

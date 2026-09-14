@@ -12,7 +12,7 @@
  * real and which are still the prototype's sample data.
  */
 window.PulseLive = (function () {
-  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, cardsError: null, boardLoaded: false, flightLoaded: false, autopilot: null, autopilotError: null, drafts: [], policy: null, manifest: null, motionRules: null, automations: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null, mockDismissed: false, audit: null, auditError: null, auditLoadingMore: false, gmailRecent: null, gmailRecentError: null, gmailRecentLoaded: false, activityDrafted: null, activityDraftedError: null, activitySuppressed: null, activitySuppressedError: null, doneCompany: null };
+  const state = { loaded: false, error: null, real: [], mock: [], me: null, signedInAs: null, ids: {}, cardsLoaded: false, cardsError: null, boardLoaded: false, flightLoaded: false, autopilot: null, autopilotError: null, drafts: [], policy: null, manifest: null, motionRules: null, automations: null, asked: [], digest: null, verdicts: {}, alerts: [], tagError: null, mockDismissed: false, audit: null, auditError: null, auditLoadingMore: false, gmailRecent: null, gmailRecentError: null, gmailRecentLoaded: false, activityDrafted: null, activityDraftedError: null, activitySuppressed: null, activitySuppressedError: null, doneCompany: null, healthFlagged: {}, healthFlagError: null };
 
   /**
    * Sample-data notice (static markup in app/pulse-shell.tsx, #mockbar).
@@ -179,7 +179,11 @@ window.PulseLive = (function () {
     // fact about the account, not a reason to keep showing invented ones.
     bag.CARDS.length = 0;
     if (!cards || !cards.length) {
-      state.mock.push("cards (no signals matched right now)");
+      // Genuinely empty is not mock — it is a real, successful answer of
+      // zero. Pushing it into state.mock used to make the banner claim
+      // "Sample data, not live: cards" for a page that had nothing fake on
+      // it at all. Logged as real instead, same as the non-empty branch.
+      state.real.push("cards (no signals matched right now)");
       return;
     }
     cards.forEach((c) => bag.CARDS.push(toCard(c)));
@@ -449,7 +453,7 @@ window.PulseLive = (function () {
           `${body.database || "MSG91"}${body.serverVersion ? " · MySQL " + body.serverVersion : ""}. Accounts, payments and signups are real.`);
       } else {
         paintDot("dbdot-msg91", "down", "MSG91 unreachable",
-          "Pulse cannot reach MSG91's database, so every account and number on screen is the prototype's sample data. The host is IP-bound — this copy may not be allowlisted.");
+          "Pulse cannot reach MSG91's database, so accounts and health are shown as empty/unavailable rather than guessed at. The host is IP-bound — this copy may not be allowlisted.");
       }
     } catch (err) {
       paintDot("dbdot-msg91", "down", "MSG91 unreachable", "The health check itself failed: " + err.message);
@@ -530,14 +534,15 @@ window.PulseLive = (function () {
    * literally `SELECT * FROM pulse_decision ORDER BY at DESC`. Filtered is the
    * suppressions from the same table, which is why nothing is ever deleted.
    *
-   * If the store is unreachable the prototype's sample rows stay on screen. A
-   * surface that has never decided anything should look like a prototype, not
-   * like a broken page.
+   * A genuinely empty answer ("nothing decided yet") must still set
+   * state.autopilot, not return early — an early return here used to leave
+   * it null forever, which reads identically to "still loading" downstream
+   * (matePending in pulse.js), so a real, empty month sat behind a permanent
+   * loading skeleton instead of the honest "hasn't decided anything" line.
    */
   async function loadAutopilot(bag, render) {
     try {
       const data = await get("/api/pulse/autopilot/decisions?limit=60");
-      if (!data.rows.length) return; // nothing decided yet — leave the sample
       // The rows are handed over whole rather than flattened into the feed
       // tuple: Activity expands each one to its evidence, confidence and
       // policy, and none of that survives a five-element array.
@@ -939,17 +944,22 @@ window.PulseLive = (function () {
   const retireMotionRule = (key, then) => ruleAction({ action: "retire", key }, then);
 
   /**
-   * Build a live automation from a sentence: plan it, provision its own agent
-   * on GTWY, subscribe it on cron-job.org if it needs a schedule, save it.
-   * Unlike compileRule, this one writes something real — a running automation
-   * — so it is only offered from the same screen, one button over.
+   * Build a live automation from a sentence: plan it, run every safety check,
+   * and — unless `preview` is true — provision its agent on GTWY, subscribe
+   * it on cron-job.org if it needs a schedule, and save it.
+   *
+   * With `preview: true` nothing is provisioned or saved; the response is
+   * what *would* be built, for a person to read before a second call (same
+   * arguments, preview: false) makes it real. This is the only confirm step
+   * "NOTHING RUNS UNTIL YOU CONFIRM IT" has ever actually needed — see
+   * showBuiltPreview() in pulse.js for where it is shown.
    */
-  async function buildAutomation(motion, english, cb, eventName) {
+  async function buildAutomation(motion, english, cb, eventName, preview) {
     try {
       const res = await fetch("/api/pulse/autopilot/build", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(eventName ? { motion, english, eventName } : { motion, english }),
+        body: JSON.stringify({ motion, english, ...(eventName ? { eventName } : {}), preview: Boolean(preview) }),
       });
       const out = await res.json();
       cb(out);
@@ -1374,6 +1384,39 @@ window.PulseLive = (function () {
       // just typed this and needs to know it did not stick.
       state.tagError = err.message;
       console.warn("[pulse] adding tags to " + name + " failed:", err.message);
+    }
+    render();
+  }
+
+  /**
+   * Flag the health score shown right now as wrong.
+   *
+   * Records disagreement (migrations/031_health_correction.sql) — it does not
+   * change the score. A rep who thinks a score is wrong had no way to say so
+   * anywhere in the product before this; the alternative was quietly
+   * distrusting every score with no record it ever happened.
+   */
+  async function flagHealthScore(name, bag, render) {
+    const id = state.ids[name];
+    const cust = bag.CUST && bag.CUST[name];
+    const h = cust && cust.health;
+    if (!id || !h) {
+      state.healthFlagError = "Nothing to flag — this account's score is not loaded yet.";
+      render();
+      return;
+    }
+    try {
+      await post("/api/pulse/health/correction", {
+        accountId: id,
+        score: h.score,
+        band: h.band,
+        decidedBy: h.decidedBy === "ai" ? "ai" : "formula",
+      });
+      state.healthFlagged[name] = true;
+      state.healthFlagError = null;
+    } catch (err) {
+      state.healthFlagError = err.message;
+      console.warn("[pulse] flagging health score for " + name + " failed:", err.message);
     }
     render();
   }
@@ -2211,6 +2254,11 @@ window.PulseLive = (function () {
       const d = await get("/api/pulse/board?scope=" + encodeURIComponent(scope));
       boards[scope] = d.board || null;
       if (boards[scope]) {
+        // The route only ever scores a first page (see app/api/pulse/board/route.ts).
+        // Carried on the board object itself so every renderer that already
+        // reads `board.*` picks this up without a second wire to thread through.
+        boards[scope].truncated = !!d.truncated;
+        boards[scope].pageLimit = d.limit;
         state.real.push(
           "health for " +
             d.board.total +
@@ -2281,6 +2329,7 @@ window.PulseLive = (function () {
     loadTags,
     addTags,
     removeTag,
+    flagHealthScore,
     loadContacts,
     addContact,
     removeContact,
@@ -2434,10 +2483,9 @@ window.PulseLive = (function () {
       } catch (err) {
         state.error = err.message;
         /* Bootstrap failed, so apply() never ran and every collection still
-           holds the prototype's sample data: eighteen invented companies in
-           BOOK, their invented health in CUST, seven invented cards. Saying
-           so in a dismissable banner was not enough — the banner is one line
-           above a full screen of fiction, and dismissing it left the fiction.
+           holds whatever sample data it started with. Saying so in a
+           dismissable banner was not enough — the banner is one line above a
+           full screen of fiction, and dismissing it left the fiction.
 
            Emptied instead. The surfaces already know how to render "nothing
            here", and the error state below says why there is nothing. */
@@ -2447,7 +2495,7 @@ window.PulseLive = (function () {
         state.cardsLoaded = true;
         state.mock = [];
         console.error(
-          "[pulse] live data unavailable, showing the prototype's sample data instead:",
+          "[pulse] live data unavailable — showing empty/error states, not sample data:",
           err.message,
         );
         render();
