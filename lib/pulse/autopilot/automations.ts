@@ -368,6 +368,31 @@ export async function setLive(key: string, live: boolean): Promise<boolean> {
 }
 
 /**
+ * Change the instructions the shared ruleWorker agent gets handed for this
+ * automation's rows, in place — no re-plan, no new query, no new cron job.
+ *
+ * `agent_task` is what actually reaches the agent as a variable (see
+ * judgeRow() in agents.ts); `executor_prompt` is stored as the same text so
+ * the two stay identical, which is what every automation built through the
+ * normal pipeline already assumes (see build.ts, where both are set from the
+ * same plan.executor_prompt). Free-hand text here is a person's own
+ * responsibility — nothing here can corrupt the worker's reply shape, since
+ * that is enforced by RuleWorkerSchema on the way back, but a confusing
+ * edit can still make its judgment less useful, same as writing a bad rule
+ * in English would.
+ */
+export async function updateExecutorPrompt(key: string, prompt: string): Promise<boolean> {
+  const trimmed = prompt.trim();
+  if (!trimmed) return false;
+  const res = await write(
+    `UPDATE pulse_automation SET executor_prompt = ?, agent_task = ?
+      WHERE automation_key = ? AND state <> 'retired'`,
+    [trimmed, trimmed, key],
+  );
+  return res.affectedRows > 0;
+}
+
+/**
  * Push an automation's next attempt out without counting it as a run.
  *
  * runOne() returns early when the breaker is tripped, and every early return

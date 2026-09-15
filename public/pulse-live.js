@@ -963,6 +963,21 @@ window.PulseLive = (function () {
     }
   }
 
+  /** Change what the shared ruleWorker agent is told for this automation's rows. */
+  async function editAutomationPrompt(key, prompt, then) {
+    try {
+      const res = await fetch("/api/pulse/autopilot/automations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "editPrompt", key, prompt }),
+      });
+      const out = await res.json();
+      if (then) then(out);
+    } catch (err) {
+      if (then) then({ ok: false, error: err.message });
+    }
+  }
+
   /** One automation's own recent decisions — the Automations tab's execution history. */
   async function loadAutomationHistory(key, cb) {
     try {
@@ -2257,6 +2272,7 @@ window.PulseLive = (function () {
     loadEventCatalogue,
     retireAutomation,
     deleteAutomation,
+    editAutomationPrompt,
     loadAutomationHistory,
     loadAutomations,
     loadAccountById,

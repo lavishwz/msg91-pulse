@@ -5,12 +5,13 @@ import {
   retireAutomation,
   deleteAutomationCompletely,
   setLive,
+  updateExecutorPrompt,
   type Motion,
 } from "@/lib/pulse/autopilot/automations";
 
 /**
  * GET    /api/pulse/autopilot/automations           — list, optionally ?motion=
- * POST   /api/pulse/autopilot/automations           — { action: "retire"|"setLive", key, live? }
+ * POST   /api/pulse/autopilot/automations           — { action: "retire"|"setLive"|"editPrompt", key, live?, prompt? }
  * DELETE /api/pulse/autopilot/automations?key=...   — tear down and remove the row entirely
  *
  * Management for pulse_automation rows — both the four built-in automations
@@ -18,7 +19,8 @@ import {
  * retired and keeps it as history while tearing down what it provisioned;
  * DELETE goes further and removes the row itself — for automations built
  * only to test the pipeline, that a dev wants gone rather than kept around
- * as a retired record.
+ * as a retired record. "editPrompt" changes what the shared ruleWorker agent
+ * is told for this automation's rows, in place — no re-plan, no new query.
  */
 export async function GET(req: Request) {
   const motion = (new URL(req.url).searchParams.get("motion") as Motion | null) ?? undefined;
@@ -34,9 +36,10 @@ export async function POST(req: Request) {
   if (!who.ok) return NextResponse.json({ ok: false, error: who.error }, { status: who.status });
 
   const b = (await req.json().catch(() => ({}))) as {
-    action?: "retire" | "setLive";
+    action?: "retire" | "setLive" | "editPrompt";
     key?: string;
     live?: boolean;
+    prompt?: string;
   };
   if (!b.key) return NextResponse.json({ ok: false, error: "key is required" }, { status: 400 });
 
@@ -52,6 +55,14 @@ export async function POST(req: Request) {
     return done
       ? NextResponse.json({ ok: true })
       : NextResponse.json({ ok: false, error: "no such active, runnable automation" }, { status: 404 });
+  }
+
+  if (b.action === "editPrompt") {
+    if (!b.prompt?.trim()) return NextResponse.json({ ok: false, error: "prompt is required" }, { status: 400 });
+    const done = await updateExecutorPrompt(b.key, b.prompt);
+    return done
+      ? NextResponse.json({ ok: true })
+      : NextResponse.json({ ok: false, error: "no such active automation" }, { status: 404 });
   }
 
   return NextResponse.json({ ok: false, error: "unknown action" }, { status: 400 });

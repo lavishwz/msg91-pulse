@@ -570,7 +570,7 @@ ASK["_notlive"]={q:"Your question",big:"—",
  cols:null,rows:[],act:undefined,
  st:["You",new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}),"not answered"]};
 
-const S={v:"now",scope:"me",tab:"activity",ask:"mine",teamTab:"won",from:null,cust:null,doneOpen:0,flightOpen:1,roomOpen:0,newRep:0,askTab:"ask",ostep:0,editRule:null,act:"all",openRow:null,sel:new Set(),doneIds:new Set(),snoozeIds:new Map(),lensAll:0,C:new Set(),M:new Set(),eaEvent:"",moOpen:new Set(),autoHist:null};
+const S={v:"now",scope:"me",tab:"activity",ask:"mine",teamTab:"won",from:null,cust:null,doneOpen:0,flightOpen:1,roomOpen:0,newRep:0,askTab:"ask",ostep:0,editRule:null,act:"all",openRow:null,sel:new Set(),doneIds:new Set(),snoozeIds:new Map(),lensAll:0,C:new Set(),M:new Set(),eaEvent:"",moOpen:new Set(),autoHist:null,editAutomationPrompt:null};
 /** Per-automation execution history, fetched on demand and cached by key. */
 const AUTOHIST={};
 const main=$("#main");
@@ -2919,6 +2919,21 @@ document.addEventListener("click",e=>{
    if(window.PulseLive)PulseLive.loadTriggers(PULSE_BAG,render,true);
    render();});
   return;}
+ const aped=t.closest("[data-aprompt-edit]");
+ if(aped){S.editAutomationPrompt=aped.dataset.apromptEdit;openAutomation(S.editAutomationPrompt);return;}
+ if(t.closest("[data-aprompt-cancel]")){
+  const was=S.editAutomationPrompt;S.editAutomationPrompt=null;if(was)openAutomation(was);return;}
+ const aps=t.closest("[data-aprompt-save]");
+ if(aps&&window.PulseLive&&PulseLive.editAutomationPrompt){
+  const ta=$("[data-aprompt-text]");
+  if(!ta||!ta.value.trim())return;
+  aps.disabled=true;aps.textContent="…";
+  PulseLive.editAutomationPrompt(aps.dataset.apromptSave,ta.value.trim(),(out)=>{
+   S.editAutomationPrompt=null;
+   if(!out||!out.ok){toastDone(null,false,"Could not save that prompt"+(out&&out.error?": "+out.error:"")+".");
+    openAutomation(aps.dataset.apromptSave);return;}
+   PulseLive.loadAutomations(()=>{render();openAutomation(aps.dataset.apromptSave);toastDone(null,true,"Prompt saved.");});});
+  return;}
  const aret=t.closest("[data-automation-retire]");
  if(aret&&window.PulseLive&&PulseLive.retireAutomation){
   aret.textContent="…";
@@ -3363,6 +3378,21 @@ function openOnb(){S.ostep=0;$("#onb").hidden=false;drawOnb();routeSync(false);
  /* Fetched when the flow opens rather than at boot: most sessions never see
     onboarding, and this is one more round trip on the first paint otherwise. */
  if(window.PulseLive)PulseLive.loadVoice(PULSE_BAG,drawOnb);}
+
+/* Opens onboarding once, the first time this person ever signs in.
+ * app/pulse-shell.tsx seeds window.PULSE_NEEDS_ONBOARDING from
+ * pulse_member.onboarded_at (migrations/032) before either script runs. Marked
+ * done as it opens rather than when the flow finishes or is closed, so closing
+ * it early still counts as seen — "Replay first-run setup" in the account menu
+ * still opens it by hand any time, unaffected by this. Guarded so a route
+ * change later in the same page load (popstate, a click into /onboarding)
+ * cannot fire it twice. */
+function maybeAutoOnboard(){
+ if(!window.PULSE_NEEDS_ONBOARDING)return;
+ window.PULSE_NEEDS_ONBOARDING=false;
+ openOnb();
+ fetch("/api/pulse/onboarding/complete",{method:"POST"}).catch(()=>{});
+}
 
 /* Gmail, Google Calendar and Slack, via ViaSocket. Three distinct apps, three
    distinct ViaSocket plugin ids (from plug-service.viasocket.com/plugins/search),
@@ -3992,10 +4022,23 @@ function openAutomation(key){
      :"Turned off — not currently running."}</p>
   </div>
 
-  <h4 style="margin-top:18px">The prompt its worker judges each row with</h4>
-  <div class="cl2" style="display:block;padding:12px 14px;background:var(--sink);border-radius:8px">
+  <h4 style="margin-top:18px;display:flex;align-items:center;gap:10px">
+   <span>The prompt its worker judges each row with</span>
+   ${canEditRules()&&S.editAutomationPrompt!==a.key
+    ?`<span class="pen" data-aprompt-edit="${a.key}" style="cursor:pointer;font-weight:400;font-size:12.5px">edit</span>`:""}
+  </h4>
+  ${S.editAutomationPrompt===a.key?`<div class="cl2" style="display:block;padding:12px 14px;background:var(--sink);border-radius:8px">
+   <textarea data-aprompt-text style="width:100%;min-height:140px;font:inherit;font-size:12.5px;line-height:1.7;
+    padding:10px;border:1px solid var(--line2);border-radius:6px;background:var(--raise);color:var(--ink);
+    resize:vertical">${(a.executorPrompt||"").replace(/</g,"&lt;")}</textarea>
+   <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">This goes straight to the same AI worker every automation
+    shares — a confusing rewrite won't break anything, but its judgment on this rule's rows will only be as good as this text.</p>
+   <span class="row" style="margin-top:10px;gap:8px">
+    <button class="go solid" data-aprompt-save="${a.key}" style="font-size:12.5px;padding:5px 12px">Save →</button>
+    <button class="go" data-aprompt-cancel="1" style="font-size:12.5px;padding:5px 12px">Cancel</button></span>
+  </div>`:`<div class="cl2" style="display:block;padding:12px 14px;background:var(--sink);border-radius:8px">
    <p style="margin:0;font-size:12.5px;color:var(--ink2);line-height:1.7;white-space:pre-wrap">${esc(a.executorPrompt||"")}</p>
-  </div>
+  </div>`}
 
   <div class="row" style="margin-top:20px">
    ${canEditRules()?`<button class="go" style="color:var(--watch)" data-automation-retire="${a.key}">${a.live?"Turn it off":"Retire it"}</button>
@@ -4753,7 +4796,7 @@ if (window.PulseLive) {
   try { render(); } finally { /* left up on purpose — see above */ }
   window.PulseLive.boot(PULSE_BAG, render)
    .then(routeGo, routeGo)
-   .then(()=>{ ROUTING = false; });
+   .then(()=>{ ROUTING = false; maybeAutoOnboard(); });
   loadPinsFromServer();
   /* Triggers are loaded at boot rather than when the Connections tab opens,
      even though that is the only tab that draws them. A subscribed trigger is
@@ -4766,4 +4809,5 @@ if (window.PulseLive) {
   window.PulseLive.startTriggerPolling(render);
 } else {
   routeGo();
+  maybeAutoOnboard();
 }
