@@ -32,7 +32,17 @@ function safeNext(value: string | null): string {
   return value;
 }
 
-export default function LoginForm({ referenceId }: { referenceId: string }) {
+export default function LoginForm({
+  referenceId,
+  devLoginAvailable,
+}: {
+  referenceId: string;
+  /** Server-decided (NODE_ENV), never true in a production build — see
+   *  the dev-login block below and app/api/auth/dev-login/route.ts, which
+   *  independently refuses outside development too. Two checks, not one,
+   *  because a client-only flag is one bad build config away from shipping. */
+  devLoginAvailable: boolean;
+}) {
   const params = useSearchParams();
   /* "working" covers the token exchange only. A fresh arrival starts at
      "widget" so the container the MSG91 script renders into is in the layout,
@@ -40,6 +50,9 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
   const [status, setStatus] = useState<"working" | "widget" | "error">("working");
   const [error, setError] = useState<string | null>(null);
   const started = useRef(false);
+  const [devEmail, setDevEmail] = useState("");
+  const [devBusy, setDevBusy] = useState(false);
+  const [devError, setDevError] = useState<string | null>(null);
 
   useEffect(() => {
     if (started.current) return;
@@ -180,6 +193,29 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
     document.body.appendChild(script);
   }, [params, referenceId]);
 
+  async function devLogin() {
+    const email = devEmail.trim();
+    if (!email || devBusy) return;
+    setDevBusy(true);
+    setDevError(null);
+    try {
+      const res = await fetch("/api/auth/dev-login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(body.error ?? `Sign-in failed (${res.status})`);
+      // Same full navigation as case 1 above, and for the same reason: what
+      // runs past this point is pulse.js's own bootstrap, not something the
+      // client router re-runs on a route swap.
+      window.location.href = safeNext(params.get("next"));
+    } catch (err) {
+      setDevBusy(false);
+      setDevError(err instanceof Error ? err.message : "Sign-in failed");
+    }
+  }
+
   return (
     <>
       {/* The widget renders itself into an element whose id is the reference id.
@@ -210,6 +246,42 @@ export default function LoginForm({ referenceId }: { referenceId: string }) {
               Still stuck? Message #pulse-support.
             </span>
           </div>
+        </div>
+      )}
+      {devLoginAvailable && (
+        <div
+          className="authdev"
+          style={{ marginTop: 18, paddingTop: 18, borderTop: "1px solid var(--line, #e4e2dc)" }}
+        >
+          <p style={{ margin: 0, fontSize: 13, color: "var(--muted, #767676)" }}>
+            Development only — the widget above needs this domain on MSG91&apos;s
+            allowed-origin list to render, which a local machine usually is not.
+            Sign in as an already-invited email instead:
+          </p>
+          <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
+            <input
+              type="email"
+              value={devEmail}
+              onChange={(e) => setDevEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && devLogin()}
+              placeholder="you@msg91.com"
+              disabled={devBusy}
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                border: "1px solid var(--line2, #d8d3c8)",
+                borderRadius: 6,
+                font: "inherit",
+                fontSize: 14,
+              }}
+            />
+            <button type="button" className="btn" onClick={devLogin} disabled={devBusy || !devEmail.trim()}>
+              {devBusy ? "…" : "Dev sign-in"}
+            </button>
+          </div>
+          {devError && (
+            <p style={{ margin: "8px 0 0", fontSize: 13, color: "var(--watch, #a8462a)" }}>{devError}</p>
+          )}
         </div>
       )}
     </>

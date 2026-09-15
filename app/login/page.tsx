@@ -15,6 +15,13 @@ export const metadata = { title: "Sign in · MSG91 Pulse" };
 
 export default function LoginPage() {
   const referenceId = (process.env.REFERENCEID ?? "").trim();
+  // The proxy-auth widget below renders empty on a domain it does not
+  // recognise — which is most machines running this locally, since nobody
+  // registers a dev box on that allowed-origin list. Outside of a production
+  // build, LoginForm also offers a plain email fallback that goes through the
+  // same invite check and session cookie, so that config gap somewhere else
+  // is never the reason nobody can sign in to test anything here.
+  const devLoginAvailable = process.env.NODE_ENV !== "production";
 
   return (
     <main className="authpage">
@@ -32,7 +39,7 @@ export default function LoginPage() {
         {/* useSearchParams() bails out of prerendering, so the client half sits
             under a boundary of its own. */}
         <Suspense fallback={<Loader className="auth-loader" label="Loading the sign-in widget" />}>
-          <LoginForm referenceId={referenceId} />
+          <LoginForm referenceId={referenceId} devLoginAvailable={devLoginAvailable} />
         </Suspense>
       </div>
     </main>
