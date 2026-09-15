@@ -110,45 +110,9 @@ export async function rulesByMotion(): Promise<Record<Motion, MotionRule[]>> {
   return out;
 }
 
-const slug = (t: string) =>
-  t.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 50) || "rule";
-
 function nextVersion(v: string): string {
   const n = Number((v ?? "v1").replace(/^v/, "")) || 1;
   return `v${n + 1}`;
-}
-
-export async function addRule(
-  motion: Motion,
-  english: string,
-  machine: Partial<MotionRule> & { live?: boolean },
-  actor: string,
-): Promise<MotionRule> {
-  const key = `rule.${motion}.${slug(english)}`;
-
-  // A rule only runs when it has a trigger and an action — and when a person
-  // confirmed the translation. Both halves matter: the compiler proposes, and
-  // somebody who understands the business agrees. Without either, the rule is
-  // saved and shown, marked as not running, which is honest rather than a trap.
-  const runnable = Boolean(machine.when && machine.then?.do);
-  const live = Boolean(machine.live && runnable);
-
-  const body = {
-    motion,
-    english,
-    when: machine.when ?? "",
-    if: machine.if ?? [],
-    then: machine.then ?? { act: "card", do: "raise_card" },
-    stop_if: machine.stopIf ?? [],
-    live,
-  };
-  await write(
-    `INSERT INTO pulse_policy (version, policy_key, kind, body, note, state, source)
-     VALUES ('v1', ?, 'rule', ?, ?, 'active', 'human')
-     ON DUPLICATE KEY UPDATE body = VALUES(body), state = 'active', note = VALUES(note)`,
-    [key, JSON.stringify(body), `added by ${actor}`],
-  );
-  return { ...(body as unknown as MotionRule), key, version: "v1", state: "active", source: "human", live };
 }
 
 /** Editing writes a new version and retires the old one — nothing is overwritten. */

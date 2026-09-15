@@ -62,7 +62,6 @@ const GROUPS: { group: string; needed: "required" | "optional"; names: string[] 
       "GTWY_AGENT_OUTREACH_DRAFTER",
       "GTWY_AGENT_ACCOUNT_REVIEW",
       "GTWY_AGENT_PORTFOLIO_DIGEST",
-      "GTWY_AGENT_RULE_COMPILER",
     ],
   },
   {

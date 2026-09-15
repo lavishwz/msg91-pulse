@@ -43,11 +43,6 @@ export const AGENTS = {
     env: "GTWY_AGENT_PORTFOLIO_DIGEST",
     fallback: "6aa03802b54ce2b5442e1346",
   },
-  ruleCompiler: {
-    slug: "rule-compiler",
-    env: "GTWY_AGENT_RULE_COMPILER",
-    fallback: "6aa0eba5b54ce2b5442f3601",
-  },
   /* One worker for every automation, rather than an agent per rule. The rule
      goes in as a variable, so a new rule is a new row in pulse_automation and
      no change on GTWY at all. */
@@ -170,31 +165,6 @@ export const PortfolioDigestSchema = z.object({
   watch: z.array(z.string()),
   confidence: z.number().min(0).max(1),
 });
-
-const ConditionSchema = z.object({
-  field: z.string(),
-  op: z.enum([">=", ">", "<=", "<", "==", "!=", "in"]),
-  value: z.string(),
-});
-
-export const CompiledRuleSchema = z.object({
-  can_compile: z.boolean(),
-  when: z.string(),
-  conditions: z.array(ConditionSchema),
-  stop_if: z.array(ConditionSchema),
-  act: z.enum(["act", "card", ""]),
-  do: z.enum(["score", "raise_card", "nurture", "suppress", "draft", "wait", "notify", ""]),
-  reason: z
-    .enum(["your_judgment", "your_voice", "your_hands", "your_approval", "your_knowledge"])
-    .nullable(),
-  sla_minutes: z.number().int().nullable(),
-  days: z.number().int().nullable(),
-  plain_english: z.string(),
-  missing: z.array(z.string()),
-  confidence: z.number().min(0).max(1),
-});
-
-export type CompiledRule = z.infer<typeof CompiledRuleSchema>;
 
 /**
  * What the planner returns for one English rule: a full, runnable build plan.
@@ -612,27 +582,6 @@ export const RULE_FIELDS: Record<string, string> = {
   days_since_payment: "days since the last real customer payment",
   spend_change_pct: "spend this window against the one before, as a percentage",
 };
-
-/**
- * Compile one sentence into something the runner can evaluate.
- *
- * Called when a rule is saved, never at decision time. The result is shown to
- * the person who wrote it, in plain English, and nothing runs until they
- * confirm — the agent proposes, a person decides.
- */
-export async function compileRule(
-  english: string,
-  motion: string,
-): Promise<AgentCall<CompiledRule>> {
-  return callAgent("ruleCompiler", CompiledRuleSchema, "Translate this rule.", {
-    today: today(),
-    motion,
-    english,
-    fields: Object.entries(RULE_FIELDS)
-      .map(([k, v]) => `- ${k} — ${v}`)
-      .join("\n"),
-  });
-}
 
 /* ── the rule worker ────────────────────────────────────────────────────── */
 

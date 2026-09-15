@@ -1889,7 +1889,8 @@ function vAuto(){
     :shown.length?`<div class="feed" style="margin-top:14px">${shown.map(r=>
      `<div class="item" data-decision="${r.signalKey}::${r.agent}" style="cursor:pointer" role="button" tabindex="0">
       <time title="${esc(whenFull(r.at))}">${esc(whenAbs(r.at))}</time>
-      <div class="bd"><b>${r.title}</b><span>${r.detail}</span></div>
+      <div class="bd"><b>${r.title}</b><span>${r.detail}</span>${
+       r.automationName?`<em style="display:block;font-style:normal;font-size:11.5px;color:var(--ink2);margin-top:3px">From: ${r.automationName}</em>`:""}</div>
       ${(t2=>`<span class="tg" data-t="${r.kind}" data-tip="${t2[0]}||${t2[1]}">${r.tag}</span>`)(TIP[r.tag]||[r.tag,""])}
       <span class="chev">→</span></div>`).join("")}</div>`
      :`<p style="margin:22px 0 0;color:var(--ink2)">Nothing under this filter.</p>`}
@@ -2850,21 +2851,6 @@ document.addEventListener("click",e=>{
  /* Saving, testing and turning off a motion rule. All three go through the
     store: a rule that only changed on screen would be a lie the next time
     anyone loaded the page. */
- /* Writing a rule is three steps: type it, read back what Pulse understood,
-    then decide whether to turn it on. The compiler runs once, here — never when
-    a rule is being evaluated. */
- const rcp=t.closest("[data-rule-compile]");
- if(rcp&&window.PulseLive&&PulseLive.compileRule){
-  const ta=$("#rule-en");
-  if(!ta||!ta.value.trim())return;
-  rcp.disabled=true;rcp.textContent="reading…";
-  const box=$("#rule-compiled");
-  if(box)box.innerHTML=`<p style="color:var(--muted);font-size:13px">Working out what that means…</p>`;
-  PulseLive.compileRule(rcp.dataset.ruleCompile,ta.value.trim(),c=>{
-   rcp.disabled=false;rcp.textContent="Read it back to me →";
-   if(c)showCompiled(rcp.dataset.ruleCompile,ta.value.trim(),c);
-   else if(box)box.innerHTML=`<p style="color:var(--watch);font-size:13px">Could not read that back. Try again, or save it without running it.</p>`;});
-  return;}
  /* Building a full automation (its own SQL/cron/event, an executor agent —
     everything "Read it back to me" above cannot do) is two calls to the same
     endpoint: preview=true plans and runs every safety check with nothing
@@ -2985,17 +2971,6 @@ document.addEventListener("click",e=>{
    if(name){$("#pk").hidden=true;openCompany(name);}
    else{osa.disabled=false;osa.textContent="Open account →";
     toastDone(null,false,"Could not open that account — it may have been removed.");}});
-  return;}
- const rsn=t.closest("[data-rule-save-new]");
- if(rsn&&window.PulseLive&&PulseLive.addMotionRule){
-  const cm=window.__compiled;
-  const ta=$("#rule-en");
-  const english=(ta&&ta.value.trim())||(cm&&cm.english);
-  if(!english)return;
-  rsn.disabled=true;rsn.textContent="…";
-  PulseLive.addMotionRule(rsn.dataset.ruleSaveNew,english,
-   cm&&cm.c&&cm.c.can_compile?{...cm.c,live:rsn.dataset.live==="1"}:{live:false},
-   ()=>{window.__compiled=null;$("#ov").hidden=true;render();});
   return;}
  const rsv=t.closest("[data-rule-save]");
  if(rsv&&window.PulseLive&&PulseLive.saveMotionRule){
@@ -3801,34 +3776,7 @@ function openNewRule(motion,manifestSide){
  const explainer=!forManifest
   ?`<p class="sub">Write it as a sentence you could say out loud to a new teammate.
      Pulse will read it back as the check it would actually perform — if that is not
-     what you meant, change the words rather than the machinery.</p>
-    <details style="margin:14px 0 0;font-size:13px;color:var(--ink2)">
-     <summary style="cursor:pointer;color:var(--br);font-weight:500">What Pulse can and can't write a rule to do</summary>
-     <div style="margin-top:10px;line-height:1.6">
-      <b>It can:</b> check real signup/account/payment fields (score, confidence,
-      mobile number, free-mail domain, days since signup or last payment, spend
-      change, and the rest of what MSG91's own tables hold) against numbers,
-      text or a short list of choices, on a schedule or the moment something
-      happens — and then score a signup, raise a card for a person, start or
-      hold a message, or just notify someone. Nothing is sent without a step a
-      person can see and, on most paths, approve first.<br><br>
-      <b>It can't:</b> write, update or delete anything in MSG91's database —
-      every automation only ever reads. It can't invent a field nothing in the
-      schema actually has (a "company name" column does not exist, for
-      example — Pulse will say so rather than guess). And a connected inbox
-      (Gmail/Calendar/Slack) only ever hands a rule one flat summary line per
-      event, not a structured message it can pick sender or subject out of —
-      so "when an email arrives" works, "when an email from a VIP account
-      arrives" only works as well as matching words in that one line.<br><br>
-      <b>"Don't"/"never" rules:</b> written as an explicit condition — "never
-      message an account that already has an owner", not just "be careful with
-      owned accounts" — Pulse tries to compile it into a check it runs in code
-      before anything acts, so it is a hard stop rather than a request the AI
-      could talk itself out of. It will show you below exactly what it
-      understood; if it could not turn "don't do this" into a real condition,
-      it says so instead of quietly hoping the wording was enough.
-     </div>
-    </details>`
+     what you meant, change the words rather than the machinery.</p>`
   :manifestSide==="yes"
   ?`<p class="sub">Write the thing Autopilot may now do on its own, as one sentence — for
      example "Run subject-line experiments and promote the winner." Pulse turns this
@@ -3840,12 +3788,9 @@ function openNewRule(motion,manifestSide){
      it, because there is no query or schedule a "don't" sentence like this maps to.</p>`;
  const footer=!forManifest
   ?`<p style="font-size:12.5px;color:var(--muted);margin:14px 0 0">
-     "Read it back to me" is the fast check — a score, a field, a threshold. If the rule needs its own
-     database query, a schedule or an event, or a person to judge each row, build it as an automation instead —
-     either way, nothing runs until you have read back what Pulse understood and said yes.</p>
+     Nothing runs until you have read back what Pulse understood and said yes.</p>
     <div class="row" style="margin-top:10px">
-     <button class="go solid" data-rule-compile="${motion}">Read it back to me →</button>
-     <button class="go" data-rule-build-preview="${motion}">Build it as an automation →</button>
+     <button class="go solid" data-rule-build-preview="${motion}">Build it as an automation →</button>
      <button class="go" id="ovx">Cancel</button></div>`
   :`<div class="row" style="margin-top:10px">
      <button class="go solid" data-manifest-add="${manifestSide}">${
@@ -3885,61 +3830,6 @@ function startBuildLoader(box){
  paint();
  const id=setInterval(()=>{i++;paint();},2200);
  return ()=>clearInterval(id);
-}
-
-/**
- * Show what the compiler understood, in the reader's own language.
- *
- * This is the only screen between a sentence and an automation, so it says the
- * check in words rather than in fields, and it offers two ways to save. A rule
- * that is written down but not running is useful; a rule that looks live and
- * never fires is a trap.
- */
-function showCompiled(motion,english,c){
- const box=$("#rule-compiled"); if(!box) return;
- const names={score:"the signup's score",confidence:"how sure the AI is",verdict:"what the AI decided",
-  motion:"how they arrived",entity:"which entity",is_free_mail:"a free mailbox",mobile_present:"a mobile number",
-  accounts_on_domain:"accounts on the same domain",domain_matches_known_customer:"the domain already pays us",
-  domain_matches_competitor:"the domain is a competitor",signup_step_reached:"how far they got in signup",
-  industry:"their industry",owner_auto_assigned:"somebody owns the account",days_since_signup:"days since they signed up",
-  messages_sent:"messages they have sent",days_since_payment:"days since their last payment",
-  spend_change_pct:"spend against the window before"};
- const ops={">=":"is at least","<=":"is at most",">":"is over","<":"is under","==":"is","!=":"is not","in":"is one of"};
- const doing={score:"score the signup",raise_card:"put a card in front of a person",
-  nurture:"start the message sequence",suppress:"file it under Suppressed",
-  draft:"write a message and hold it",wait:"wait",notify:"tell someone"};
- const line=x=>`${names[x.field]||x.field} ${ops[x.op]||x.op} <b>${x.value}</b>`;
-
- if(!c.can_compile){
-  box.innerHTML=`<div class="cl2" style="display:block;padding:14px 16px;background:var(--sink);border-radius:8px">
-    <b style="color:var(--watch)">Pulse cannot check this yet.</b>
-    <p style="margin:8px 0 0;color:var(--ink2);font-size:13.5px">It would need ${
-     c.missing.map(m=>`<b>${m}</b>`).join(", and ")}.</p>
-    <p style="margin:8px 0 0;color:var(--muted);font-size:12.5px">You can still save it. It will sit with the
-     other rules, marked as not running, so nobody believes it is protecting them.</p></div>
-   <div class="row" style="margin-top:14px">
-    <button class="go" data-rule-save-new="${motion}" data-live="0">Save it anyway →</button>
-    <button class="go" id="ovx2" onclick="document.getElementById('rule-en').focus()">Rewrite it</button></div>`;
-  window.__compiled={motion,english,c};return;}
-
- box.innerHTML=`<div class="cl2" style="display:block;padding:14px 16px;background:var(--sink);border-radius:8px">
-   <div class="lab">What Pulse would check</div>
-   <div style="font-size:14px;color:var(--ink);line-height:1.9;margin-top:8px">
-    <b>When</b> ${String(c.when).replace(/_/g," ")}<br>
-    ${c.conditions.length?`<b>and</b> ${c.conditions.map(line).join("<br><b>and</b> ")}<br>`:""}
-    ${c.stop_if.length?`<b>unless</b> ${c.stop_if.map(line).join("<br><b>or</b> ")}<br>`:""}
-    <b>then</b> ${doing[c.do]||c.do}${c.sla_minutes?` within ${c.sla_minutes} minutes`:""}${
-     c.days?` for ${c.days} days`:""}
-    ${c.act==="card"?" — a person decides":" — on its own, and logged"}
-   </div>
-   ${c.confidence<0.7?`<p style="margin:10px 0 0;color:var(--watch);font-size:12.5px">
-     Pulse is only ${c.confidence.toFixed(2)} sure it read this the way you meant. Worth rewording.</p>`:""}
-  </div>
-  <div class="row" style="margin-top:14px">
-   <button class="go solid" data-rule-save-new="${motion}" data-live="1">That is right — turn it on →</button>
-   <button class="go" data-rule-save-new="${motion}" data-live="0">Save, but do not run it yet</button>
-   <button class="go" id="ovx">Cancel</button></div>`;
- window.__compiled={motion,english,c};
 }
 
 /**
@@ -4334,10 +4224,17 @@ function openPanel(kind,arg){
        does want it (debugging a regression against a specific version) —
        behind a hover, an (i) rather than a paragraph everyone had to read
        past to get to the account. */
+    /* d.automationName comes straight from the decision row itself
+       (policy_version resolved against pulse_automation server-side) — it
+       works for retired automations and every signalKey shape, unlike the
+       old fallback below, which only matched a live automation whose key
+       happened to already be sitting in state.automations and a signalKey
+       shaped exactly "auto:<key>:<id>". Kept as a fallback for a decision
+       written before this field existed. */
     const p=String(d.signalKey||"").split(":");
     const autos=(window.PulseLive&&PulseLive.state.automations)||[];
     const auto=p[0]==="auto"?autos.find(a=>a.key===p[1]):null;
-    const label=auto?(auto.summary||auto.english):d.agent;
+    const label=d.automationName||(auto?(auto.summary||auto.english):d.agent);
     const policyNote=`Policy ${d.policyVersion||"—"}${d.model?`, decided on ${d.model}`:""}.`+
      (d.agent==="signup-triage"?" The score came from the agent; the verdict came from the motion's rules, applied in code.":"");
     return `<h4>The automation behind it</h4>

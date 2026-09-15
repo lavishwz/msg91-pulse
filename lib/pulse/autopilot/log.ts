@@ -1,6 +1,7 @@
 import { read, write } from "@/lib/store";
 import { query } from "@/lib/db";
 import { accountName } from "@/lib/pulse/domain";
+import { getAutomationsByKeys } from "./automations";
 
 /**
  * The AI log, read back.
@@ -54,6 +55,17 @@ export type LogRow = {
    */
   draftId: number | null;
   draftHeld: boolean;
+  /**
+   * Which automation produced this row, when it was a custom rule someone
+   * built rather than one of the fixed always-on agents. `policy_version` on
+   * a custom automation's decision *is* the automation's own key (see
+   * automation-runner.ts's writeDecision) — true since the first automations
+   * commit, so this resolves old decisions the same as new ones. Null for
+   * signup-triage/account-review/portfolio-digest/human/system/rules rows,
+   * which were never an automation someone built.
+   */
+  automationKey: string | null;
+  automationName: string | null;
 };
 
 type Raw = {
@@ -77,6 +89,11 @@ type Raw = {
   state: string | null;
   draft_id: number | null;
   draft_status: string | null;
+  /** Filled in by resolveAutomations() before shape() runs — not part of the
+   *  SQL SELECT, same pattern as subject_name being filled by
+   *  resolveSubjectNames(). */
+  automation_key?: string | null;
+  automation_name?: string | null;
 };
 
 const SELECT = `
@@ -186,7 +203,7 @@ function shape(r: Raw): LogRow {
       tag: "escalated", kind: "act", verdict: r.verdict, score: null, confidence: null,
       policyVersion: r.policy_version, model: null, agent: r.agent,
       reasons: [], held: Boolean(r.held), errorCode: r.error_code, isAI: false,
-      draftId: null, draftHeld: false,
+      draftId: null, draftHeld: false, automationKey: null, automationName: null,
     };
   }
 
@@ -201,7 +218,7 @@ function shape(r: Raw): LogRow {
       tag: "acted", kind: "ok", verdict: r.verdict, score: null, confidence: null,
       policyVersion: r.policy_version, model: null, agent: r.agent,
       reasons, held: Boolean(r.held), errorCode: r.error_code, isAI: false,
-      draftId: null, draftHeld: false,
+      draftId: null, draftHeld: false, automationKey: null, automationName: null,
     };
   }
 
@@ -219,7 +236,7 @@ function shape(r: Raw): LogRow {
         .filter(Boolean)
         .concat(reasons),
       held: Boolean(r.held), errorCode: r.error_code, isAI: true,
-      draftId: null, draftHeld: false,
+      draftId: null, draftHeld: false, automationKey: null, automationName: null,
     };
   }
   if (r.agent === "portfolio-digest") {
@@ -233,7 +250,7 @@ function shape(r: Raw): LogRow {
       policyVersion: r.policy_version, model: r.model, agent: r.agent,
       reasons: plays.map((p) => `${p.worth ?? ""} — ${p.what ?? ""}`.trim()),
       held: Boolean(r.held), errorCode: r.error_code, isAI: true,
-      draftId: null, draftHeld: false,
+      draftId: null, draftHeld: false, automationKey: null, automationName: null,
     };
   }
   const domain = (inp.email_domain as string) || "";
@@ -308,6 +325,8 @@ function shape(r: Raw): LogRow {
     isAI: r.agent !== "human",
     draftId: r.draft_id === null ? null : Number(r.draft_id),
     draftHeld: r.draft_status === "held",
+    automationKey: r.automation_key ?? null,
+    automationName: r.automation_name ?? null,
   };
 }
 
@@ -335,6 +354,22 @@ async function resolveSubjectNames(rows: Raw[]): Promise<Map<string, string>> {
     ids,
   ).catch(() => []);
   return new Map(found.map((a) => [String(a.user_pid), accountName(a)]));
+}
+
+/**
+ * Which automation each row belongs to, batched rather than one lookup per
+ * row. `policy_version` is the automation's own key for a rule-worker
+ * decision (see LogRow.automationKey above); for every other agent it is a
+ * real policy version like "v3", which simply matches no automation and is
+ * left out of the map — this never needs to know up front which rows are
+ * which.
+ */
+async function resolveAutomations(rows: Raw[]): Promise<Map<string, { key: string; name: string }>> {
+  const keys = rows.map((r) => r.policy_version).filter((k): k is string => !!k);
+  const found = await getAutomationsByKeys(keys);
+  const out = new Map<string, { key: string; name: string }>();
+  for (const [key, a] of found) out.set(key, { key, name: a.summary || a.english });
+  return out;
 }
 
 /** The Live and AI log feeds: every decision, newest first. */
@@ -371,6 +406,12 @@ export async function decisions(limit = 40, before?: string, automationKey?: str
         );
   const names = await resolveSubjectNames(rows);
   for (const r of rows) if (!r.subject_name && r.subject_id) r.subject_name = names.get(r.subject_id) ?? null;
+  const autos = await resolveAutomations(rows);
+  for (const r of rows) {
+    const a = r.policy_version ? autos.get(r.policy_version) : undefined;
+    r.automation_key = a?.key ?? null;
+    r.automation_name = a?.name ?? null;
+  }
   return rows.map(shape);
 }
 
@@ -382,6 +423,12 @@ export async function humanActs(limit = 25): Promise<LogRow[]> {
   );
   const names = await resolveSubjectNames(rows);
   for (const r of rows) if (!r.subject_name && r.subject_id) r.subject_name = names.get(r.subject_id) ?? null;
+  const autos = await resolveAutomations(rows);
+  for (const r of rows) {
+    const a = r.policy_version ? autos.get(r.policy_version) : undefined;
+    r.automation_key = a?.key ?? null;
+    r.automation_name = a?.name ?? null;
+  }
   return rows.map(shape);
 }
 
@@ -404,6 +451,12 @@ export async function suppressed(limit = 25): Promise<LogRow[]> {
   );
   const names = await resolveSubjectNames(rows);
   for (const r of rows) if (!r.subject_name && r.subject_id) r.subject_name = names.get(r.subject_id) ?? null;
+  const autos = await resolveAutomations(rows);
+  for (const r of rows) {
+    const a = r.policy_version ? autos.get(r.policy_version) : undefined;
+    r.automation_key = a?.key ?? null;
+    r.automation_name = a?.name ?? null;
+  }
   return rows.map(shape);
 }
 
@@ -428,6 +481,12 @@ export async function draftedForPerson(limit = 25): Promise<LogRow[]> {
   );
   const names = await resolveSubjectNames(rows);
   for (const r of rows) if (!r.subject_name && r.subject_id) r.subject_name = names.get(r.subject_id) ?? null;
+  const autos = await resolveAutomations(rows);
+  for (const r of rows) {
+    const a = r.policy_version ? autos.get(r.policy_version) : undefined;
+    r.automation_key = a?.key ?? null;
+    r.automation_name = a?.name ?? null;
+  }
   return rows.map(shape);
 }
 

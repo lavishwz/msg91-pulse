@@ -910,65 +910,6 @@ window.PulseLive = (function () {
   }
 
   const saveMotionRule = (key, english, then) => ruleAction({ action: "edit", key, english }, then);
-
-  /**
-   * Save a new rule, with whatever the compiler worked out.
-   *
-   * `compiled` carries the trigger, conditions and action in the shape the API
-   * expects, plus whether the person said to turn it on. Without it the rule is
-   * still saved — written down, visible, and marked as not running.
-   */
-  const addMotionRule = (motion, english, compiled, then) =>
-    ruleAction(
-      {
-        action: "add",
-        motion,
-        english,
-        machine: compiled && compiled.can_compile
-          ? {
-              when: compiled.when,
-              if: compiled.conditions.map((c) => [c.field, c.op, coerce(c.value)]),
-              stopIf: (compiled.stop_if || []).map((c) => [c.field, c.op, coerce(c.value)]),
-              then: {
-                act: compiled.act,
-                do: compiled.do,
-                reason: compiled.reason || undefined,
-                sla_minutes: compiled.sla_minutes || undefined,
-                days: compiled.days || undefined,
-              },
-              live: Boolean(compiled.live),
-            }
-          : { live: false },
-      },
-      then,
-    );
-
-  /**
-   * The compiler returns every value as text, because a schema cannot know
-   * which fields are numbers. The runner compares numerically, so "80" has to
-   * become 80 — otherwise a score of 92 fails a >= "80" test.
-   */
-  function coerce(v) {
-    if (v === "true") return true;
-    if (v === "false") return false;
-    if (v !== "" && !isNaN(Number(v))) return Number(v);
-    return v;
-  }
-
-  /** Turn a sentence into a check. Once, at writing time. */
-  async function compileRule(motion, english, cb) {
-    try {
-      const res = await fetch("/api/pulse/autopilot/rules", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "compile", motion, english }),
-      });
-      const out = await res.json();
-      cb(out.ok ? out.compiled : null);
-    } catch (err) {
-      cb(null);
-    }
-  }
   const retireMotionRule = (key, then) => ruleAction({ action: "retire", key }, then);
 
   /**
@@ -2312,7 +2253,6 @@ window.PulseLive = (function () {
     loadFlight,
     loadAsked,
     searchQuestions,
-    compileRule,
     buildAutomation,
     loadEventCatalogue,
     retireAutomation,
@@ -2330,7 +2270,6 @@ window.PulseLive = (function () {
     logWhatHappened,
     loadMotionRules,
     saveMotionRule,
-    addMotionRule,
     retireMotionRule,
     testMotionRule,
     loadAlerts,

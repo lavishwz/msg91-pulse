@@ -1,17 +1,19 @@
 import { NextResponse } from "next/server";
 import { writer } from "@/lib/pulse/guard";
-import { rulesByMotion, addRule, editRule, retireRule, testAgainstHistory, type Motion } from "@/lib/pulse/autopilot/rules";
-import { compileRule } from "@/lib/pulse/agents";
+import { rulesByMotion, editRule, retireRule, testAgainstHistory, type Motion } from "@/lib/pulse/autopilot/rules";
 
 /**
  * GET  /api/pulse/autopilot/rules            — the four motions' rules
  * POST /api/pulse/autopilot/rules            — { action, ... }
  *
- * action: "add" | "edit" | "retire" | "test" | "compile".
+ * action: "edit" | "retire" | "test".
  *
- * "compile" turns a sentence into a trigger, conditions and an action, using an
- * agent — once, at writing time. It saves nothing: the result is read back to
- * the person in plain English and only their confirmation makes it live.
+ * There is no "add" any more — a new motion rule is built as a full
+ * automation instead (see /api/pulse/autopilot/build), so every rule from
+ * here on has its own query/schedule/event and a real AI judge at run time,
+ * rather than the old free, in-code score/field check the sentence-compiler
+ * used to produce. Existing rules created that way still edit, test and
+ * retire exactly as before — only the *creation* path changed.
  *
  * "test" replays a rule against decisions already made and reports what it
  * would have done differently. Nothing is sent and nothing is written — the
@@ -34,7 +36,7 @@ export async function POST(req: Request) {
 
   try {
     const b = (await req.json()) as {
-      action?: "add" | "edit" | "retire" | "test" | "compile";
+      action?: "edit" | "retire" | "test";
       motion?: Motion;
       key?: string;
       english?: string;
@@ -44,16 +46,6 @@ export async function POST(req: Request) {
     /* From the session, never the body — otherwise the record of who changed a
        rule is whatever the caller chose to type. */
     const actor = who.writer.email;
-
-    if (b.action === "add") {
-      if (!b.motion || !b.english?.trim()) {
-        return NextResponse.json({ ok: false, error: "motion and english are required" }, { status: 400 });
-      }
-      return NextResponse.json({
-        ok: true,
-        rule: await addRule(b.motion, b.english.trim(), (b.machine ?? {}) as never, actor),
-      });
-    }
 
     if (b.action === "edit") {
       if (!b.key || !b.english?.trim()) {
@@ -71,18 +63,6 @@ export async function POST(req: Request) {
       return done
         ? NextResponse.json({ ok: true })
         : NextResponse.json({ ok: false, error: "no such rule" }, { status: 404 });
-    }
-
-    // Translate a sentence into something the runner can check. This is the only
-    // place an agent touches a rule, and it happens once — when a person writes
-    // it — never at decision time. The result comes back for confirmation; it
-    // does not save anything.
-    if (b.action === "compile") {
-      if (!b.english?.trim() || !b.motion) {
-        return NextResponse.json({ ok: false, error: "motion and english are required" }, { status: 400 });
-      }
-      const call = await compileRule(b.english.trim(), b.motion);
-      return NextResponse.json({ ok: true, compiled: call.data, model: call.model });
     }
 
     if (b.action === "test") {

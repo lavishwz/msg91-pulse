@@ -149,6 +149,28 @@ export async function getAutomation(key: string): Promise<Automation | null> {
 }
 
 /**
+ * Many automations by key, one query. For labelling a page of Activity rows
+ * with "which automation made this" without an N+1 — every row's
+ * pulse_decision.policy_version *is* the automation key for a custom
+ * automation (see automation-runner.ts's writeDecision, and note this has
+ * been true since the very first automations commit, so it resolves old
+ * decisions as well as new ones). A key from a built-in agent's real policy
+ * version (e.g. "v3") simply matches nothing here and is left out of the
+ * map — this never needs to know which rows are which going in.
+ */
+export async function getAutomationsByKeys(keys: string[]): Promise<Map<string, Automation>> {
+  const unique = Array.from(new Set(keys.filter(Boolean)));
+  const map = new Map<string, Automation>();
+  if (!unique.length) return map;
+  const rows = await read<Row>(
+    `SELECT ${COLUMNS} FROM pulse_automation WHERE automation_key IN (${unique.map(() => "?").join(",")})`,
+    unique,
+  );
+  for (const r of rows.map(toAutomation)) map.set(r.key, r);
+  return map;
+}
+
+/**
  * Every live automation listening for this event, right now.
  *
  * Unlike `due()`, this has no schedule to check — an event automation runs
