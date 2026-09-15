@@ -570,7 +570,7 @@ ASK["_notlive"]={q:"Your question",big:"—",
  cols:null,rows:[],act:undefined,
  st:["You",new Date().toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}),"not answered"]};
 
-const S={v:"now",scope:"me",tab:"activity",ask:"mine",teamTab:"won",from:null,cust:null,doneOpen:0,flightOpen:1,roomOpen:0,newRep:0,askTab:"ask",ostep:0,editRule:null,addingTo:null,act:"all",openRow:null,sel:new Set(),doneIds:new Set(),snoozeIds:new Map(),lensAll:0,C:new Set(),M:new Set(),eaEvent:"",moOpen:new Set(),autoHist:null};
+const S={v:"now",scope:"me",tab:"activity",ask:"mine",teamTab:"won",from:null,cust:null,doneOpen:0,flightOpen:1,roomOpen:0,newRep:0,askTab:"ask",ostep:0,editRule:null,act:"all",openRow:null,sel:new Set(),doneIds:new Set(),snoozeIds:new Map(),lensAll:0,C:new Set(),M:new Set(),eaEvent:"",moOpen:new Set(),autoHist:null};
 /** Per-automation execution history, fetched on demand and cached by key. */
 const AUTOHIST={};
 const main=$("#main");
@@ -1777,16 +1777,11 @@ function vAuto(){
        ${canEditRules()?`<span class="pen" data-redit="${it.key}" style="cursor:pointer" role="button" tabindex="0">edit</span>
        <span class="pen" data-rretire="${it.key}" style="cursor:pointer;margin-left:10px">retire</span>`:""}
        <span style="color:var(--faint);font-size:11px;margin-left:10px">${it.version}${
-        it.source==="human"?" · yours":""}${it.enforcedIn?" · enforced in code":""}</span></span>`:""}</li>`;
+        it.source==="human"?" · yours":""}${it.enforcedIn?" · enforced in code":""}${
+        it.side==="yes"&&it.automationKey?" · running as an automation":""}${
+        it.side==="yes"&&it.automationError?" · couldn't build an automation":""}</span></span>`:""}</li>`;
     }).join("")}</ul>
-    ${S.addingTo===side?`<div style="margin-top:10px">
-     <textarea data-rnew="${side}" placeholder="Write the rule as a sentence" style="width:100%;min-height:56px;
-      font:inherit;font-size:13px;padding:8px;border:1px solid var(--line2);border-radius:6px;
-      background:var(--raise);color:var(--ink);resize:vertical"></textarea>
-     <span class="row" style="margin-top:6px;gap:8px">
-      <button class="go solid" data-radd="${side}" style="font-size:12px;padding:4px 10px">Add rule</button>
-      <button class="go" data-rcancel="1" style="font-size:12px;padding:4px 10px">Cancel</button></span></div>`
-    :!canEditRules()?""
+    ${!canEditRules()?""
     :`<button class="add" data-raddopen="${side}" style="font-size:13px;color:var(--br);padding:9px 0 0;
       border-top:1px solid var(--line);width:100%;margin-top:10px;text-align:left">＋ Add a rule</button>`}
     </div>`;};
@@ -2751,20 +2746,40 @@ document.addEventListener("click",e=>{
  /* Manifest editing. Every path goes through PulseLive so the store, not the
     screen, is the source of truth — a rule that only changed in the DOM would
     be a lie the next time anyone loaded the page. */
- const re=t.closest("[data-redit]");if(re){S.editRule=re.dataset.redit;S.addingTo=null;render();return;}
- if(t.closest("[data-rcancel]")){S.editRule=null;S.addingTo=null;render();return;}
- const rao=t.closest("[data-raddopen]");if(rao){S.addingTo=rao.dataset.raddopen;S.editRule=null;render();return;}
+ const re=t.closest("[data-redit]");if(re){S.editRule=re.dataset.redit;render();return;}
+ if(t.closest("[data-rcancel]")){S.editRule=null;render();return;}
+ /* "+ Add a rule" opens the same popup an Inbound/Outbound rule does
+    (openNewRule) — the second argument is what tells it this is a manifest
+    rule ("yes"/"no") rather than a motion, since a manifest rule has no
+    motion to build against. See openNewRule() and data-manifest-add below. */
+ const rao=t.closest("[data-raddopen]");if(rao){openNewRule(null,rao.dataset.raddopen);return;}
  const rs=t.closest("[data-rsave]");
  if(rs&&window.PulseLive&&PulseLive.editRule){
   const ta=$(`[data-rt="${rs.dataset.rsave}"]`);
   if(ta&&ta.value.trim()){rs.disabled=true;rs.textContent="…";
    PulseLive.editRule(rs.dataset.rsave,ta.value.trim(),()=>{S.editRule=null;render();toastDone(null,true,"Rule saved.");});}
   return;}
- const radd=t.closest("[data-radd]");
- if(radd&&window.PulseLive&&PulseLive.addRule){
-  const ta=$(`[data-rnew="${radd.dataset.radd}"]`);
-  if(ta&&ta.value.trim()){radd.disabled=true;radd.textContent="…";
-   PulseLive.addRule(radd.dataset.radd,ta.value.trim(),()=>{S.addingTo=null;render();toastDone(null,true,"Rule added.");});}
+ /* Submitting the manifest popup. A "yes" rule also builds a real automation
+    server-side (manifest.ts addRule) — same slow path as building an
+    Inbound/Outbound rule, hence the same loader. A "no" rule is a boundary,
+    not a trigger, so it just saves. */
+ const madd=t.closest("[data-manifest-add]");
+ if(madd&&window.PulseLive&&PulseLive.addRule){
+  const ta=$("#rule-en");
+  if(!ta||!ta.value.trim())return;
+  const side=madd.dataset.manifestAdd;
+  madd.disabled=true;
+  madd.textContent=side==="yes"?"Building the automation…":"saving…";
+  const box=$("#rule-compiled");
+  const stopLoader=side==="yes"&&box?startBuildLoader(box):null;
+  PulseLive.addRule(side,ta.value.trim(),(item)=>{
+   if(stopLoader)stopLoader();
+   $("#ov").hidden=true;render();
+   if(item&&item.side==="yes"&&item.automationError)
+    toastDone(null,false,"Rule added, but Pulse couldn't build it into an automation yet: "+item.automationError);
+   else if(item&&item.side==="yes")
+    toastDone(null,true,"Rule added and running as an automation.");
+   else toastDone(null,true,"Rule added.");});
   return;}
  const rr=t.closest("[data-rretire]");
  if(rr&&window.PulseLive&&PulseLive.retireRule){
@@ -3750,51 +3765,88 @@ function eventAutomationCard(){
  * time. Until that happens the rule is saved, visible, and honest about not
  * running yet.
  */
-function openNewRule(motion){
+/**
+ * The one popup behind every "+ Add a rule" in Pulse.
+ *
+ * `manifestSide` is what tells this popup which of two different things it is
+ * doing, since they don't share a backend call:
+ *   - undefined  → a motion rule (Inbound/Outbound/Startup/Partner). `motion`
+ *     names which one. Two ways to save: the fast "Read it back to me" score
+ *     check, or "Build it as an automation" for anything needing its own
+ *     query, schedule or event.
+ *   - "yes"/"no" → a manifest rule (the Rules tab's "What I am allowed to do
+ *     without asking" / "What always needs a person" columns). There is no
+ *     motion to build against, so it skips straight to one "Add rule" button;
+ *     "yes" also builds a real automation behind that button (manifest.ts
+ *     addRule), "no" only ever saves a policy statement — see the explainer
+ *     text below, which is why the two modes don't show the same body copy.
+ */
+function openNewRule(motion,manifestSide){
+ const forManifest=manifestSide==="yes"||manifestSide==="no";
+ const title=!forManifest?`New ${motion} rule`
+  :manifestSide==="yes"?"New rule — allowed without asking"
+  :"New rule — always needs a person";
+ const explainer=!forManifest
+  ?`<p class="sub">Write it as a sentence you could say out loud to a new teammate.
+     Pulse will read it back as the check it would actually perform — if that is not
+     what you meant, change the words rather than the machinery.</p>
+    <details style="margin:14px 0 0;font-size:13px;color:var(--ink2)">
+     <summary style="cursor:pointer;color:var(--br);font-weight:500">What Pulse can and can't write a rule to do</summary>
+     <div style="margin-top:10px;line-height:1.6">
+      <b>It can:</b> check real signup/account/payment fields (score, confidence,
+      mobile number, free-mail domain, days since signup or last payment, spend
+      change, and the rest of what MSG91's own tables hold) against numbers,
+      text or a short list of choices, on a schedule or the moment something
+      happens — and then score a signup, raise a card for a person, start or
+      hold a message, or just notify someone. Nothing is sent without a step a
+      person can see and, on most paths, approve first.<br><br>
+      <b>It can't:</b> write, update or delete anything in MSG91's database —
+      every automation only ever reads. It can't invent a field nothing in the
+      schema actually has (a "company name" column does not exist, for
+      example — Pulse will say so rather than guess). And a connected inbox
+      (Gmail/Calendar/Slack) only ever hands a rule one flat summary line per
+      event, not a structured message it can pick sender or subject out of —
+      so "when an email arrives" works, "when an email from a VIP account
+      arrives" only works as well as matching words in that one line.<br><br>
+      <b>"Don't"/"never" rules:</b> written as an explicit condition — "never
+      message an account that already has an owner", not just "be careful with
+      owned accounts" — Pulse tries to compile it into a check it runs in code
+      before anything acts, so it is a hard stop rather than a request the AI
+      could talk itself out of. It will show you below exactly what it
+      understood; if it could not turn "don't do this" into a real condition,
+      it says so instead of quietly hoping the wording was enough.
+     </div>
+    </details>`
+  :manifestSide==="yes"
+  ?`<p class="sub">Write the thing Autopilot may now do on its own, as one sentence — for
+     example "Run subject-line experiments and promote the winner." Pulse turns this
+     straight into a real, running automation (its own query and schedule, or its own
+     agent judging each row), the same way an Inbound/Outbound rule does.</p>`
+  :`<p class="sub">Write the boundary that always needs a person — for example "Stop
+     asking about cancellation clauses under ₹50k." This is a policy statement, not a
+     trigger: Pulse saves it as a rule everyone can see, but builds no automation from
+     it, because there is no query or schedule a "don't" sentence like this maps to.</p>`;
+ const footer=!forManifest
+  ?`<p style="font-size:12.5px;color:var(--muted);margin:14px 0 0">
+     "Read it back to me" is the fast check — a score, a field, a threshold. If the rule needs its own
+     database query, a schedule or an event, or a person to judge each row, build it as an automation instead —
+     either way, nothing runs until you have read back what Pulse understood and said yes.</p>
+    <div class="row" style="margin-top:10px">
+     <button class="go solid" data-rule-compile="${motion}">Read it back to me →</button>
+     <button class="go" data-rule-build-preview="${motion}">Build it as an automation →</button>
+     <button class="go" id="ovx">Cancel</button></div>`
+  :`<div class="row" style="margin-top:10px">
+     <button class="go solid" data-manifest-add="${manifestSide}">${
+      manifestSide==="yes"?"Add rule and build it →":"Add rule"}</button>
+     <button class="go" id="ovx">Cancel</button></div>`;
  $("#ovb").innerHTML=`<div class="red">
-  <h3>New ${motion} rule</h3>
-  <p class="sub">Write it as a sentence you could say out loud to a new teammate.
-   Pulse will read it back as the check it would actually perform — if that is not
-   what you meant, change the words rather than the machinery.</p>
-  <details style="margin:14px 0 0;font-size:13px;color:var(--ink2)">
-   <summary style="cursor:pointer;color:var(--br);font-weight:500">What Pulse can and can't write a rule to do</summary>
-   <div style="margin-top:10px;line-height:1.6">
-    <b>It can:</b> check real signup/account/payment fields (score, confidence,
-    mobile number, free-mail domain, days since signup or last payment, spend
-    change, and the rest of what MSG91's own tables hold) against numbers,
-    text or a short list of choices, on a schedule or the moment something
-    happens — and then score a signup, raise a card for a person, start or
-    hold a message, or just notify someone. Nothing is sent without a step a
-    person can see and, on most paths, approve first.<br><br>
-    <b>It can't:</b> write, update or delete anything in MSG91's database —
-    every automation only ever reads. It can't invent a field nothing in the
-    schema actually has (a "company name" column does not exist, for
-    example — Pulse will say so rather than guess). And a connected inbox
-    (Gmail/Calendar/Slack) only ever hands a rule one flat summary line per
-    event, not a structured message it can pick sender or subject out of —
-    so "when an email arrives" works, "when an email from a VIP account
-    arrives" only works as well as matching words in that one line.<br><br>
-    <b>"Don't"/"never" rules:</b> written as an explicit condition — "never
-    message an account that already has an owner", not just "be careful with
-    owned accounts" — Pulse tries to compile it into a check it runs in code
-    before anything acts, so it is a hard stop rather than a request the AI
-    could talk itself out of. It will show you below exactly what it
-    understood; if it could not turn "don't do this" into a real condition,
-    it says so instead of quietly hoping the wording was enough.
-   </div>
-  </details>
+  <h3>${title}</h3>
+  ${explainer}
   <h4 style="margin-top:18px">The rule</h4>
   <textarea id="rule-en" placeholder="For example: If a signup has not sent a message twelve days after signing up, a person should take over."
    style="width:100%;min-height:80px;font:inherit;font-size:14px;padding:11px;border:1px solid var(--line2);
    border-radius:8px;background:var(--raise);color:var(--ink);resize:vertical"></textarea>
-  <p style="font-size:12.5px;color:var(--muted);margin:14px 0 0">
-   "Read it back to me" is the fast check — a score, a field, a threshold. If the rule needs its own
-   database query, a schedule or an event, or a person to judge each row, build it as an automation instead —
-   either way, nothing runs until you have read back what Pulse understood and said yes.</p>
-  <div class="row" style="margin-top:10px">
-   <button class="go solid" data-rule-compile="${motion}">Read it back to me →</button>
-   <button class="go" data-rule-build-preview="${motion}">Build it as an automation →</button>
-   <button class="go" id="ovx">Cancel</button></div>
+  ${footer}
   <div id="rule-compiled" style="margin-top:18px"></div>
   <div class="ver">NOTHING RUNS UNTIL YOU CONFIRM IT.</div></div>`;
  $("#ov").hidden=false;

@@ -1,4 +1,5 @@
 import { read, write } from "@/lib/store";
+import { buildAutomation } from "./build";
 
 /**
  * The manifest — what Autopilot may do without asking, and what always needs a
@@ -24,6 +25,17 @@ export type ManifestItem = {
   note: string | null;
   source: "seed" | "human" | "learned";
   enforcedIn: string | null;
+  /** Set on a "yes" rule once buildAutomation() actually turns it into a
+   *  running automation (its pulse_automation.automation_key). Always null
+   *  for a "no" rule — a "no" rule is a boundary, not a trigger, and there is
+   *  no query or schedule to build from a sentence like "never waive fees
+   *  above ₹50k". */
+  automationKey: string | null;
+  /** Set instead of automationKey when a "yes" rule's automation failed to
+   *  build (the planner couldn't turn its wording into a safe query, most
+   *  often). The rule is still saved as a policy statement either way — a
+   *  wording that can't yet be automated is still worth recording. */
+  automationError: string | null;
 };
 
 type Raw = {
@@ -59,6 +71,8 @@ const shape = (r: Raw): ManifestItem => {
     // Some rules are also enforced in code. Saying which is the difference
     // between a promise and a control, and a reader deserves to know.
     enforcedIn: body.enforced_in ?? null,
+    automationKey: body.automation_key ?? null,
+    automationError: body.automation_error ?? null,
   };
 };
 
@@ -96,19 +110,50 @@ const slug = (text: string) =>
  *
  * A new rule starts at v1 with `source: 'human'`, which is what lets the Rules
  * tab show which rules MSG91 wrote and which shipped with Pulse.
+ *
+ * A "yes" rule is a permission — something Autopilot is now allowed to do
+ * without asking — and a permission that never runs is just a sentence. So
+ * adding one also builds it into a real automation, the same planner path as
+ * an Inbound/Outbound rule (buildAutomation, motion "any"), linked back here
+ * by rule_key. A "no" rule is a boundary, not a trigger ("stop asking about
+ * cancellation clauses under ₹50k" has no query to build) — it stays a policy
+ * statement only, exactly as before.
  */
 export async function addRule(side: "yes" | "no", text: string, actor: string): Promise<ManifestItem> {
   const kind = side === "yes" ? "manifest_yes" : "manifest_no";
   const key = `manifest.${side}.${slug(text)}`;
 
+  let automationKey: string | null = null;
+  let automationError: string | null = null;
+  if (side === "yes") {
+    const built = await buildAutomation(text, "any", actor, "company", undefined, false, key);
+    if (built.ok) automationKey = built.key;
+    else automationError = built.message;
+  }
+
+  const body =
+    automationKey || automationError
+      ? JSON.stringify({ text, automation_key: automationKey, automation_error: automationError })
+      : JSON.stringify({ text });
+
   await write(
     `INSERT INTO pulse_policy (version, policy_key, kind, body, note, state, source)
-          VALUES ('v1', ?, ?, JSON_OBJECT('text', ?), ?, 'active', 'human')
+          VALUES ('v1', ?, ?, ?, ?, 'active', 'human')
      ON DUPLICATE KEY UPDATE body = VALUES(body), state = 'active', note = VALUES(note)`,
-    [key, kind, text, `added by ${actor}`],
+    [key, kind, body, `added by ${actor}`],
   );
 
-  return { key, text, side, version: "v1", note: `added by ${actor}`, source: "human", enforcedIn: null };
+  return {
+    key,
+    text,
+    side,
+    version: "v1",
+    note: `added by ${actor}`,
+    source: "human",
+    enforcedIn: null,
+    automationKey,
+    automationError,
+  };
 }
 
 /**
@@ -143,9 +188,17 @@ export async function editRule(key: string, text: string, actor: string): Promis
       version,
       key,
       current.kind,
-      // enforced_in survives an edit: it describes where the code check lives,
-      // which is not something a wording change should silently drop.
-      JSON.stringify(body.enforced_in ? { text, enforced_in: body.enforced_in } : { text }),
+      // enforced_in and automation_key/automation_error survive an edit: they
+      // describe where the code check lives and what automation this rule
+      // already built. A wording change alone does not rebuild the
+      // automation — the automation still runs under whatever the wording
+      // was when it was built, until someone deliberately rebuilds it.
+      JSON.stringify({
+        text,
+        ...(body.enforced_in ? { enforced_in: body.enforced_in } : {}),
+        ...(body.automation_key ? { automation_key: body.automation_key } : {}),
+        ...(body.automation_error ? { automation_error: body.automation_error } : {}),
+      }),
       `edited by ${actor}`,
     ],
   );
@@ -158,6 +211,8 @@ export async function editRule(key: string, text: string, actor: string): Promis
     note: `edited by ${actor}`,
     source: "human",
     enforcedIn: body.enforced_in ?? null,
+    automationKey: body.automation_key ?? null,
+    automationError: body.automation_error ?? null,
   };
 }
 

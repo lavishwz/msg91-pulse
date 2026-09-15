@@ -70,4 +70,11 @@ export async function POST(req: Request) {
   }
 }
 
+/* Adding a "yes" rule now runs the same planner pipeline as building an
+   Inbound/Outbound rule (see manifest.ts addRule) — one call of twenty to
+   ninety seconds, sometimes more with a retry. Same ceiling as
+   /autopilot/build, for the same reason: the platform default kills this
+   partway, which surfaces as an empty 500 with no explanation. */
+export const maxDuration = 300;
+
 export const dynamic = "force-dynamic";

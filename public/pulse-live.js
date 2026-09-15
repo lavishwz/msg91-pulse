@@ -759,7 +759,7 @@ window.PulseLive = (function () {
       // Re-read rather than patching state: an edit writes a new version, so the
       // row that comes back is not the row that was sent.
       await loadManifest(null, () => {});
-      if (then) then();
+      if (then) then(out.item);
     } catch (err) {
       console.warn("[pulse] rule change failed:", err.message);
     }

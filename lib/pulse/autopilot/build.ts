@@ -40,6 +40,11 @@ export type BuildResult =
       cronJobId: string | null;
       webhookUrl: string | null;
       cronSchedule: string | null;
+      /** Set when this plan passed every safety check (guard, dry run, cost,
+       *  enrichment) but nothing was provisioned or saved — see `preview` on
+       *  buildAutomation(). A person must call again with preview=false,
+       *  after reading this, before anything runs. */
+      preview?: boolean;
     }
   | { ok: false; message: string; error: string; step: BuildStep };
 
@@ -349,6 +354,20 @@ export async function buildAutomation(
   ownerEmail: string,
   scope: Scope = "company",
   eventName?: EventName,
+  /** When true, run every safety check (guard, dry run, cost, enrichment)
+   *  and return what would be built, but create nothing at cron-job.org or
+   *  on GTWY and save no row — the confirm screen this makes possible is
+   *  what "NOTHING RUNS UNTIL YOU CONFIRM IT" actually requires. A second
+   *  call with preview=false does the real thing, re-planned and
+   *  re-checked from scratch rather than trusting a plan the database may
+   *  have moved under since the preview. */
+  preview = false,
+  /** Set when this automation is being built on behalf of a manifest "yes"
+   *  rule rather than typed directly on the Rules tab — see manifest.ts
+   *  addRule(). Stored as pulse_automation.rule_key so the two rows stay
+   *  linked: retiring or re-editing the manifest rule can find its
+   *  automation, and the automation's origin is never a guess. */
+  ruleKey?: string | null,
 ): Promise<BuildResult> {
   const eventInfo = eventName && isEventName(eventName) ? EVENTS[eventName] : null;
 
@@ -388,8 +407,24 @@ export async function buildAutomation(
            column that does not exist is caught here and not at 3am */
     const enrichErr = await checkEnrichment(plan.enrich_sql, eventInfo);
     if (enrichErr) return fail(english, motion, ownerEmail, "guard", enrichErr);
+    if (preview) {
+      return {
+        ok: true,
+        preview: true,
+        key,
+        mode: "event",
+        optimizedPrompt: plan.optimized_rule_prompt,
+        findSql: "",
+        executorPrompt: plan.executor_prompt,
+        neverIf: plan.never_if?.length ? plan.never_if : null,
+        cronJobId: null,
+        webhookUrl: null,
+        cronSchedule: null,
+      };
+    }
     const saved = await saveAutomation({
       key,
+      ruleKey: ruleKey ?? null,
       motion,
       scope,
       ownerEmail,
@@ -534,6 +569,22 @@ export async function buildAutomation(
     );
   }
 
+  if (preview) {
+    return {
+      ok: true,
+      preview: true,
+      key,
+      mode: "cron",
+      optimizedPrompt: plan.optimized_rule_prompt,
+      findSql: plan.find_sql,
+      executorPrompt: plan.executor_prompt,
+      neverIf: plan.never_if?.length ? plan.never_if : null,
+      cronJobId: null,
+      webhookUrl: null,
+      cronSchedule: plan.cron_schedule || "0 * * * *",
+    };
+  }
+
   let cronJobId: string | null = null;
   let webhookUrl: string | null = null;
   const cronSchedule = plan.cron_schedule || "0 * * * *";
@@ -579,6 +630,7 @@ export async function buildAutomation(
 
   const saved = await saveAutomation({
     key,
+    ruleKey: ruleKey ?? null,
     motion,
     scope,
     ownerEmail,
