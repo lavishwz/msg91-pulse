@@ -1892,7 +1892,17 @@ function vAuto(){
       <div class="bd"><b>${r.title}</b><span>${r.detail}</span></div>
       ${(t2=>`<span class="tg" data-t="${r.kind}" data-tip="${t2[0]}||${t2[1]}">${r.tag}</span>`)(TIP[r.tag]||[r.tag,""])}
       <span class="chev">→</span></div>`).join("")}</div>`
-     :`<p style="margin:22px 0 0;color:var(--ink2)">Nothing under this filter.</p>`}`;
+     :`<p style="margin:22px 0 0;color:var(--ink2)">Nothing under this filter.</p>`}
+    ${(()=>{
+     /* "Drafted"/"Suppressed" read their own dedicated fetch, already sized
+        for the whole thing — see OWNFETCH above — so more-paging only
+        applies to the shared 60-row window the other chips filter. */
+     const next=window.PulseLive&&PulseLive.state.autopilotNext;
+     if(ownKey||next==null)return"";
+     const loadingMore=window.PulseLive&&PulseLive.state.activityLoadingMore;
+     return `<div class="row" style="margin-top:16px"><button class="go" id="moreactivity"${loadingMore?" disabled":""}>${
+      loadingMore?'<span class="inline-loader" style="margin-right:7px"></span>Loading…':"Load 60 more →"}</button></div>`;
+    })()}`;
   }
  } else if(S.tab==="automations"){
   /* Every automation that exists right now, flat across all motions — the
@@ -3184,6 +3194,8 @@ document.addEventListener("click",e=>{
   if(window.PulseLive)window.PulseLive.loadMoreAccountFeed("recently",PULSE_BAG,render);return;}
  if(t.closest("#moreaudit")){
   if(window.PulseLive)window.PulseLive.loadMoreAudit(PULSE_BAG,render);return;}
+ if(t.closest("#moreactivity")){
+  if(window.PulseLive)window.PulseLive.loadMoreActivity(PULSE_BAG,render);return;}
  if(t.closest("#pinq")){togglePin();return;}
  const shq=t.closest("#shareq");if(shq){
   /* The same deep link Back/Forward already understand — routePath() is what

@@ -570,6 +570,34 @@ window.PulseLive = (function () {
   }
 
   /**
+   * Load more rows onto the Activity feed.
+   *
+   * The route already supports this (?before=<cursor>, same page size as the
+   * first load) and loadAutopilot already captured the cursor into
+   * state.autopilotNext — it was just never read anywhere, so Activity sat
+   * capped at its first 60 rows with no way past them, unlike Audit's
+   * identical pattern a few tabs over. Appends onto state.activity rather
+   * than replacing it, same as loadMoreAudit does for state.audit.f.
+   */
+  async function loadMoreActivity(bag, render) {
+    if (state.autopilotNext == null || state.activityLoadingMore) return;
+    state.activityLoadingMore = true;
+    render();
+    try {
+      const data = await get(
+        "/api/pulse/autopilot/decisions?limit=60&before=" + encodeURIComponent(state.autopilotNext),
+      );
+      state.activity = (state.activity || []).concat(data.rows || []);
+      state.autopilotNext = data.nextCursor ?? null;
+    } catch (err) {
+      console.warn("[pulse] more activity failed:", err.message);
+    } finally {
+      state.activityLoadingMore = false;
+      render();
+    }
+  }
+
+  /**
    * The "Drafted for a person" chip's own rows — not a filter over
    * state.activity's most-recent-60 window, which a busy day of unrelated
    * automation runs can push a real held draft clean out of (confirmed live:
@@ -2322,6 +2350,7 @@ window.PulseLive = (function () {
     revealCommercial,
     loadMoreAccounts,
     loadMoreAudit,
+    loadMoreActivity,
     loadMoreAccountFeed,
     /* Tags. These three were written but never put on the object, so every
        "Add a tag" click died on `PulseLive.addTags is not a function` and the
